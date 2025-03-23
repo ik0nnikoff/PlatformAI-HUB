@@ -322,4 +322,4 @@ workflow.add_conditional_edges(
 )
 
 # Compile the graph
-graph = workflow.compile(checkpointer=memory)
+app = workflow.compile(checkpointer=memory)
