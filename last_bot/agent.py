@@ -255,7 +255,8 @@ async def generate(state):
     llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0, streaming=True)
 
     # Chain
-    rag_chain = prompt | llm | StrOutputParser()
+    # rag_chain = prompt | llm | StrOutputParser()
+    rag_chain = prompt | llm
 
     # Run
     response = await rag_chain.ainvoke({"context": documents, "question": question})
@@ -344,8 +345,8 @@ async def get_answer(query, thread_id):
 
 thread_id = 12345678
 # query = "Поищи заново информацию в базе знаний. Сколько болтов в стиральной машине?"
-query = "Сколько болтов у машины?"
-# query = "Какие программы есть у машины?"
+# query = "Сколько болтов у машины?"
+query = "По какой стиральной машине у тебя есть инфа?"
 # query = "Сколько всего программ?"
 # query = "Как стирать труханы?"
 # query = "Как правильно стирать шелковые трусы?"

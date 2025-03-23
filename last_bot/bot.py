@@ -23,7 +23,7 @@ async def start(message: Message):
 @dp.message()
 async def handle_message(message: Message):
     """Обрабатываем текстовые сообщения и передаем их в агента."""
-    user_question = message.text
+    user_message = message.text
 
     chat_id = message.chat.id
 
@@ -38,24 +38,21 @@ async def handle_message(message: Message):
     typing_task = asyncio.create_task(typing_simulation())
 
     try:
-        inputs = {"question": user_question}
+        input = {
+            "messages": [
+                ("user", user_message),
+            ]
+        }
         config = {"configurable": {"thread_id": chat_id}}
-        agent = app.astream(inputs, config)
-        # agent = app.stream(
-        #     {"messages": [{"role": "user", "content": inputs}]},
-        #     config,
-        #     stream_mode="values",
-        # )
         response = None
 
         # Получаем ответ от агента
-        # loop = asyncio.get_running_loop()
-        # outputs = await loop.run_in_executor(None, lambda: list(agent))
-        for output in app.stream(inputs):
-        # for output in outputs:
+        async for output in app.astream(input, config, stream_mode="updates"):
             for key, value in output.items():
-                response = value.get("generation", None)
-
+                logging.info(f"Output from node '{key}':")
+                logging.info("---")
+                logging.info(value)
+                response = value["messages"][-1].content
         if response:
             await message.answer(response)
         else:

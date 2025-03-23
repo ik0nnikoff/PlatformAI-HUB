@@ -23,8 +23,8 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 load_dotenv()
 logging.basicConfig(
-    # level=logging.INFO,
-    level=None,
+    level=logging.INFO,
+    # level=None,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
@@ -131,6 +131,7 @@ async def grade_documents(state):
             )
 
     messages = state["messages"]
+
     rewrite_count = state.get("rewrite_count", 0)
     last_message = messages[-1]
     docs = last_message.content.split("\n---RETRIEVER_DOC---\n")
@@ -255,7 +256,8 @@ async def generate(state):
     llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0, streaming=True)
 
     # Chain
-    rag_chain = prompt | llm | StrOutputParser()
+    # rag_chain = prompt | llm | StrOutputParser()
+    rag_chain = prompt | llm
 
     # Run
     response = await rag_chain.ainvoke({"context": documents, "question": question})
