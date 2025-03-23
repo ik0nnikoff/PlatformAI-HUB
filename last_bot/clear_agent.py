@@ -240,7 +240,7 @@ async def generate(state):
          dict: The updated state with re-phrased question
     """
     logging.info("---GENERATE---")
-    # messages = state["messages"]
+    messages = state["messages"]
     # question = messages[-3].content
     question = state["question"]
     # last_message = messages[-1]

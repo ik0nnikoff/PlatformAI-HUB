@@ -44,17 +44,23 @@ async def handle_message(message: Message):
             ]
         }
         config = {"configurable": {"thread_id": chat_id}}
-        response = None
 
         # Получаем ответ от агента
         async for output in app.astream(input, config, stream_mode="updates"):
+            answer = None
             for key, value in output.items():
                 logging.info(f"Output from node '{key}':")
                 logging.info("---")
                 logging.info(value)
-                response = value["messages"][-1].content
-        if response:
-            await message.answer(response)
+                # answer = value["messages"][-1].content
+                if 'messages' not in value:
+                    continue
+                for msg in value['messages']:
+                    meta = getattr(msg, 'response_metadata', {}) or {}
+                    if meta.get('finish_reason') == 'stop':
+                        answer = msg.content
+        if answer:
+            await message.answer(answer)
         else:
             await message.answer("❌ Не удалось найти ответ. Попробуйте сформулировать вопрос иначе.")
 
