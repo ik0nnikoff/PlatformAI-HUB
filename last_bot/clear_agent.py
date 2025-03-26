@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 from dotenv import load_dotenv
+import requests
 from pydantic import BaseModel, Field
 from typing import Annotated, Dict, Literal, Sequence, TypedDict, List
 from qdrant_client import QdrantClient
@@ -76,6 +77,35 @@ def auth_tool() -> str:
     return "необходима авторизация. Допиши в ответе: [AUTH_REQUIRED]"
 
 @tool
+def get_bonus_points(state: Annotated[dict, InjectedState]) -> str:
+    """
+    Getting the user's bonus points balance
+
+    Args:
+        state (user_data): user data (phone number).
+
+    Returns:
+        str: The number of bonus points on the user's balance that can be spent or accumulated.
+    """
+    if state["user_data"].get("is_authenticated"):
+        user_phone = state["user_data"].get("phone_number")
+        try:
+            url = f"http://airsoft-rus.ru/obmen_rus/bals.php?type=info&tel={user_phone}"
+            response = requests.get(url)
+            response.raise_for_status()
+            return f"Количество бонусных баллов на балансе: {response.text}"
+        
+        except requests.exceptions.HTTPError as errh:
+            return f"HTTP Error: {errh}"
+        except requests.exceptions.ConnectionError as errc:
+            return f"Connection Error: {errc}"
+        except requests.exceptions.Timeout as errt:
+            return f"Timeout Error: {errt}"
+        except requests.exceptions.RequestException as err:
+            return f"Request Exception: {err}"
+    return "Необходима авторизация. Запусти авторизацию"
+
+@tool
 def get_user_info_tool(state: Annotated[dict, InjectedState]) -> str:
     """
     Obtaining information about the user, his phone number, first name,
@@ -115,6 +145,7 @@ safe_tools = [
     TavilySearchResults(max_results=3),
     auth_tool,
     get_user_info_tool,
+    get_bonus_points,
     ]
 datastore_tool_names = {t.name for t in datastore_tool} #  {'retrieve_datastore'} 
 tools = datastore_tool + safe_tools
