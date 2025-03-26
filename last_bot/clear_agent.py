@@ -1,25 +1,23 @@
-import getpass
 import os
 import asyncio
 import logging
 from dotenv import load_dotenv
-from langchain_openai import OpenAIEmbeddings
+from pydantic import BaseModel, Field
+from typing import Annotated, Dict, Literal, Sequence, TypedDict, List
 from qdrant_client import QdrantClient
 from langchain_qdrant import QdrantVectorStore
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
-from langgraph.graph.message import add_messages
-from langchain.tools.retriever import create_retriever_tool
-from typing import Annotated, Literal, Sequence, TypedDict, List
 from langchain import hub
-from langchain_core.output_parsers import StrOutputParser
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.prompts import PromptTemplate
-from pydantic import BaseModel, Field
-from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import tools_condition
-from langgraph.graph import END, StateGraph, START
-from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.tools import tool
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.tools.retriever import create_retriever_tool
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langgraph.graph.message import add_messages
+from langgraph.graph import END, StateGraph, START
+from langgraph.prebuilt import ToolNode, tools_condition, InjectedState
+from langgraph.checkpoint.memory import MemorySaver
 
 load_dotenv()
 logging.basicConfig(
@@ -31,6 +29,18 @@ logging.basicConfig(
 search_limit = 5
 client_id = "client123"
 datasource_id = "source_456"
+
+### Create agent state
+
+class AgentState(TypedDict):
+    # The add_messages function defines how an update should be processed
+    # Default is to replace. add_messages says "append"
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+    documents: List[str]
+    question: str
+    rewrite_count: int
+    channel: str
+    user_data: Dict[str, any]
 
 ### Retrever
 embeddings = OpenAIEmbeddings()
@@ -55,6 +65,44 @@ retriever = vectorstore.as_retriever(
 )
 
 ### Create tools
+@tool
+def auth_tool() -> str:
+    """
+    Сall authorization function
+
+    Returns:
+        str: Trigger to call external authorization function.
+    """
+    return "необходима авторизация. Допиши в ответе: [AUTH_REQUIRED]"
+
+@tool
+def get_user_info_tool(state: Annotated[dict, InjectedState]) -> str:
+    """
+    Obtaining information about the user, his phone number, first name,
+    last name, authorization status and the channel through which the user communicates.
+
+    Args:
+        state (chanel): the channel (messenger) through which the user communicates.
+        state (user_data): user data (phone number, first name, last name, authorization status).
+
+    Returns:
+        dict: information about the user.
+    """
+    channel = state["channel"]
+    if state["user_data"].get("is_authenticated"):
+        user_fname = state["user_data"].get("first_name")
+        user_lname = state["user_data"].get("last_name")
+        user_phone = state["user_data"].get("phone_number")
+        user_id = state["user_data"].get("user_id")
+
+        return f"""Информация о пользователе:\n
+                First Name : {user_fname}\n
+                Last Name: {user_lname}\n
+                User phone number: {user_phone}\n
+                User ID: {user_id}\n
+                User messenger: {channel}"""
+    else:
+        return f"User messenger: {channel}. Информация о пользователе недоступна без авторизации. Запусти авторизацию"
 
 retriever_tool = create_retriever_tool(
     retriever,
@@ -62,18 +110,14 @@ retriever_tool = create_retriever_tool(
     "Поиск и возврат информации о стиральной машине, ее возможностях, функциях, обслуживанию и рекомендациям по стирке",
     document_separator = "\n---RETRIEVER_DOC---\n",
 )
-
-tools = [retriever_tool]
-
-### Create agent state
-
-class AgentState(TypedDict):
-    # The add_messages function defines how an update should be processed
-    # Default is to replace. add_messages says "append"
-    messages: Annotated[Sequence[BaseMessage], add_messages]
-    documents: List[str]
-    question: str
-    rewrite_count: int
+datastore_tool = [retriever_tool]
+safe_tools = [
+    TavilySearchResults(max_results=3),
+    auth_tool,
+    get_user_info_tool,
+    ]
+datastore_tool_names = {t.name for t in datastore_tool} #  {'retrieve_datastore'} 
+tools = datastore_tool + safe_tools
 
 ### Create Nodes
 
@@ -90,14 +134,15 @@ async def agent(state):
     """
     logging.info("---CALL AGENT---")
     messages = state["messages"]
-    
+
     # Prompt
     prompt = ChatPromptTemplate.from_messages([
         ("system", 
-         """Тебя зовут Сергей, ты консультант по стиральной машине. 
-         Ты Еврей, отвечай с характерным написанием текста, как в анекдотах про Евреев, 
-         применяя характерные слова-паразиты. 
-         Перед ответом всегда обращайся к утилите с поиском информации."""),
+         """Тебя зовут Сергей, ты менеджер в компании Рога и Копыта. 
+         Твоя задача помогать клиенту в решении его опросов, консультировать используя данные в базе знаний.
+         Если намерение клиента не ясно или не содержит ключевых слов, ты можешь запросить уточнение.
+         Старайся отвечать кратко и содержательно.
+         Перед ответом всегда обращайся к хранилищу данных."""),
         MessagesPlaceholder(variable_name="messages")
     ])
 
@@ -250,7 +295,16 @@ async def generate(state):
     documents = "\n".join(docs)
 
     # Prompt
-    prompt = hub.pull("rlm/rag-prompt")
+    # prompt = hub.pull("rlm/rag-prompt")
+    prompt = PromptTemplate(
+        template="""Ты помощник для задач с ответами на вопросы. Используйте следующие фрагменты извлеченного контекста, чтобы ответить на вопрос.
+        Если у тебя нет ответа на вопрос, просто скажи что у тебя нет данных для ответа на этот вопрос, предложи переформулировать фопрос.
+        Старайся отвечать кратко и содержательно.\n
+        	Вопрос: {question} \n
+        	Контекст: {context} \n
+        	Ответ:""",
+        input_variables=["context", "question"],
+    )
 
     # LLM
     llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0, streaming=True)
@@ -280,21 +334,33 @@ async def decide_to_generate(state) -> Literal["generate", "rewrite"]:
         logging.info("---DECISION: GENERATE---")
         return "generate"
     
-def decide_to_end(state) -> Literal["end","rewrite", "agent"]:
+async def decide_to_end(state) -> Literal["end","rewrite", "agent"]:
     pass
 
-### Create Graph
+async def route_tools(state: AgentState):
+    next_node = tools_condition(state)
+    # If no tools are invoked, return to the user
+    if next_node == END:
+        return END
+    ai_message = state["messages"][-1]
+    # This assumes single tool calls. To handle parallel tool calling, you'd want to
+    # use an ANY condition
+    first_tool_call = ai_message.tool_calls[0]
+    if first_tool_call["name"] in datastore_tool_names:
+        return "retrieve"
+    return "safe_tools"
 
-# Add memory saver
-memory = MemorySaver()
+### Create Graph
 
 # Define a new graph
 workflow = StateGraph(AgentState)
 
 # Define the nodes we will cycle between
 workflow.add_node("agent", agent)  # agent
-retrieve = ToolNode([retriever_tool])
+retrieve = ToolNode(datastore_tool)
+safe_tools = ToolNode(safe_tools)
 workflow.add_node("retrieve", retrieve)  # retrieval
+workflow.add_node("safe_tools", safe_tools)  # tools
 workflow.add_node("grade_documents", grade_documents)  # grade documents
 workflow.add_node("rewrite", rewrite)  # Re-writing the question
 workflow.add_node("generate", generate)  # Generating a response after we know the documents are relevant
@@ -302,6 +368,7 @@ workflow.add_node("generate", generate)  # Generating a response after we know t
 # Define the edges between the nodes
 workflow.add_edge(START, "agent") # Call agent node to decide to retrieve or not
 workflow.add_edge("retrieve", "grade_documents")
+workflow.add_edge("safe_tools", "agent")
 workflow.add_edge("rewrite", "agent")
 workflow.add_edge("generate", END)
 
@@ -315,13 +382,10 @@ workflow.add_conditional_edges(
     },
 )
 workflow.add_conditional_edges(
-    "agent",
-    tools_condition,
-    {
-        "tools": "retrieve",
-        END: END,
-    },
+    "agent", route_tools, ["safe_tools", "retrieve", END]
 )
 
+# Add memory saver
+memory = MemorySaver()
 # Compile the graph
 app = workflow.compile(checkpointer=memory)
