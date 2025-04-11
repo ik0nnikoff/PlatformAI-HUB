@@ -64,6 +64,18 @@ services:
     volumes:
       - 'minio:/data/minio'
     command: minio server /data/minio --console-address ":9090"
+
+  marker:
+    image: marker-app:latest
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    volumes:
+      - ./data/marker/datalab:/root/.cache/datalab
+      - ./data/marker/uploads:/app/uploads
+
 volumes:
   pgdb-data:
   pgadmin-data:

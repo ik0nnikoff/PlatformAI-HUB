@@ -33,6 +33,10 @@ services:
       /usr/bin/mc anonymous set public minio/platformAI;
       exit 0;
       "
+  marker:
+    extends:
+      file: docker-compose.all.yml
+      service: marker
 volumes:
   pgdb-data:
   pgadmin-data:
