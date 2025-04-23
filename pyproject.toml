@@ -6,9 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "aiogram>=3.18.0",
+    "alembic>=1.15.2",
+    "asyncpg>=0.30.0",
     "beautifulsoup4>=4.13.3",
     "chatgpt-md-converter>=0.2.0",
     "chromadb>=0.6.3",
+    "fastapi>=0.111.1",
     "fastembed>=0.6.0",
     "ipykernel>=6.29.5",
     "ipywidgets>=8.1.5",
@@ -22,11 +25,35 @@ dependencies = [
     "numpy>=2.2.4",
     "openai>=1.66.3",
     "pandas>=2.2.3",
+    "pydantic>=2.10.6",
     "pymupdf>=1.25.4",
     "pypdf>=5.4.0",
     "python-docx>=1.1.2",
     "python-dotenv>=1.0.1",
     "qdrant-client>=1.13.3",
+    "redis>=5.0.7",
+    "requests>=2.32.3",
+    "sqlalchemy[asyncio]>=2.0",
     "tavily-python>=0.5.1",
     "tiktoken>=0.9.0",
+    "uvicorn[standard]>=0.30.3",
 ]
+
+[tool.uv.sources]
+# Optional: Specify package sources if needed
+# Example:
+# my-private-repo = { url = "https://my-private-repo.example.com/simple" }
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]  # Look in the root directory
+include = ["agent_manager*", "agent_runner*", "integrations*"]  # Include only these packages and their submodules
+exclude = ["last_bot*", "temp_files*", "temp_files_qdrant*"] # Explicitly exclude others if needed
+
+# Optional: Configure linters/formatters like Ruff
+# [tool.ruff]
+# line-length = 88
+# select = ["E", "F", "W", "I"] # Example rule selection

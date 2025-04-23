@@ -1,0 +1,46 @@
+# Git files
+.git
+.gitignore
+
+# Python virtual environment
+.venv
+venv
+
+# Python cache files
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# IDE and OS specific files
+.idea
+.vscode
+*.DS_Store
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build artifacts
+dist
+build
+*.egg-info
+
+# Test reports
+htmlcov
+.coverage
+.pytest_cache
+
+# Secrets - although .env is loaded by compose, avoid copying it into the image
+.env
+.env.*
+
+# Local data/logs (if any)
+*.log
+*.db
+*.sqlite3
+# Add other local data directories if needed
+# e.g., local_data/
+
+# Old bot files (if they exist and are not needed)
+last_bot/

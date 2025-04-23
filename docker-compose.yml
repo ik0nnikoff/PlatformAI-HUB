@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  agent-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile.manager
+    container_name: agent_manager_service
+    ports:
+      - "8000:8000" # Map host port 8000 to container port 8000
+    env_file:
+      - .env # Pass environment variables from .env file
+    environment:
+      # Override or set specific variables needed inside the container
+      # Ensure these point to the service names defined in this file
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      # Set MANAGER_HOST/PORT if needed by agent_runner (if running outside compose)
+      # - MANAGER_HOST=agent-manager # Example if runner needs to resolve manager by service name
+      # - MANAGER_PORT=8000
+    depends_on:
+      - redis
+      - db
+    networks:
+      - agent_network
+
+  redis:
+    image: redis:alpine
+    container_name: agent_redis
+    ports:
+      - "6379:6379" # Expose Redis port to host (optional, for external debugging)
+    volumes:
+      - redis_data:/data
+    networks:
+      - agent_network
+
+  db:
+    image: postgres:15-alpine
+    container_name: agent_postgres
+    environment:
+      # These should match the values in your .env file or DATABASE_URL
+      POSTGRES_USER: ${POSTGRES_USER:-admin} # Use value from .env or default
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-platformAI}
+    ports:
+      - "5432:5432" # Expose PostgreSQL port to host (optional, for external debugging/migration)
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - agent_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-platformAI}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Optional: Add Qdrant if needed by agents
+  # qdrant:
+  #   image: qdrant/qdrant:latest
+  #   container_name: agent_qdrant
+  #   ports:
+  #     - "6333:6333"
+  #     - "6334:6334"
+  #   volumes:
+  #     - qdrant_storage:/qdrant/storage
+  #   networks:
+  #     - agent_network
+
+volumes:
+  redis_data:
+  postgres_data:
+  # qdrant_storage:
+
+networks:
+  agent_network:
+    driver: bridge
+

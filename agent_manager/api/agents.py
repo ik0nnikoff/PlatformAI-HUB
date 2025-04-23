@@ -1,0 +1,410 @@
+import logging
+import os
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from typing import List, Dict, Optional
+import redis.asyncio as redis
+from sqlalchemy.ext.asyncio import AsyncSession # Import AsyncSession
+
+from ..redis_client import get_redis
+from ..db import get_db # Import DB dependency
+from ..models import AgentConfigInput, AgentConfigOutput, AgentStatus, AgentListItem, IntegrationStatus, IntegrationType, AgentConfigStructure # Import AgentConfigStructure
+from .. import crud
+from .. import process_manager
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+# --- Agent Management Endpoints ---
+
+@router.post(
+    "/agents",
+    response_model=AgentConfigOutput,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new agent configuration",
+    tags=["Agents"]
+)
+async def create_agent(
+    agent_config: AgentConfigInput,
+    r: redis.Redis = Depends(get_redis), # Keep Redis for status
+    db: AsyncSession = Depends(get_db) # Add DB session
+):
+    """
+    Creates a new agent configuration.
+    - **name**: User-defined name for the agent.
+    - **description**: Optional description.
+    - **userId**: Identifier for the owner (placeholder).
+    - **config**: The actual agent configuration structure (e.g., model, tools).
+    """
+    # TODO: Validate userId against authenticated user
+    # TODO: Consider more robust agent ID generation (e.g., UUID)
+    agent_id = f"agent_{agent_config.name.lower().replace(' ', '_')}_{os.urandom(4).hex()}"
+    try:
+        # Use DB CRUD
+        db_agent = await crud.db_create_agent_config(db, agent_config, agent_id)
+
+        # Set initial status in Redis (keep status in Redis for now)
+        status_key = f"agent_status:{agent_id}"
+        await r.hset(status_key, mapping={"status": "stopped"})
+
+        # Convert DB model to Pydantic output model
+        # Need to parse config_json back into the Pydantic structure
+        config_structure = AgentConfigStructure.model_validate(db_agent.config_json)
+        return AgentConfigOutput(
+            id=db_agent.id,
+            name=db_agent.name,
+            description=db_agent.description,
+            userId=db_agent.user_id,
+            config=config_structure,
+            created_at=db_agent.created_at,
+            updated_at=db_agent.updated_at
+        )
+    except Exception as e:
+        logger.error(f"Failed to create agent config for {agent_id}: {e}", exc_info=True)
+        # Check if it's a DB integrity error (e.g., duplicate ID, though unlikely with hex)
+        # Or just raise a generic 500
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save agent configuration.")
+
+
+@router.get(
+    "/agents",
+    response_model=List[AgentListItem],
+    summary="List all agents",
+    tags=["Agents"]
+)
+async def list_agents(
+    skip: int = 0,
+    limit: int = 100,
+    r: redis.Redis = Depends(get_redis), # Keep Redis for status
+    db: AsyncSession = Depends(get_db) # Add DB session
+):
+    """Retrieves a list of all configured agents with their basic info and status."""
+    # Use DB CRUD
+    db_agents = await crud.db_get_all_agents(db, skip=skip, limit=limit)
+    agents_list = []
+    for db_agent in db_agents:
+        # Fetch status from Redis
+        status_info = await process_manager.get_agent_status(db_agent.id, r)
+        agents_list.append(AgentListItem(
+            id=db_agent.id,
+            name=db_agent.name,
+            description=db_agent.description,
+            status=status_info.status # Use status from Redis
+        ))
+    return agents_list
+
+
+@router.get(
+    "/agents/{agent_id}",
+    response_model=AgentConfigOutput,
+    summary="Get agent configuration details",
+    tags=["Agents"]
+)
+async def get_agent(
+    agent_id: str,
+    r: redis.Redis = Depends(get_redis), # Keep Redis for status check? Not strictly needed here
+    db: AsyncSession = Depends(get_db) # Add DB session
+):
+    """Retrieves the full configuration for a specific agent."""
+    # Use DB CRUD
+    db_agent = await crud.db_get_agent_config(db, agent_id)
+    if db_agent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+
+    # Convert DB model to Pydantic output model
+    config_structure = AgentConfigStructure.model_validate(db_agent.config_json)
+    return AgentConfigOutput(
+        id=db_agent.id,
+        name=db_agent.name,
+        description=db_agent.description,
+        userId=db_agent.user_id,
+        config=config_structure,
+        created_at=db_agent.created_at,
+        updated_at=db_agent.updated_at
+    )
+
+@router.get(
+    "/agents/{agent_id}/config",
+    response_model=Dict, # Return raw config dict for runner
+    summary="Get raw agent configuration (for runner)",
+    tags=["Agents", "Internal"]
+)
+async def get_agent_config_for_runner(
+    agent_id: str,
+    r: redis.Redis = Depends(get_redis), # Keep Redis for status check? Not strictly needed here
+    db: AsyncSession = Depends(get_db) # Add DB session
+):
+    """
+    Internal endpoint for the agent runner process to fetch its configuration.
+    Returns the raw configuration dictionary stored in the database.
+    """
+    # Use DB CRUD
+    db_agent = await crud.db_get_agent_config(db, agent_id)
+    if db_agent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+
+    # Return the raw JSON/Dict stored in the DB
+    # Add agent_id, name etc. to the returned dict for the runner?
+    # The runner currently expects the structure from AgentConfigOutput.model_dump()
+    # Let's mimic that for now.
+    config_structure = AgentConfigStructure.model_validate(db_agent.config_json)
+    output_model = AgentConfigOutput(
+        id=db_agent.id,
+        name=db_agent.name,
+        description=db_agent.description,
+        userId=db_agent.user_id,
+        config=config_structure,
+        created_at=db_agent.created_at,
+        updated_at=db_agent.updated_at
+    )
+    return output_model.model_dump()
+
+
+@router.delete(
+    "/agents/{agent_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete an agent",
+    tags=["Agents"]
+)
+async def delete_agent(
+    agent_id: str,
+    r: redis.Redis = Depends(get_redis), # Keep Redis for status and process management
+    db: AsyncSession = Depends(get_db) # Add DB session
+):
+    """
+    Deletes an agent configuration from the database and cleans up Redis status.
+    Ensures the agent process is stopped first.
+    """
+    # 1. Check if agent exists in DB first
+    db_agent_exists = await crud.db_get_agent_config(db, agent_id)
+    if not db_agent_exists:
+         # If not in DB, maybe clean up Redis status just in case and return 404
+         await r.delete(f"agent_status:{agent_id}") # Clean up potentially orphaned status
+         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+
+    # 2. Ensure agent process is stopped (using process_manager)
+    try:
+        status_info = await process_manager.get_agent_status(agent_id, r)
+        # Allow deletion if stopped/error/lost/stopping/not_found
+        if status_info.status not in ["stopped", "error", "error_process_lost", "stopping", "not_found", "error_config", "error_app_create", "error_start_failed", "error_script_not_found"]:
+            logger.warning(f"Attempting to delete agent {agent_id} while it is {status_info.status}. Stopping first.")
+            # Use process_manager.stop_agent_process
+            stopped = await process_manager.stop_agent_process(agent_id, r, force=True)
+            if not stopped:
+                 logger.error(f"Failed to stop agent {agent_id} before deletion. Proceeding with config deletion anyway.")
+                 # Consider raising 500 if stop MUST succeed before delete
+    except Exception as e:
+         # Handle potential errors from get_agent_status or stop_agent_process if they raise exceptions
+         logger.error(f"Error checking/stopping agent {agent_id} during deletion: {e}", exc_info=True)
+         # Decide if deletion should proceed or raise error
+         # raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to ensure agent stop before deletion.")
+
+    # 3. Delete configuration from DB
+    try:
+        deleted_db = await crud.db_delete_agent_config(db, agent_id)
+        if not deleted_db:
+             # Should not happen if we checked existence earlier, but handle defensively
+             logger.warning(f"Agent {agent_id} existed but failed to delete from DB.")
+             # Raise 500? Or maybe 404 if it disappeared?
+             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete agent from database.")
+    except Exception as e:
+         logger.error(f"Error deleting agent {agent_id} from DB: {e}", exc_info=True)
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error during agent deletion.")
+
+    # 4. Clean up Redis status key
+    await r.delete(f"agent_status:{agent_id}")
+    logger.info(f"Cleaned up Redis status for deleted agent {agent_id}")
+
+    return None # Return 204 No Content
+
+
+@router.post(
+    "/agents/{agent_id}/start",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Start an agent process",
+    tags=["Agents"]
+)
+async def start_agent(
+    agent_id: str,
+    r: redis.Redis = Depends(get_redis), # Keep Redis for status/process management
+    db: AsyncSession = Depends(get_db) # Add DB session to check config existence
+):
+    """Initiates the start of the agent runner process."""
+    # Check if config exists in DB before trying to start
+    db_agent = await crud.db_get_agent_config(db, agent_id)
+    if not db_agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+
+    try:
+        # Use process_manager.start_agent_process
+        success = await process_manager.start_agent_process(agent_id, r)
+        # start_agent_process now returns True/False or raises specific exceptions
+        # The function already updates Redis status on error, so we check that
+        if not success:
+             # This case might not be reached if exceptions are raised, but handle defensively
+             status_info = await process_manager.get_agent_status(agent_id, r)
+             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Agent start initiated but failed (status: {status_info.status}).")
+
+    except FileNotFoundError as e:
+         logger.error(f"Agent start failed for {agent_id}: Runner script not found.", exc_info=True)
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Agent runner script not found.")
+    except ValueError as e: # Raised if config check fails (if implemented in process_manager)
+         logger.error(f"Agent start failed for {agent_id}: {e}", exc_info=True)
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except RuntimeError as e: # Raised on other launch errors
+         logger.error(f"Agent start failed for {agent_id}: {e}", exc_info=True)
+         # Check Redis status for more specific error if available
+         status_info = await process_manager.get_agent_status(agent_id, r)
+         detail = f"Agent process failed to launch (status: {status_info.status})."
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail)
+    except Exception as e:
+         logger.error(f"Unexpected error starting agent {agent_id}: {e}", exc_info=True)
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during agent start.")
+
+    return {"message": "Agent start initiated"}
+
+
+@router.post(
+    "/agents/{agent_id}/stop",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Stop an agent process",
+    tags=["Agents"]
+)
+async def stop_agent(
+    agent_id: str,
+    force: bool = Query(False, description="Force stop using SIGKILL if SIGTERM fails."),
+    r: redis.Redis = Depends(get_redis), # Keep Redis for status/process management
+    db: AsyncSession = Depends(get_db) # Add DB session to check config existence
+):
+    """Initiates the stop of the agent runner process (SIGTERM by default)."""
+     # Check if config exists in DB (optional, but good practice)
+    db_agent = await crud.db_get_agent_config(db, agent_id)
+    if not db_agent:
+        # If not in DB, clean up Redis status and return appropriate message/status
+        await r.delete(f"agent_status:{agent_id}")
+        # Return 404 or 202 with message? Let's use 404 as the primary resource is gone.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+
+    try:
+        # Use process_manager.stop_agent_process
+        success = await process_manager.stop_agent_process(agent_id, r, force=force)
+        if not success:
+            status_info = await process_manager.get_agent_status(agent_id, r) # Re-fetch status
+            detail = f"Agent stop initiated, but encountered an error or agent did not terminate gracefully (status: {status_info.status})."
+            logger.error(f"Stop agent {agent_id} reported failure. Status: {status_info.status}")
+            # Return 202 Accepted but with error detail in message
+            return {"message": detail}
+    except Exception as e:
+         logger.error(f"Unexpected error stopping agent {agent_id}: {e}", exc_info=True)
+         # Return 202 but indicate error
+         return {"message": f"Agent stop initiated, but an unexpected error occurred: {e}"}
+
+    return {"message": "Agent stop initiated"}
+
+
+@router.get(
+    "/agents/{agent_id}/status",
+    response_model=AgentStatus,
+    summary="Get agent status",
+    tags=["Agents"]
+)
+async def get_agent_status_api(
+    agent_id: str,
+    r: redis.Redis = Depends(get_redis) # Status is still primarily in Redis
+):
+    """Retrieves the current status of the agent process from Redis."""
+    # No DB interaction needed here, status is in Redis
+    status_info = await process_manager.get_agent_status(agent_id, r)
+    if status_info.status == "not_found":
+         # Check DB for config existence to differentiate between truly not found vs just stopped
+         db_agent = await crud.db_get_agent_config(await get_db().__anext__(), agent_id) # Need DB session
+         if db_agent:
+             # Config exists, but no status key -> treat as stopped
+             return AgentStatus(agent_id=agent_id, status="stopped")
+         else:
+             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    return status_info
+
+# --- Integration Management Endpoints ---
+# These endpoints primarily interact with process_manager, which uses Redis for status.
+# They might need DB access only to verify the agent config exists before starting/stopping integrations.
+
+@router.get("/{agent_id}/integrations/{integration_type}/status", response_model=IntegrationStatus)
+async def get_integration_status_api(
+    agent_id: str,
+    integration_type: IntegrationType, # Use the Enum for path validation
+    r: redis.Redis = Depends(get_redis), # Status is in Redis
+    db: AsyncSession = Depends(get_db) # Add DB session to check config existence
+):
+    """Get the status of a specific integration (e.g., telegram) for an agent."""
+    # Check if agent config exists in DB first
+    db_agent = await crud.db_get_agent_config(db, agent_id)
+    if not db_agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+    # Fetch status from Redis
+    return await process_manager.get_integration_status(agent_id, integration_type, r)
+
+@router.post("/{agent_id}/integrations/{integration_type}/start", status_code=status.HTTP_202_ACCEPTED)
+async def start_integration(
+    agent_id: str,
+    integration_type: IntegrationType,
+    r: redis.Redis = Depends(get_redis), # Process manager uses Redis
+    db: AsyncSession = Depends(get_db) # Add DB session to check config existence
+):
+    """Start a specific integration process (e.g., telegram bot) for an agent."""
+    # Check if agent config exists in DB first
+    db_agent = await crud.db_get_agent_config(db, agent_id)
+    if not db_agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+
+    # Proceed with starting the integration process
+    try:
+        success = await process_manager.start_integration_process(agent_id, integration_type, r)
+        if not success:
+             # Check status for specific error
+             status_info = await process_manager.get_integration_status(agent_id, integration_type, r)
+             detail = f"Failed to start {integration_type.value} integration (status: {status_info.status})."
+             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail)
+    except FileNotFoundError as e:
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{integration_type.value} integration script not found.")
+    except ValueError as e: # e.g., unsupported type
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except RuntimeError as e: # e.g., launch failed
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{integration_type.value} integration process failed to launch.")
+    except Exception as e:
+         logger.error(f"Unexpected error starting integration {integration_type.value} for {agent_id}: {e}", exc_info=True)
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during integration start.")
+
+    return {"message": f"{integration_type.value} integration start initiated"}
+
+
+@router.post("/{agent_id}/integrations/{integration_type}/stop", status_code=status.HTTP_202_ACCEPTED)
+async def stop_integration(
+    agent_id: str,
+    integration_type: IntegrationType,
+    force: bool = Query(False, description="Force stop using SIGKILL instead of SIGTERM"),
+    r: redis.Redis = Depends(get_redis), # Process manager uses Redis
+    db: AsyncSession = Depends(get_db) # Add DB session to check config existence
+):
+    """Stop a specific integration process (e.g., telegram bot) for an agent."""
+    # Check if agent config exists in DB first (optional, but good practice)
+    db_agent = await crud.db_get_agent_config(db, agent_id)
+    if not db_agent:
+        # Clean up Redis status and return 404
+        status_key = process_manager._get_integration_status_key(agent_id, integration_type)
+        await r.delete(status_key)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+
+    # Proceed with stopping the integration process
+    try:
+        success = await process_manager.stop_integration_process(agent_id, integration_type, r, force=force)
+        if not success:
+            status_info = await process_manager.get_integration_status(agent_id, integration_type, r)
+            detail = f"{integration_type.value} integration stop initiated, but encountered an error or did not terminate gracefully (status: {status_info.status})."
+            logger.error(f"Stop integration {integration_type.value} for {agent_id} reported failure. Status: {status_info.status}")
+            return {"message": detail}
+    except Exception as e:
+         logger.error(f"Unexpected error stopping integration {integration_type.value} for {agent_id}: {e}", exc_info=True)
+         return {"message": f"{integration_type.value} integration stop initiated, but an unexpected error occurred: {e}"}
+
+    return {"message": f"{integration_type.value} integration stop initiated"}
+
