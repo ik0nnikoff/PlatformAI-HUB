@@ -20,7 +20,7 @@ stop_workers:
 	pkill -f "uv run qdrant_sync_worker.py" || true
 
 manager:
-	uvicorn agent_manager.main:app --reload --port 8000 --host 0.0.0.0
+	uv run uvicorn agent_manager.main:app --reload --port 8001 --host 0.0.0.0
 
 # Example of running a specific agent runner manually (for testing)
 # Usage: make run_agent AGENT_ID=my_agent_abc
@@ -30,7 +30,7 @@ ifndef AGENT_ID
 endif
 	python agent_runner/runner.py \
 		--agent-id $(AGENT_ID) \
-		--config-url http://localhost:8000/agents/$(AGENT_ID)/config \
+		--config-url http://localhost:8001/agents/$(AGENT_ID)/config \
 		--redis-url ${REDIS_URL:-redis://localhost:6379}
 
 # Stop a specific agent runner via the manager API
