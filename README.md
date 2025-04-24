@@ -225,13 +225,14 @@ experiments/
     ```json
     {
       "type": "message",
-      "content": "Ваше сообщение агенту"
+      "message": "Ваше сообщение агенту",
+      "thread_id": numberoftread
       // Опционально: "user_data": {"first_name": "...", "is_authenticated": true, ...}
       // Опционально: "channel": "web" | "telegram" | ...
     }
     ```
 *   **Получение сообщений:** Получайте JSON-сообщения:
-    *   Ответы агента: `{"type": "message", "content": "Ответ агента", "message_object": {...}}`
+    *   Ответы агента: `{"type": "message", "message": "Ответ агента", "message_object": {...}}`
     *   Обновления статуса: `{"type": "status", "message": "Агент запускается..."}`
     *   Ошибки: `{"type": "error", "message": "Детали ошибки"}`
 

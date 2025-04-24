@@ -3,10 +3,13 @@ import json
 import asyncio
 from typing import Dict, List
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, status as fastapi_status
+from sqlalchemy.ext.asyncio import AsyncSession # Импортируем AsyncSession
 import redis.asyncio as redis
 
 from ..redis_client import get_redis
+from ..db import get_db # Импортируем зависимость для БД
 from .. import process_manager
+from .. import crud # Импортируем CRUD операции
 from ..models import AgentStatus
 
 logger = logging.getLogger(__name__)
@@ -119,19 +122,29 @@ async def redis_websocket_listener(websocket: WebSocket, agent_id: str, r: redis
 
 
 @router.websocket("/ws/agents/{agent_id}")
-async def websocket_endpoint(websocket: WebSocket, agent_id: str, r: redis.Redis = Depends(get_redis)):
+async def websocket_endpoint(
+    websocket: WebSocket,
+    agent_id: str,
+    r: redis.Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_db) # Добавляем зависимость БД
+):
     """
     Эндпоинт WebSocket для получения обновлений от агента.
     Подключается к каналу вывода агента в Redis и пересылает сообщения.
     Также принимает сообщения от клиента и публикует их в канал ввода агента.
     """
-    # Проверяем, существует ли конфигурация агента
-    if not await r.exists(f"agent_config:{agent_id}"):
-        logger.warning(f"WebSocket connection attempt for non-existent agent: {agent_id}")
+    # --- Обновленная проверка существования агента ---
+    # Проверяем, существует ли конфигурация агента в БД
+    db_agent = await crud.db_get_agent_config(db, agent_id)
+    if not db_agent:
+        logger.warning(f"WebSocket connection attempt for non-existent agent (DB check): {agent_id}")
         await websocket.close(code=fastapi_status.WS_1008_POLICY_VIOLATION)
         return
+    # --- Конец обновленной проверки ---
 
+    # Подключаемся ТОЛЬКО ПОСЛЕ успешной проверки
     await manager.connect(websocket, agent_id)
+
     listener_task = asyncio.create_task(redis_websocket_listener(websocket, agent_id, r))
 
     try:
