@@ -39,13 +39,22 @@ async def db_create_agent_config(db: AsyncSession, agent_config: AgentConfigInpu
 
 async def db_get_agent_config(db: AsyncSession, agent_id: str) -> Optional[AgentConfigDB]:
     """Retrieves an agent configuration from the database by ID."""
-    logger.debug(f"Fetching agent config from DB for agent_id: {agent_id}")
-    result = await db.get(AgentConfigDB, agent_id)
-    if result:
-        logger.debug(f"Found agent config in DB for agent_id: {agent_id}")
-    else:
-        logger.debug(f"Agent config not found in DB for agent_id: {agent_id}")
-    return result
+    logger.debug(f"Fetching agent config for ID: '{agent_id}' from DB") # Используем кавычки для ясности
+    if not db: # Добавим проверку на валидность сессии
+        logger.error("db_get_agent_config received an invalid DB session (None).")
+        return None
+    try: # Добавим try/except для отлова ошибок сессии
+        stmt = select(AgentConfigDB).where(AgentConfigDB.id == agent_id)
+        result = await db.execute(stmt)
+        agent = result.scalar_one_or_none()
+        if agent:
+            logger.debug(f"Found agent config for ID: '{agent_id}'")
+        else:
+            logger.warning(f"Agent config query returned None for ID: '{agent_id}'") # Уточненный лог
+        return agent
+    except Exception as e:
+        logger.error(f"Exception during DB query for agent_id '{agent_id}': {e}", exc_info=True)
+        return None # Возвращаем None при ошибке запроса
 
 async def db_get_all_agents(db: AsyncSession, skip: int = 0, limit: int = 100) -> List[AgentConfigDB]:
     """Retrieves a list of agent configurations from the database."""

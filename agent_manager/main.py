@@ -14,7 +14,7 @@ import time # Import time module
 
 # Импортируем зависимости и модули
 from .redis_client import init_redis_pool, close_redis_pool, get_redis
-from .db import init_db, close_db_engine, get_db # Импортируем DB функции
+from .db import init_db, close_db_engine, get_db, SessionLocal # Импортируем SessionLocal
 from .process_manager import check_inactive_agents # Импортируем фоновую задачу
 from .api import agents as agents_api # Импортируем новый роутер для агентов
 from .api import websocket as websocket_api # Импортируем роутер для WebSocket
@@ -22,7 +22,10 @@ from .api import websocket as websocket_api # Импортируем роуте�
 # --- Configuration & Globals ---
 # Load .env - adjust path as needed
 from dotenv import load_dotenv
-dotenv_path = '/Users/jb/Projects/experiments/.env'
+# Construct the path to the .env file relative to the current script's directory
+# Assuming .env is in the parent directory of agent_manager
+current_dir = os.path.dirname(os.path.abspath(__file__))
+dotenv_path = os.path.join(current_dir, '..', '.env')
 if os.path.exists(dotenv_path):
     load_dotenv(dotenv_path=dotenv_path)
 else:
@@ -141,20 +144,20 @@ async def read_root():
         r = await get_redis().__anext__() # Get a connection to test
         await r.ping()
         redis_status = "connected"
-        await r.close()
+        # No need to explicitly close connection from pool here
     except Exception:
         pass # Status remains disconnected
 
     try:
-        # Check DB
-        async with get_db() as db: # Use get_db context manager
-            if db:
+        # Check DB using SessionLocal directly for health check
+        if SessionLocal: # Check if SessionLocal was initialized
+            async with SessionLocal() as session: # Create a session directly
                 # Perform a simple query like SELECT 1
                 from sqlalchemy import text
-                await db.execute(text("SELECT 1"))
+                await session.execute(text("SELECT 1"))
                 db_status = "connected"
-            else:
-                 db_status = "disabled" # If get_db yields None
+        else:
+             db_status = "disabled" # If SessionLocal is None
     except Exception as e:
         logger.warning(f"DB connection check failed: {e}")
         pass # Status remains disconnected

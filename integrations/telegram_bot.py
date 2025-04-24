@@ -22,7 +22,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 bot: Bot = None
-dp: Dispatcher = None
+# Initialize Dispatcher at the module level
+dp: Dispatcher = Dispatcher()
 redis_client: redis.Redis = None
 redis_listener_task: asyncio.Task = None
 agent_id_global: str = None # Store agent_id globally for handlers
@@ -307,8 +308,8 @@ async def lifespan(dp: Dispatcher, agent_id: str):
 # --- Main Execution ---
 async def main(agent_id: str):
     """Initializes and runs the bot."""
-    global dp
-    dp = Dispatcher()
+    # global dp # No longer needed to modify global dp here
+    # dp = Dispatcher() # Remove initialization from here
 
     async with lifespan(dp, agent_id):
         await dp.start_polling(bot)
@@ -316,7 +317,13 @@ async def main(agent_id: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Telegram Bot Integration for Configurable Agent")
     parser.add_argument("--agent-id", required=True, help="Unique ID of the agent this bot interacts with")
+    # Add the redis-url argument
+    parser.add_argument("--redis-url", required=True, help="URL for the Redis server")
     args = parser.parse_args()
+
+    # Update REDIS_URL based on the argument if provided, otherwise keep the env var default
+    # This allows overriding the .env setting via command line
+    REDIS_URL = args.redis_url
 
     try:
         asyncio.run(main(args.agent_id))

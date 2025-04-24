@@ -28,11 +28,25 @@ def load_environment():
         print(f"Agent Runner: Warning! .env file not found at {dotenv_path}")
         return False
 
+# --- Custom Logging Filter ---
+class AgentIdFilter(logging.Filter):
+    """Adds a default agent_id if it's missing from the log record."""
+    def __init__(self, default_agent_id="system"):
+        super().__init__()
+        self.default_agent_id = default_agent_id
+
+    def filter(self, record):
+        if not hasattr(record, 'agent_id'): # <--- Формат требует agent_id
+            record.agent_id = self.default_agent_id
+        return True
+
 def setup_logging(agent_id: str):
     """Configures logging for the agent runner."""
     # Remove existing handlers if any to avoid duplicate logs on reconfigure
-    for handler in logging.root.handlers[:]:
-        logging.root.removeHandler(handler)
+    # Important: Get root logger *before* basicConfig if modifying handlers later
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
 
     logging.basicConfig(
         level=logging.INFO,
@@ -40,10 +54,26 @@ def setup_logging(agent_id: str):
         handlers=[
             logging.StreamHandler(sys.stdout) # Log to stdout
             # Add FileHandler if needed: logging.FileHandler(f"agent_{agent_id}.log")
-        ]
+        ],
+        # Force=True might be needed if basicConfig was called before elsewhere
+        # force=True
     )
-    # Return a logger adapter with the agent_id context
-    return logging.LoggerAdapter(logging.getLogger(__name__), {'agent_id': agent_id})
+
+    # Add the filter to all handlers configured by basicConfig
+    # This ensures logs from external libraries get the default agent_id
+    log_filter = AgentIdFilter(default_agent_id='-') # Use '-' or 'system' as default
+    for handler in root_logger.handlers:
+         # Check if the filter is already added to prevent duplicates if setup_logging is called multiple times
+         if not any(isinstance(f, AgentIdFilter) for f in handler.filters):
+              handler.addFilter(log_filter)
+
+
+    # Return a logger adapter with the specific agent_id context for runner's own logs
+    # Use logging.getLogger(__name__) to get the logger for the current module
+    logger = logging.getLogger(__name__)
+    # Set the specific agent_id for logs originating from this runner instance via the adapter
+    adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id})
+    return adapter
 
 # Global flag for graceful shutdown
 running = True
@@ -109,6 +139,7 @@ async def update_redis_status(r: redis.Redis, status_key: str, status: str, pid:
         log_adapter.error(f"Failed to update Redis status ({status_key}) to {status}: {e}")
 
 
+from langchain_core.messages import HumanMessage, AIMessage # Ensure AIMessage is imported
 async def redis_listener(app, agent_id: str, redis_client: redis.Redis, static_state_config: Dict[str, Any]):
     """Listens to Redis input channel, processes messages, and publishes output."""
     log_adapter = logging.LoggerAdapter(logging.getLogger(__name__), {'agent_id': agent_id}) # Use __name__ for logger
@@ -161,26 +192,30 @@ async def redis_listener(app, agent_id: str, redis_client: redis.Redis, static_s
                              log_adapter.error("Missing 'message' or 'thread_id' in Redis payload.")
                              continue
 
-                        # Import HumanMessage here or at the top if not already done
-                        from langchain_core.messages import HumanMessage
-                        # Merge static config into the initial state for this run
+                        # Prepare initial state for the graph, matching AgentState definition
+                        # Include fields from static_state_config that ARE part of AgentState
                         graph_input = {
-                            "messages": [HumanMessage(content=user_message)], # Ensure it's a BaseMessage
+                            "messages": [HumanMessage(content=user_message)],
                             "user_data": user_data,
                             "channel": channel,
-                            "original_question": user_message, # Add original question
-                            "question": user_message, # Initial question
-                            "rewrite_count": 0, # Initial rewrite count
-                            "documents": [], # Initial empty documents
-                            **static_state_config # Add static config here
+                            "original_question": user_message,
+                            "question": user_message,
+                            "rewrite_count": 0,
+                            "documents": [],
+                            # Add fields from static_state_config that belong in AgentState
+                            "model_id": static_state_config.get("model_id"),
+                            "temperature": static_state_config.get("temperature"),
+                            "system_prompt": static_state_config.get("system_prompt"),
+                            "safe_tool_names": static_state_config.get("safe_tool_names", set()),
+                            "datastore_tool_names": static_state_config.get("datastore_tool_names", set()),
+                            "max_rewrites": static_state_config.get("max_rewrites", 3),
+                            # DO NOT add "configured_tools" here
                         }
-                        # Pass agent_id and thread_id via config
+                        # Pass agent_id and thread_id via config for LangGraph internals
                         config = {"configurable": {"thread_id": str(thread_id), "agent_id": agent_id}}
 
                         log_adapter.info(f"Invoking graph for thread_id: {thread_id}")
                         final_response_content = "No response generated."
-                        # Import AIMessage if needed for type checking
-                        from langchain_core.messages import AIMessage
                         final_message_object = None
 
                         async for output in app.astream(graph_input, config, stream_mode="updates"):
@@ -205,12 +240,27 @@ async def redis_listener(app, agent_id: str, redis_client: redis.Redis, static_s
 
                         log_adapter.info(f"Graph execution finished. Final response: {final_response_content[:100]}...")
 
-                        response_payload = json.dumps({
+                        # Serialize response payload
+                        response_payload_dict = {
                             "thread_id": thread_id,
                             "response": final_response_content,
-                            # Serialize the Pydantic model if it exists and has dict() method
-                            "message_object": final_message_object.dict() if final_message_object and hasattr(final_message_object, 'dict') else None
-                        })
+                            "message_object": None # Default to None
+                        }
+                        # Attempt to serialize the message object if it exists and is serializable
+                        if final_message_object:
+                            try:
+                                # Use model_dump for Pydantic v2+ or dict() for older versions
+                                if hasattr(final_message_object, 'model_dump'):
+                                    response_payload_dict["message_object"] = final_message_object.model_dump()
+                                elif hasattr(final_message_object, 'dict'):
+                                     response_payload_dict["message_object"] = final_message_object.dict()
+                                else:
+                                     # Fallback if no standard serialization method found
+                                     log_adapter.warning(f"Final message object of type {type(final_message_object)} has no standard dict/model_dump method.")
+                            except Exception as serial_err:
+                                 log_adapter.error(f"Error serializing final message object: {serial_err}")
+
+                        response_payload = json.dumps(response_payload_dict)
                         await redis_client.publish(output_channel, response_payload)
                         log_adapter.info(f"Published response to Redis channel: {output_channel}")
 

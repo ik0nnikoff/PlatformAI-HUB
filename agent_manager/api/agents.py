@@ -17,7 +17,7 @@ router = APIRouter()
 # --- Agent Management Endpoints ---
 
 @router.post(
-    "/agents",
+    "/",
     response_model=AgentConfigOutput,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new agent configuration",
@@ -66,7 +66,7 @@ async def create_agent(
 
 
 @router.get(
-    "/agents",
+    "/",
     response_model=List[AgentListItem],
     summary="List all agents",
     tags=["Agents"]
@@ -94,7 +94,7 @@ async def list_agents(
 
 
 @router.get(
-    "/agents/{agent_id}",
+    "/{agent_id}",
     response_model=AgentConfigOutput,
     summary="Get agent configuration details",
     tags=["Agents"]
@@ -123,7 +123,7 @@ async def get_agent(
     )
 
 @router.get(
-    "/agents/{agent_id}/config",
+    "/{agent_id}/config",
     response_model=Dict, # Return raw config dict for runner
     summary="Get raw agent configuration (for runner)",
     tags=["Agents", "Internal"]
@@ -160,7 +160,7 @@ async def get_agent_config_for_runner(
 
 
 @router.delete(
-    "/agents/{agent_id}",
+    "/{agent_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete an agent",
     tags=["Agents"]
@@ -218,7 +218,7 @@ async def delete_agent(
 
 
 @router.post(
-    "/agents/{agent_id}/start",
+    "/{agent_id}/start",
     status_code=status.HTTP_202_ACCEPTED,
     summary="Start an agent process",
     tags=["Agents"]
@@ -264,7 +264,7 @@ async def start_agent(
 
 
 @router.post(
-    "/agents/{agent_id}/stop",
+    "/{agent_id}/stop",
     status_code=status.HTTP_202_ACCEPTED,
     summary="Stop an agent process",
     tags=["Agents"]
@@ -302,7 +302,7 @@ async def stop_agent(
 
 
 @router.get(
-    "/agents/{agent_id}/status",
+    "/{agent_id}/status",
     response_model=AgentStatus,
     summary="Get agent status",
     tags=["Agents"]
@@ -332,26 +332,55 @@ async def get_agent_status_api(
 async def get_integration_status_api(
     agent_id: str,
     integration_type: IntegrationType, # Use the Enum for path validation
-    r: redis.Redis = Depends(get_redis), # Status is in Redis
-    db: AsyncSession = Depends(get_db) # Add DB session to check config existence
+    r: redis.Redis = Depends(get_redis) # Status is in Redis
+    # db: AsyncSession = Depends(get_db) # <--- Удаляем зависимость DB отсюда
 ):
     """Get the status of a specific integration (e.g., telegram) for an agent."""
     # Check if agent config exists in DB first
-    db_agent = await crud.db_get_agent_config(db, agent_id)
-    if not db_agent:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
-    # Fetch status from Redis
-    return await process_manager.get_integration_status(agent_id, integration_type, r)
+    try: # Добавляем try-finally для гарантии закрытия сессии
+        db_session = await get_db().__anext__() # <--- Получаем сессию вручную
+        if not db_session:
+             logger.error(f"Failed to get DB session for integration status check (agent: {agent_id})")
+             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not get database session.")
+
+        logger.info(f"Checking DB for agent_id: '{agent_id}' in get_integration_status_api") # Лог для отладки
+        db_agent = await crud.db_get_agent_config(db_session, agent_id) # <--- Используем полученную сессию
+        if not db_agent:
+            logger.warning(f"Agent config NOT FOUND in DB for agent_id: '{agent_id}' in get_integration_status_api") # Лог для отладки
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+
+        logger.info(f"Agent config found for agent_id: '{agent_id}'. Fetching integration status.") # Лог для отладки
+        # Fetch status from Redis
+        return await process_manager.get_integration_status(agent_id, integration_type, r)
+    except StopAsyncIteration:
+         logger.error(f"DB session generator finished unexpectedly for integration status check (agent: {agent_id})")
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database session error.")
+    except Exception as e:
+         logger.error(f"Error during integration status check for agent {agent_id}: {e}", exc_info=True)
+         # Перехватываем HTTPException, чтобы не перекрыть 404
+         if isinstance(e, HTTPException):
+             raise e
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error during status check.")
+    # finally:
+        # FastAPI должен автоматически обработать закрытие генератора get_db(),
+        # поэтому явный вызов __aclose__ здесь не требуется и может вызвать проблемы.
+        # if 'db_session' in locals() and db_session:
+        #     try:
+        #         await get_db().__aclose__(None) # Попытка закрыть, если нужно, но обычно не требуется
+        #     except Exception as close_err:
+        #         logger.warning(f"Error trying to manually close DB session: {close_err}")
+
 
 @router.post("/{agent_id}/integrations/{integration_type}/start", status_code=status.HTTP_202_ACCEPTED)
 async def start_integration(
     agent_id: str,
     integration_type: IntegrationType,
     r: redis.Redis = Depends(get_redis), # Process manager uses Redis
-    db: AsyncSession = Depends(get_db) # Add DB session to check config existence
+    db: AsyncSession = Depends(get_db) # <--- Оставляем здесь зависимость, т.к. она работает в POST
 ):
     """Start a specific integration process (e.g., telegram bot) for an agent."""
     # Check if agent config exists in DB first
+    # Используем сессию из зависимости, т.к. для POST-запросов она, видимо, работает
     db_agent = await crud.db_get_agent_config(db, agent_id)
     if not db_agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
@@ -387,6 +416,7 @@ async def stop_integration(
 ):
     """Stop a specific integration process (e.g., telegram bot) for an agent."""
     # Check if agent config exists in DB first (optional, but good practice)
+    # Используем сессию из зависимости
     db_agent = await crud.db_get_agent_config(db, agent_id)
     if not db_agent:
         # Clean up Redis status and return 404

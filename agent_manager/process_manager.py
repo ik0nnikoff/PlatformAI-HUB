@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # --- Agent Process Management ---
 
 # Определяем корневой каталог проекта (предполагаем, что process_manager.py находится в agent_manager/)
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 RUNNER_SCRIPT_PATH = os.path.join(PROJECT_ROOT, 'agent_runner', 'runner.py')
 
 async def get_agent_status(agent_id: str, r: redis.Redis) -> AgentStatus:
@@ -124,13 +124,16 @@ async def start_agent_process(agent_id: str, r: redis.Redis) -> bool:
             await r.hset(status_key, "status", "error_script_not_found")
             raise FileNotFoundError(f"Agent runner script not found: {script_path}")
 
-        process = subprocess.Popen([
+        cmd = [
             python_executable,
-            script_path,
+            "-m", # Use the -m flag to run as a module
+            "agent_runner.runner", # Specify the module path
             "--agent-id", agent_id,
             "--config-url", config_url,
             "--redis-url", redis_url_for_agent
-        ])
+        ]
+
+        process = subprocess.Popen(cmd)
 
         await r.hset(status_key, mapping={
             "status": "starting",
@@ -310,16 +313,15 @@ def _get_integration_status_key(agent_id: str, integration_type: IntegrationType
 async def get_integration_status(agent_id: str, integration_type: IntegrationType, r: redis.Redis) -> IntegrationStatus:
     """Retrieves the status of a specific integration process from Redis."""
     status_key = _get_integration_status_key(agent_id, integration_type)
+    # Assuming redis client 'r' uses decode_responses=True, hgetall returns Dict[str, str]
     status_data = await r.hgetall(status_key)
 
     if not status_data:
-        # Check if agent config exists as a prerequisite
-        config_exists = await r.exists(f"agent_config:{agent_id}")
-        if not config_exists:
-             raise HTTPException(status_code=fastapi_status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
-        # If agent exists but no status for integration, assume stopped
+        # The existence of the agent config is already checked in the API layer (using the DB).
+        # If no status data exists in Redis for this integration, assume it's stopped.
         return IntegrationStatus(agent_id=agent_id, integration_type=integration_type, status="stopped")
 
+    # Use string keys since decode_responses=True is expected
     pid_val = status_data.get("pid")
     pid = int(pid_val) if pid_val and pid_val.isdigit() else None
 
@@ -327,12 +329,33 @@ async def get_integration_status(agent_id: str, integration_type: IntegrationTyp
     try:
         last_active = float(last_active_val) if last_active_val else None
     except (ValueError, TypeError):
+        logger.warning(f"Invalid last_active value '{last_active_val}' for {agent_id}/{integration_type.value}, setting to None.")
         last_active = None
+
+    # Status is already a string, no need to decode. Use string key.
+    current_status = status_data.get("status", "unknown")
+
+    # Optional: Add PID check here as well, similar to get_agent_status
+    if pid and current_status in ["running", "starting"]:
+        try:
+            os.kill(pid, 0) # Check if process exists
+        except ProcessLookupError:
+            logger.warning(f"Integration {agent_id}/{integration_type.value} status is '{current_status}' in Redis, but PID {pid} not found. Updating status to 'error_process_lost'.")
+            current_status = "error_process_lost"
+            pid = None # Clear PID as it's invalid
+            # Update Redis status (consider if this should be done here or rely on next start/stop)
+            async with r.pipeline(transaction=True) as pipe:
+                 pipe.hset(status_key, "status", current_status)
+                 pipe.hdel(status_key, "pid")
+                 await pipe.execute()
+        except OSError as e:
+            logger.error(f"Error checking PID {pid} for integration {agent_id}/{integration_type.value}: {e}. Status remains '{current_status}'.")
+
 
     return IntegrationStatus(
         agent_id=agent_id,
         integration_type=integration_type,
-        status=status_data.get("status", "unknown"),
+        status=current_status, # Already a string
         pid=pid,
         last_active=last_active,
     )
@@ -340,11 +363,6 @@ async def get_integration_status(agent_id: str, integration_type: IntegrationTyp
 async def start_integration_process(agent_id: str, integration_type: IntegrationType, r: redis.Redis) -> bool:
     """Starts a specific integration subprocess (e.g., Telegram bot)."""
     status_key = _get_integration_status_key(agent_id, integration_type)
-
-    # Check if agent config exists first
-    if not await r.exists(f"agent_config:{agent_id}"):
-        logger.error(f"Cannot start {integration_type.value} integration for non-existent agent {agent_id}.")
-        return False
 
     # Check current status
     try:
@@ -361,35 +379,56 @@ async def start_integration_process(agent_id: str, integration_type: Integration
         elif status.status == "starting":
             logger.warning(f"{integration_type.value} integration for {agent_id} is already starting. Skipping.")
             return True
-    except HTTPException: # Handles 404 from get_integration_status if agent doesn't exist (already checked above, but safe)
-        return False
+    except HTTPException as e: # Handles potential 404 if status key doesn't exist but agent does
+        logger.info(f"No existing status found for {integration_type.value} integration for {agent_id}. Proceeding with start. (Detail: {e.detail})")
+        # This is expected if the integration was never started or was properly stopped.
 
     logger.info(f"Starting {integration_type.value} integration process for agent {agent_id}...")
 
-    python_executable = "python" # Or sys.executable
-    script_path = None
-    args = []
+    python_executable = sys.executable # Используем тот же python, что и менеджер
+    module_path = None # Имя модуля для -m
+    script_to_check = None # Путь к файлу для проверки существования
 
     if integration_type == IntegrationType.TELEGRAM:
-        script_path = os.path.join(os.path.dirname(__file__), '..', 'integrations', 'telegram_bot.py')
-        args = ["--agent-id", agent_id]
+        # Путь к файлу для проверки
+        script_to_check = os.path.join(PROJECT_ROOT, 'integrations', 'telegram_bot.py')
+        # Имя модуля для запуска через -m
+        module_path = 'integrations.telegram_bot'
+        # args = ["--agent-id", agent_id] # Аргументы передаются ниже
     # Add other integration types here
     # elif integration_type == IntegrationType.WEBCHAT:
-    #     script_path = ...
-    #     args = ...
+    #     script_to_check = ...
+    #     module_path = ...
     else:
         logger.error(f"Starting integration type '{integration_type.value}' is not implemented.")
         await r.hset(status_key, "status", f"error_unsupported_type")
         return False
 
-    script_path = os.path.abspath(script_path)
-    if not os.path.exists(script_path):
-        logger.error(f"{integration_type.value} integration script not found at: {script_path}")
+    # Проверяем существование файла скрипта
+    if not script_to_check or not os.path.exists(script_to_check):
+        logger.error(f"{integration_type.value} integration script not found at expected location: {script_to_check}")
         await r.hset(status_key, "status", "error_script_not_found")
         return False
 
     try:
-        process = subprocess.Popen([python_executable, script_path] + args)
+        # Define redis_url for the integration process
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+        cmd = [
+            python_executable,
+            "-m", # Use -m
+            module_path, # Specify the module path (e.g., integrations.telegram_bot)
+            "--agent-id", agent_id,
+            # Add other necessary args like --redis-url if needed by the integration script
+            "--redis-url", redis_url
+        ]
+        # Добавляем рабочую директорию, чтобы python мог найти модуль
+        process_cwd = PROJECT_ROOT
+
+        # Log the command being executed for debugging
+        logger.debug(f"Executing integration command: {' '.join(cmd)} in cwd: {process_cwd}")
+
+        process = subprocess.Popen(cmd, cwd=process_cwd) # Указываем cwd
         await r.hset(status_key, mapping={
             "status": "starting",
             "pid": process.pid
@@ -401,7 +440,13 @@ async def start_integration_process(agent_id: str, integration_type: Integration
         # or just rely on PID check. Let's set it to running after a short delay for now.
         async def update_to_running_delayed():
              await asyncio.sleep(3) # Give it a few seconds to potentially fail
-             current_status = await r.hget(status_key, "status")
+             current_status_val = await r.hget(status_key, "status") # hget can return bytes or str
+             current_status = None
+             if isinstance(current_status_val, bytes):
+                 current_status = current_status_val.decode('utf-8')
+             elif isinstance(current_status_val, str):
+                 current_status = current_status_val # Already a string
+
              if current_status == "starting": # Only update if still starting
                  await r.hset(status_key, "status", "running")
                  logger.info(f"Set {integration_type.value} integration status to 'running' for {agent_id} (PID: {process.pid})")
