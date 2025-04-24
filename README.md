@@ -20,7 +20,10 @@
 ```
 experiments/
 ├── agent_manager/           # Сервис FastAPI для управления агентами
-│   ├── api/                 # Конечные точки API (agents.py, websocket.py)
+│   ├── api/                 # Конечные точки API
+│   │   ├── __init__.py
+│   │   ├── agents.py        # Эндпоинты для управления агентами (CRUD, start, stop)
+│   │   └── websocket.py     # Эндпоинт WebSocket для взаимодействия с агентами
 │   ├── alembic/             # Скрипты миграции базы данных Alembic
 │   │   ├── versions/        # Файлы версий миграций
 │   │   ├── env.py           # Конфигурация среды Alembic
@@ -30,14 +33,16 @@ experiments/
 │   ├── crud.py              # Операции CRUD с базой данных
 │   ├── db.py                # Настройка базы данных (SQLAlchemy, async session)
 │   ├── main.py              # Точка входа приложения FastAPI
-│   ├── models.py            # Модели Pydantic и SQLAlchemy
+│   ├── models.py            # Модели Pydantic и SQLAlchemy для manager'а
 │   ├── process_manager.py   # Логика запуска/остановки процессов агентов и интеграций
 │   └── redis_client.py      # Настройка соединения с Redis
+│   └── alembic.ini          # Конфигурация Alembic
 ├── agent_runner/            # Код для отдельного процесса агента (LangGraph)
 │   ├── __init__.py
-│   ├── graph_factory.py     # (Предположительно) Фабрика для создания графа LangGraph
-│   ├── models.py            # (Предположительно) Модели Pydantic для runner'а
-│   └── runner.py            # Основной скрипт для запуска экземпляра агента
+│   ├── graph_factory.py     # Фабрика для создания графа LangGraph (узлы, ребра, компиляция)
+│   ├── models.py            # Модели Pydantic для runner'а (AgentState)
+│   ├── runner.py            # Основной скрипт для запуска экземпляра агента
+│   └── tools.py             # Определение и конфигурация инструментов Langchain/LangGraph
 ├── integrations/            # Код для внешних интеграций
 │   ├── __init__.py
 │   └── telegram_bot.py      # Скрипт интеграции с ботом Telegram
@@ -45,7 +50,6 @@ experiments/
 │   ├── docker-compose.deps.yml
 │   └── docker.env           # Переменные окружения для docker-compose.deps.yml
 ├── .env                     # Переменные окружения (ключи API, URL) - !! НЕ КОММИТИТЬ !!
-├── alembic.ini              # Конфигурация Alembic
 ├── docker-compose.yml       # Docker Compose для запуска agent-manager и зависимостей
 ├── Dockerfile.manager       # Dockerfile для сборки образа agent-manager
 ├── Makefile                 # Команды Make для общих задач
@@ -185,7 +189,7 @@ experiments/
 
 **Важное примечание о процессах Agent Runner с Docker:**
 
-Предоставленный `docker-compose.yml` запускает только `agent-manager`, `redis` и `db`. Отдельные процессы `agent_runner` по-прежнему запускаются сервисом `agent-manager` при использовании конечной точки API `/start`. `agent-manager` (работающий внутри своего контейнера Docker) выполняет команду `python agent_runner/runner.py ...` в среде *своего* контейнера. Это работает, потому что код runner и зависимости включены в образ `agent-manager` через `COPY . /app`.
+Предоставленный `docker-compose.yml` запускает только `agent-manager`, `redis` и `db`. Отдельные процессы `agent_runner` по-прежнему запускаются сервисом `agent-manager` при использовании конечной точки API `/start`. `agent-manager` (работающий внутри своего контейнера Docker) выполняет команду `python -m agent_runner.runner ...` в среде *своего* контейнера. Это работает, потому что код runner и зависимости включены в образ `agent-manager` через `COPY . /app`.
 
 Если бы вам потребовалось запускать процессы `agent_runner` в отдельных выделенных контейнерах (например, для изоляции ресурсов или разных зависимостей), вам потребовалась бы более сложная настройка, включающая Docker-in-Docker или систему оркестрации контейнеров, такую как Kubernetes, чтобы позволить `agent-manager` запускать новые контейнеры `agent-runner`.
 
@@ -222,10 +226,12 @@ experiments/
     {
       "type": "message",
       "content": "Ваше сообщение агенту"
+      // Опционально: "user_data": {"first_name": "...", "is_authenticated": true, ...}
+      // Опционально: "channel": "web" | "telegram" | ...
     }
     ```
 *   **Получение сообщений:** Получайте JSON-сообщения:
-    *   Ответы агента: `{"type": "message", "content": "Ответ агента"}`
+    *   Ответы агента: `{"type": "message", "content": "Ответ агента", "message_object": {...}}`
     *   Обновления статуса: `{"type": "status", "message": "Агент запускается..."}`
     *   Ошибки: `{"type": "error", "message": "Детали ошибки"}`
 
@@ -279,6 +285,9 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, wsUrlBase = 'ws://localh
         // Убедимся, что messageData имеет type и content
         if (messageData.type && typeof messageData.content !== 'undefined') {
            setMessages((prev) => [...prev, { type: messageData.type, content: messageData.content }]);
+        } else if (messageData.type === 'message' && typeof messageData.response !== 'undefined') {
+           // Обработка ответа от runner.py
+           setMessages((prev) => [...prev, { type: 'message', content: messageData.response }]);
         } else {
            console.warn("Получено сообщение неожиданного формата:", messageData);
            setMessages((prev) => [...prev, { type: 'error', content: `Получены неожиданные данные: ${event.data}` }]);
@@ -319,7 +328,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, wsUrlBase = 'ws://localh
 
   const sendMessage = () => {
     if (input.trim() && ws.current && ws.current.readyState === WebSocket.OPEN) {
-      const messageToSend = { type: 'message', content: input };
+      const messageToSend = { type: 'message', content: input }; // Структура для отправки через WebSocket manager'а
       console.log('Отправка сообщения:', messageToSend);
       ws.current.send(JSON.stringify(messageToSend));
       // Немедленно добавляем сообщение пользователя в чат
@@ -407,7 +416,7 @@ make run_agent AGENT_ID={ваш_agent_id}
 ```
 Или напрямую:
 ```bash
-python agent_runner/runner.py \
+python -m agent_runner.runner \
     --agent-id {ваш_agent_id} \
     --config-url http://localhost:8000/agents/{ваш_agent_id}/config \
     --redis-url redis://localhost:6379
@@ -424,7 +433,7 @@ python agent_runner/runner.py \
     ```
     Или напрямую:
     ```bash
-    python integrations/telegram_bot.py --agent-id {ваш_agent_id}
+    python -m integrations.telegram_bot --agent-id {ваш_agent_id}
     ```
 
 ## Будущие Улучшения (Идеи)

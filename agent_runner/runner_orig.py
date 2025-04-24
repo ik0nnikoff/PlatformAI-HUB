@@ -5,7 +5,7 @@ import json
 import argparse
 import signal
 import sys
-from typing import Dict, Optional, Any # Add Any
+from typing import Dict, Optional
 from dotenv import load_dotenv
 import requests
 import redis.asyncio as redis
@@ -109,7 +109,7 @@ async def update_redis_status(r: redis.Redis, status_key: str, status: str, pid:
         log_adapter.error(f"Failed to update Redis status ({status_key}) to {status}: {e}")
 
 
-async def redis_listener(app, agent_id: str, redis_client: redis.Redis, static_state_config: Dict[str, Any]):
+async def redis_listener(app, agent_id: str, redis_client: redis.Redis):
     """Listens to Redis input channel, processes messages, and publishes output."""
     log_adapter = logging.LoggerAdapter(logging.getLogger(__name__), {'agent_id': agent_id}) # Use __name__ for logger
     input_channel = f"agent:{agent_id}:input"
@@ -163,7 +163,6 @@ async def redis_listener(app, agent_id: str, redis_client: redis.Redis, static_s
 
                         # Import HumanMessage here or at the top if not already done
                         from langchain_core.messages import HumanMessage
-                        # Merge static config into the initial state for this run
                         graph_input = {
                             "messages": [HumanMessage(content=user_message)], # Ensure it's a BaseMessage
                             "user_data": user_data,
@@ -171,11 +170,9 @@ async def redis_listener(app, agent_id: str, redis_client: redis.Redis, static_s
                             "original_question": user_message, # Add original question
                             "question": user_message, # Initial question
                             "rewrite_count": 0, # Initial rewrite count
-                            "documents": [], # Initial empty documents
-                            **static_state_config # Add static config here
+                            "documents": [] # Initial empty documents
                         }
-                        # Pass agent_id and thread_id via config
-                        config = {"configurable": {"thread_id": str(thread_id), "agent_id": agent_id}}
+                        config = {"configurable": {"thread_id": str(thread_id)}}
 
                         log_adapter.info(f"Invoking graph for thread_id: {thread_id}")
                         final_response_content = "No response generated."
@@ -286,7 +283,6 @@ async def main(agent_id: str, config_url: str, redis_url: str):
     log_adapter = setup_logging(agent_id) # Setup logging first
     status_key = f"agent_status:{agent_id}"
     redis_client = None # Initialize
-    static_state_config = {} # Initialize static config
 
     async def update_status(status: str, error_detail: Optional[str] = None):
         """Helper to update Redis status, even before full client init."""
@@ -341,22 +337,20 @@ async def main(agent_id: str, config_url: str, redis_url: str):
              return
 
 
-        # 4. Create Agent App (Graph) and get static config
+        # 4. Create Agent App (Graph)
         try:
-            # create_agent_app now returns app and static_state_config
-            app, static_state_config = create_agent_app(agent_config, agent_id, redis_client)
+            # Pass redis_client if needed by the factory (e.g., for status updates during creation)
+            app = create_agent_app(agent_config, agent_id, redis_client)
             if not app:
-                 raise ValueError("create_agent_app returned None for app")
-            if not static_state_config:
-                 log_adapter.warning("create_agent_app returned empty static_state_config")
+                 raise ValueError("create_agent_app returned None")
             log_adapter.info("Agent application created successfully.")
         except Exception as e:
             log_adapter.error(f"Failed to create agent application: {e}", exc_info=True)
             await update_status("error_app_create", f"App creation failed: {e}")
             return
 
-        # 5. Start Redis Listener, passing static_state_config
-        listener_task = asyncio.create_task(redis_listener(app, agent_id, redis_client, static_state_config))
+        # 5. Start Redis Listener
+        listener_task = asyncio.create_task(redis_listener(app, agent_id, redis_client))
 
         # Keep main running while listener is active, checking the 'running' flag
         while running and not listener_task.done():
