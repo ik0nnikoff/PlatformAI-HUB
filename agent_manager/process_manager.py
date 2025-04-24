@@ -239,6 +239,36 @@ async def stop_agent_process(agent_id: str, r: redis.Redis, force: bool = False)
         logger.error(f"Could not stop agent {agent_id}: Error during status check or pre-stop phase: {e}")
         return False
 
+async def restart_agent_process(agent_id: str, r: redis.Redis) -> bool:
+    """Restarts the agent runner subprocess."""
+    logger.info(f"Restarting agent process for {agent_id}...")
+    # Stop forcefully first to ensure the old process is gone
+    stopped = await stop_agent_process(agent_id, r, force=True)
+    if not stopped:
+        logger.error(f"Failed to stop agent {agent_id} during restart. Aborting restart.")
+        # Status might be 'stopping' or 'error', leave it as is
+        return False
+
+    # Short delay to allow OS/Redis updates
+    await asyncio.sleep(1)
+
+    logger.info(f"Agent {agent_id} stopped. Proceeding to start...")
+    try:
+        started = await start_agent_process(agent_id, r)
+        if started:
+            logger.info(f"Agent {agent_id} restarted successfully.")
+            return True
+        else:
+            logger.error(f"Failed to start agent {agent_id} after stopping during restart.")
+            # start_agent_process should have set an error status
+            return False
+    except Exception as e:
+        logger.error(f"Exception during agent start phase of restart for {agent_id}: {e}", exc_info=True)
+        # Ensure status reflects the failure if start_agent_process didn't raise a specific error handled by API
+        status_key = f"agent_status:{agent_id}"
+        await r.hset(status_key, "status", "error_start_failed")
+        return False
+
 async def check_process_termination(pid: int):
     """Polls to check if a process with the given PID has terminated."""
     while True:
@@ -511,6 +541,33 @@ async def stop_integration_process(agent_id: str, integration_type: IntegrationT
 
     except HTTPException as e:
         logger.warning(f"Could not stop {integration_type.value} integration for {agent_id}: {e.detail}")
+        return False
+
+async def restart_integration_process(agent_id: str, integration_type: IntegrationType, r: redis.Redis) -> bool:
+    """Restarts a specific integration subprocess."""
+    logger.info(f"Restarting {integration_type.value} integration for agent {agent_id}...")
+    # Stop forcefully first
+    stopped = await stop_integration_process(agent_id, integration_type, r, force=True)
+    if not stopped:
+        logger.error(f"Failed to stop {integration_type.value} integration for {agent_id} during restart. Aborting restart.")
+        return False
+
+    # Short delay
+    await asyncio.sleep(1)
+
+    logger.info(f"{integration_type.value} integration for {agent_id} stopped. Proceeding to start...")
+    try:
+        started = await start_integration_process(agent_id, integration_type, r)
+        if started:
+            logger.info(f"{integration_type.value} integration for {agent_id} restarted successfully.")
+            return True
+        else:
+            logger.error(f"Failed to start {integration_type.value} integration for {agent_id} after stopping during restart.")
+            return False
+    except Exception as e:
+        logger.error(f"Exception during integration start phase of restart for {agent_id}/{integration_type.value}: {e}", exc_info=True)
+        status_key = _get_integration_status_key(agent_id, integration_type)
+        await r.hset(status_key, "status", "error_start_failed")
         return False
 
 import sys

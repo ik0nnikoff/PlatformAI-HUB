@@ -137,7 +137,7 @@ async def redis_output_listener(agent_id: str):
                          # TODO: Add Markdown formatting if needed (e.g., using chatgpt_md_converter)
                          # from chatgpt_md_converter import telegram_format
                          # await bot.send_message(chat_id, telegram_format(final_text))
-                         await bot.send_message(chat_id, final_text)
+                         await bot.send_message(chat_id, final_text, parse_mode=ParseMode.MARKDOWN)
 
                 except json.JSONDecodeError:
                     logger.error(f"Failed to decode JSON from {output_channel}: {message['data']}")
@@ -266,7 +266,7 @@ async def lifespan(dp: Dispatcher, agent_id: str):
         return
 
     agent_id_global = agent_id
-    bot = Bot(token=TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = Bot(token=TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
     logger.info("Bot initialized.")
 
     try:

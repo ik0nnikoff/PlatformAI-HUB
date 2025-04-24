@@ -92,73 +92,6 @@ async def list_agents(
         ))
     return agents_list
 
-
-@router.get(
-    "/{agent_id}",
-    response_model=AgentConfigOutput,
-    summary="Get agent configuration details",
-    tags=["Agents"]
-)
-async def get_agent(
-    agent_id: str,
-    r: redis.Redis = Depends(get_redis), # Keep Redis for status check? Not strictly needed here
-    db: AsyncSession = Depends(get_db) # Add DB session
-):
-    """Retrieves the full configuration for a specific agent."""
-    # Use DB CRUD
-    db_agent = await crud.db_get_agent_config(db, agent_id)
-    if db_agent is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
-
-    # Convert DB model to Pydantic output model
-    config_structure = AgentConfigStructure.model_validate(db_agent.config_json)
-    return AgentConfigOutput(
-        id=db_agent.id,
-        name=db_agent.name,
-        description=db_agent.description,
-        userId=db_agent.user_id,
-        config=config_structure,
-        created_at=db_agent.created_at,
-        updated_at=db_agent.updated_at
-    )
-
-@router.get(
-    "/{agent_id}/config",
-    response_model=Dict, # Return raw config dict for runner
-    summary="Get raw agent configuration (for runner)",
-    tags=["Agents", "Internal"]
-)
-async def get_agent_config_for_runner(
-    agent_id: str,
-    r: redis.Redis = Depends(get_redis), # Keep Redis for status check? Not strictly needed here
-    db: AsyncSession = Depends(get_db) # Add DB session
-):
-    """
-    Internal endpoint for the agent runner process to fetch its configuration.
-    Returns the raw configuration dictionary stored in the database.
-    """
-    # Use DB CRUD
-    db_agent = await crud.db_get_agent_config(db, agent_id)
-    if db_agent is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
-
-    # Return the raw JSON/Dict stored in the DB
-    # Add agent_id, name etc. to the returned dict for the runner?
-    # The runner currently expects the structure from AgentConfigOutput.model_dump()
-    # Let's mimic that for now.
-    config_structure = AgentConfigStructure.model_validate(db_agent.config_json)
-    output_model = AgentConfigOutput(
-        id=db_agent.id,
-        name=db_agent.name,
-        description=db_agent.description,
-        userId=db_agent.user_id,
-        config=config_structure,
-        created_at=db_agent.created_at,
-        updated_at=db_agent.updated_at
-    )
-    return output_model.model_dump()
-
-
 @router.delete(
     "/{agent_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -216,6 +149,41 @@ async def delete_agent(
 
     return None # Return 204 No Content
 
+@router.get(
+    "/{agent_id}/config",
+    response_model=AgentConfigOutput, # Return raw config dict for runner
+    summary="Get raw agent configuration",
+    tags=["Agents", "Internal"]
+)
+async def get_agent_config_for_runner(
+    agent_id: str,
+    r: redis.Redis = Depends(get_redis), # Keep Redis for status check? Not strictly needed here
+    db: AsyncSession = Depends(get_db) # Add DB session
+):
+    """
+    Internal endpoint for the agent runner process to fetch its configuration.
+    Returns the raw configuration dictionary stored in the database.
+    """
+    # Use DB CRUD
+    db_agent = await crud.db_get_agent_config(db, agent_id)
+    if db_agent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+
+    # Return the raw JSON/Dict stored in the DB
+    # Add agent_id, name etc. to the returned dict for the runner?
+    # The runner currently expects the structure from AgentConfigOutput.model_dump()
+    # Let's mimic that for now.
+    config_structure = AgentConfigStructure.model_validate(db_agent.config_json)
+    output_model = AgentConfigOutput(
+        id=db_agent.id,
+        name=db_agent.name,
+        description=db_agent.description,
+        userId=db_agent.user_id,
+        config=config_structure,
+        created_at=db_agent.created_at,
+        updated_at=db_agent.updated_at
+    )
+    return output_model.model_dump()
 
 @router.post(
     "/{agent_id}/start",
@@ -299,6 +267,41 @@ async def stop_agent(
          return {"message": f"Agent stop initiated, but an unexpected error occurred: {e}"}
 
     return {"message": "Agent stop initiated"}
+
+
+@router.post(
+    "/{agent_id}/restart",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Restart an agent process",
+    tags=["Agents"]
+)
+async def restart_agent(
+    agent_id: str,
+    r: redis.Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_db)
+):
+    """Initiates the restart of the agent runner process (stop --force then start)."""
+    # Check if config exists
+    db_agent = await crud.db_get_agent_config(db, agent_id)
+    if not db_agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+
+    try:
+        success = await process_manager.restart_agent_process(agent_id, r)
+        if not success:
+            # Fetch status to provide more context
+            status_info = await process_manager.get_agent_status(agent_id, r)
+            detail = f"Agent restart initiated, but failed during stop or start (current status: {status_info.status}). Check logs for details."
+            logger.error(f"Restart agent {agent_id} reported failure. Status: {status_info.status}")
+            # Return 202 but indicate failure in message
+            return {"message": detail}
+    except Exception as e:
+        # Catch potential exceptions from restart_agent_process itself
+        logger.error(f"Unexpected error during agent restart for {agent_id}: {e}", exc_info=True)
+        # Return 202 but indicate error
+        return {"message": f"Agent restart initiated, but an unexpected error occurred: {e}"}
+
+    return {"message": "Agent restart initiated"}
 
 
 @router.get(
@@ -437,4 +440,31 @@ async def stop_integration(
          return {"message": f"{integration_type.value} integration stop initiated, but an unexpected error occurred: {e}"}
 
     return {"message": f"{integration_type.value} integration stop initiated"}
+
+
+@router.post("/{agent_id}/integrations/{integration_type}/restart", status_code=status.HTTP_202_ACCEPTED)
+async def restart_integration(
+    agent_id: str,
+    integration_type: IntegrationType,
+    r: redis.Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_db)
+):
+    """Initiates the restart of a specific integration process (stop --force then start)."""
+    # Check if agent config exists
+    db_agent = await crud.db_get_agent_config(db, agent_id)
+    if not db_agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+
+    try:
+        success = await process_manager.restart_integration_process(agent_id, integration_type, r)
+        if not success:
+            status_info = await process_manager.get_integration_status(agent_id, integration_type, r)
+            detail = f"{integration_type.value} integration restart initiated, but failed during stop or start (current status: {status_info.status}). Check logs."
+            logger.error(f"Restart integration {integration_type.value} for {agent_id} reported failure. Status: {status_info.status}")
+            return {"message": detail}
+    except Exception as e:
+        logger.error(f"Unexpected error during integration restart for {agent_id}/{integration_type.value}: {e}", exc_info=True)
+        return {"message": f"{integration_type.value} integration restart initiated, but an unexpected error occurred: {e}"}
+
+    return {"message": f"{integration_type.value} integration restart initiated"}
 

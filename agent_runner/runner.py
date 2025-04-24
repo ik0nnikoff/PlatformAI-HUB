@@ -175,14 +175,26 @@ async def redis_listener(app, agent_id: str, redis_client: redis.Redis, static_s
                 # Listen for messages with timeout
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
                 if message and message.get("type") == "message":
-                    log_adapter.info(f"Received message from Redis: {message['data'][:200]}...") # Log truncated data
+                    raw_data = message['data']
+                    # Decode JSON first
+                    try:
+                        data = json.loads(raw_data)
+                        # Log the decoded data (or parts of it)
+                        log_adapter.info(f"Received message from Redis: {data}") # Log the whole dict
+                        # Alternatively, log specific fields:
+                        # log_adapter.info(f"Received message from Redis: thread_id={data.get('thread_id')}, message='{data.get('message', '')[:100]}...'")
+                    except json.JSONDecodeError:
+                        # Log the raw data if JSON decoding fails
+                        log_adapter.error(f"Received invalid JSON from Redis: {raw_data[:200]}...")
+                        continue # Skip processing invalid message
+
                     # Update last active time immediately on message
                     await redis_client.hset(status_key, "last_active", time.time())
                     last_active_update_time = time.time()
 
                     thread_id = "unknown" # Default thread_id
                     try:
-                        data = json.loads(message["data"])
+                        # Data is already loaded above
                         user_message = data.get("message")
                         thread_id = data.get("thread_id") # Update thread_id if available
                         user_data = data.get("user_data", {})
@@ -264,10 +276,6 @@ async def redis_listener(app, agent_id: str, redis_client: redis.Redis, static_s
                         await redis_client.publish(output_channel, response_payload)
                         log_adapter.info(f"Published response to Redis channel: {output_channel}")
 
-                    except json.JSONDecodeError:
-                        log_adapter.error("Failed to decode JSON message from Redis.")
-                        error_payload = json.dumps({"thread_id": thread_id, "error": "Invalid input format."})
-                        await redis_client.publish(output_channel, error_payload)
                     except asyncio.CancelledError:
                          log_adapter.info("Graph invocation cancelled.")
                          raise # Re-raise cancellation
