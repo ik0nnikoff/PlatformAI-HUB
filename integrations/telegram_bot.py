@@ -33,7 +33,7 @@ agent_id_global: str = None # Store agent_id globally for handlers
 
 # In-memory storage for authorized users (replace with DB/Redis later if needed)
 authorized_users = {}
-AUTH_TRIGGER = "[AUTH_REQUIRED]"
+AUTH_TRIGGER = "AUTH_REQUIRED"
 
 # --- Helper Functions ---
 def request_contact_markup() -> ReplyKeyboardMarkup:

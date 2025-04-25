@@ -343,19 +343,20 @@ def configure_tools(agent_config: Dict, agent_id: str) -> Tuple[List[BaseTool], 
         ws_name = ws_config.get("name", "Web Search") # Name for LLM
         ws_description = ws_settings.get("description", "Performs a web search for recent information.") # Use description from config if available
         search_limit = ws_settings.get("searchLimit", 3)
-        # domain_limit = ws_settings.get("domainLimit") # Tavily doesn't directly support this
+        include_domains = ws_settings.get("include_domains", [])
+        exclude_domains = ws_settings.get("excludeDomains", [])
 
         tavily_api_key = os.getenv("TAVILY_API_KEY")
         if not tavily_api_key:
             log_adapter.warning("TAVILY_API_KEY not set. Web search tool disabled.")
         else:
             try:
-                # TODO: If domain_limit is set, potentially modify the query in a wrapper node?
-                # For now, just configure the basic tool.
                 web_search_tool = TavilySearchResults(
                     max_results=int(search_limit),
                     name=ws_id, # Use ID from config
                     description=ws_description, # Use description from config
+                    include_domains=include_domains, # Use domainLimit from config
+                    exclude_domains=exclude_domains,
                 )
                 safe_tools_list.append(web_search_tool)
                 log_adapter.info(f"Configured Web Search tool '{ws_name}' (ID: {ws_id})")

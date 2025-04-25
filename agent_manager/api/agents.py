@@ -33,7 +33,7 @@ async def create_agent(
     db: AsyncSession = Depends(get_db) # Add DB session
 ):
     """
-    Creates a new agent configuration.
+    Creates a new agent configuration and automatically starts the agent and its integrations.
     - **name**: User-defined name for the agent.
     - **description**: Optional description.
     - **userId**: Identifier for the owner (placeholder).
@@ -48,7 +48,52 @@ async def create_agent(
 
         # Set initial status in Redis (keep status in Redis for now)
         status_key = f"agent_status:{agent_id}"
-        await r.hset(status_key, mapping={"status": "stopped"})
+        await r.hset(status_key, mapping={"status": "stopped"}) # Start as stopped before attempting start
+
+        # --- Start Agent Process ---
+        logger.info(f"Agent {agent_id} created. Attempting to start process...")
+        try:
+            await process_manager.start_agent_process(agent_id, r)
+            logger.info(f"Successfully initiated start for agent process {agent_id}.")
+        except Exception as start_err:
+            # Log error but don't fail the creation response
+            logger.error(f"Failed to auto-start agent process {agent_id} after creation: {start_err}", exc_info=True)
+            # Status should reflect the error (e.g., error_start_failed)
+
+        # --- Start Integrations ---
+        try:
+            config_data = db_agent.config_json or {}
+            simple_config = config_data.get("simple", {})
+            settings_data = simple_config.get("settings", {})
+            integrations_config = settings_data.get("integrations", [])
+
+            if integrations_config:
+                logger.info(f"Found {len(integrations_config)} integrations for agent {agent_id}. Attempting to start...")
+                for integration in integrations_config:
+                    integration_type_str = integration.get("type")
+                    integration_settings = integration.get("settings", {})
+                    try:
+                        integration_type_enum = IntegrationType(integration_type_str)
+                        logger.info(f"Attempting to start {integration_type_enum.value} integration for {agent_id}...")
+                        await process_manager.start_integration_process(
+                            agent_id=agent_id,
+                            integration_type=integration_type_enum,
+                            r=r,
+                            integration_settings=integration_settings
+                        )
+                        logger.info(f"Successfully initiated start for {integration_type_enum.value} integration for {agent_id}.")
+                    except ValueError:
+                        logger.error(f"Unsupported integration type '{integration_type_str}' found for agent {agent_id}.")
+                    except Exception as int_start_err:
+                        # Log error but don't fail the creation response
+                        logger.error(f"Failed to auto-start {integration_type_str} integration for {agent_id}: {int_start_err}", exc_info=True)
+            else:
+                logger.info(f"No integrations configured for agent {agent_id} to auto-start.")
+
+        except Exception as config_err:
+            logger.error(f"Error reading integrations config for auto-start (agent {agent_id}): {config_err}", exc_info=True)
+        # --- End Start Integrations ---
+
 
         # Convert DB model to Pydantic output model
         # Need to parse config_json back into the Pydantic structure

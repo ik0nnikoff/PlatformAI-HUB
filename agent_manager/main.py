@@ -1,7 +1,7 @@
 import os
 import logging
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field as PydanticField
 from typing import Dict, Any, Optional
 import redis.asyncio as redis
@@ -62,7 +62,7 @@ class AgentStatus(BaseModel):
     pid: Optional[int] = None
     last_active: Optional[float] = None
 
-# --- FastAPI Lifecycle ---
+# --- FastAPI App Initialization ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handles application startup and shutdown events."""
@@ -204,31 +204,38 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Agent Management Service",
-    description="API for creating, managing, and interacting with configurable agents.",
+    title="Agent Manager API",
+    description="API for managing and interacting with AI agents.",
     version="0.1.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    # Добавляем документацию для тегов
+    openapi_tags=[
+        {"name": "Agents", "description": "Manage agent configurations and processes."},
+        {"name": "Integrations", "description": "Manage agent integrations (e.g., Telegram)."},
+        {"name": "Status", "description": "Service status endpoints."},
+        {"name": "Internal", "description": "Internal endpoints used by other services (e.g., agent runner)."}
+    ]
 )
 
-# --- Middleware (Optional) ---
-# Example: Add timing middleware
-# @app.middleware("http")
-# async def add_process_time_header(request: Request, call_next):
-#     start_time = time.time()
-#     response = await call_next(request)
-#     process_time = time.time() - start_time
-#     response.headers["X-Process-Time"] = str(process_time)
-#     return response
+# --- Добавление CORSMiddleware ---
+# Настройте origins в соответствии с вашими потребностями.
+# ["*"] разрешает все источники (менее безопасно, подходит для разработки).
+# Укажите конкретные источники для production, например ["http://localhost:3000", "https://your-frontend.com"]
+origins = [
+    "http://localhost:3000", # Разрешаем ваш фронтенд
+    "http://127.0.0.1:3000", # Можно добавить и 127.0.0.1 на всякий случай
+    # Добавьте другие источники, если необходимо
+]
 
-# --- Exception Handlers (Optional) ---
-# Example: Generic exception handler
-@app.exception_handler(Exception)
-async def generic_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception for request {request.url}: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={"message": "An internal server error occurred."},
-    )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True, # Разрешает куки и заголовки авторизации
+    allow_methods=["*"],    # Разрешает все методы (GET, POST, PUT, DELETE и т.д.)
+    allow_headers=["*"],    # Разрешает все заголовки
+)
+# --- Конец добавления ---
+
 
 # --- Include Routers ---
 # Используем роутер из agents.py
