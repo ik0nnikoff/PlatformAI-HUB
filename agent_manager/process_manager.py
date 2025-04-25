@@ -3,11 +3,11 @@ import subprocess
 import logging
 import signal
 import asyncio
-import time # Добавляем time для сравнения
-from typing import Optional, Dict, Any # Добавляем Dict, Any
+import time
+from typing import Optional, Dict, Any
 import redis.asyncio as redis
-from fastapi import HTTPException, status as fastapi_status
-import sys # Добавляем sys
+from fastapi import HTTPException
+import sys
 
 from .models import AgentStatus, IntegrationStatus, IntegrationType
 # Импортируем переменные из config, если они там определены, или используем os.getenv напрямую

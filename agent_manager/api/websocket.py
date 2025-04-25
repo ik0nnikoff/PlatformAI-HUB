@@ -3,14 +3,12 @@ import json
 import asyncio
 from typing import Dict, List
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, status as fastapi_status
-from sqlalchemy.ext.asyncio import AsyncSession # Импортируем AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession
 import redis.asyncio as redis
 
 from ..redis_client import get_redis
-from ..db import get_db # Импортируем зависимость для БД
-from .. import process_manager
-from .. import crud # Импортируем CRUD операции
-from ..models import AgentStatus
+from ..db import get_db
+from .. import crud
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

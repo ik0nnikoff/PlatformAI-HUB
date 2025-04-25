@@ -5,11 +5,11 @@ import json
 import argparse
 import signal
 import sys
-from typing import Dict, Optional, Any # Add Any
+from typing import Dict, Optional, Any
 from dotenv import load_dotenv
 import requests
 import redis.asyncio as redis
-import time # For last_active updates
+import time
 
 # Import from sibling modules
 from .graph_factory import create_agent_app # Импортируем фабрику графа

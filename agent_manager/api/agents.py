@@ -1,18 +1,17 @@
 import logging
 import os
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from typing import List, Dict, Optional, Any # Добавить Any
+from typing import List
 import redis.asyncio as redis
-from sqlalchemy.ext.asyncio import AsyncSession # Import AsyncSession
-import httpx # Добавить импорт httpx
-
+from sqlalchemy.ext.asyncio import AsyncSession
+import httpx
 from ..redis_client import get_redis
-from ..db import get_db # Import DB dependency
-from ..models import AgentConfigInput, AgentConfigOutput, AgentStatus, AgentListItem, IntegrationStatus, IntegrationType, AgentConfigStructure # Import AgentConfigStructure
+from ..db import get_db
+from ..models import AgentConfigInput, AgentConfigOutput, AgentStatus, AgentListItem, IntegrationStatus, IntegrationType, AgentConfigStructure
 from .. import crud
 from ..import process_manager
-import json # Добавляем импорт json
-import asyncio # Добавляем импорт asyncio
+import json
+import asyncio
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

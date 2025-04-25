@@ -1,16 +1,12 @@
 import os
-import subprocess
-import json
 import logging
-import signal # Import signal for os.kill
-from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, status as fastapi_status, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ValidationError, Field as PydanticField
-from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field as PydanticField
+from typing import Dict, Any, Optional
 import redis.asyncio as redis
 import asyncio
 from contextlib import asynccontextmanager
-import time # Import time module
 
 # Импортируем зависимости и модули
 # --- ИСПРАВЛЕНИЕ: Удаляем импорт redis_pool ---

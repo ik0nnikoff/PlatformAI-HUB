@@ -1,5 +1,5 @@
 import logging
-from typing import AsyncGenerator, Optional # Добавить Optional
+from typing import AsyncGenerator, Optional
 import redis.asyncio as redis
 from fastapi import HTTPException, status
 

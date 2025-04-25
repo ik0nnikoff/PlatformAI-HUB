@@ -1,13 +1,10 @@
 from pydantic import BaseModel, Field as PydanticField, field_validator, model_validator
 from typing import List, Dict, Any, Optional
 from enum import Enum
-import json
 from datetime import datetime
 
 # --- SQLAlchemy Imports ---
 from sqlalchemy import Column, String, Text, DateTime, func, JSON
-from sqlalchemy.dialects.postgresql import UUID # If using UUID for IDs
-import uuid # If using UUID
 
 # Import Base from db.py
 from .db import Base

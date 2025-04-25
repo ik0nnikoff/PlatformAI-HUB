@@ -3,14 +3,14 @@ import logging
 import asyncio
 import json
 import argparse
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatAction
 from dotenv import load_dotenv
 import redis.asyncio as redis
-from redis import exceptions as redis_exceptions # Импортируем исключения из redis
+from redis import exceptions as redis_exceptions
 from contextlib import asynccontextmanager
 
 # --- Configuration & Setup ---

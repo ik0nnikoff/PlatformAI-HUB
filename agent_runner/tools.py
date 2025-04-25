@@ -4,7 +4,6 @@ import requests
 import json
 from typing import Annotated, Dict, List, Tuple, Set, Optional, Any
 from functools import partial
-from pydantic import BaseModel, Field, validator # Добавить validator
 from langchain_core.tools import tool, BaseTool, Tool
 from langgraph.prebuilt import ToolNode, InjectedState
 from langchain_openai import OpenAIEmbeddings
@@ -12,7 +11,6 @@ from qdrant_client import QdrantClient, models
 from langchain_qdrant import QdrantVectorStore
 from langchain.tools.retriever import create_retriever_tool
 from langchain_community.tools.tavily_search import TavilySearchResults
-import httpx # Добавить httpx
 
 logger = logging.getLogger(__name__)
 
