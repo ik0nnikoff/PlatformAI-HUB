@@ -1,5 +1,5 @@
 import logging
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional # Добавить Optional
 import redis.asyncio as redis
 from fastapi import HTTPException, status
 
@@ -7,21 +7,24 @@ from .config import REDIS_URL
 
 logger = logging.getLogger(__name__)
 
-redis_pool = None
+redis_pool: Optional[redis.ConnectionPool] = None # Уточняем тип
 
-async def init_redis_pool():
-    """Initializes the Redis connection pool."""
+async def init_redis_pool() -> Optional[redis.ConnectionPool]:
+    """Initializes the Redis connection pool and returns it."""
     global redis_pool
     try:
+        # Создаем пул и присваиваем его глобальной переменной
         redis_pool = redis.ConnectionPool.from_url(REDIS_URL, decode_responses=True)
-        # Test connection
+        # Тестируем соединение
         client = redis.Redis.from_pool(redis_pool)
         await client.ping()
-        await client.close() # Close the test client, pool remains
+        await client.close() # Закрываем тестовый клиент, пул остается
         logger.info("Redis connection pool initialized successfully.")
+        return redis_pool # Возвращаем созданный пул
     except Exception as e:
         logger.error(f"Failed to initialize Redis connection pool: {e}")
-        redis_pool = None # Ensure pool is None if init fails
+        redis_pool = None # Убедимся, что пул None при ошибке
+        return None # Возвращаем None при ошибке
 
 async def close_redis_pool():
     """Closes the Redis connection pool."""

@@ -13,11 +13,14 @@ from contextlib import asynccontextmanager
 import time # Import time module
 
 # Импортируем зависимости и модули
-from .redis_client import init_redis_pool, close_redis_pool, get_redis
+# --- ИСПРАВЛЕНИЕ: Удаляем импорт redis_pool ---
+from .redis_client import init_redis_pool, close_redis_pool, get_redis # Убрали redis_pool
+# --- Конец исправления ---
 from .db import init_db, close_db_engine, get_db, SessionLocal # Импортируем SessionLocal
 from .process_manager import check_inactive_agents # Импортируем фоновую задачу
 from .api import agents as agents_api # Импортируем новый роутер для агентов
 from .api import websocket as websocket_api # Импортируем роутер для WebSocket
+from . import crud, process_manager, models # Добавляем импорты
 
 # --- Configuration & Globals ---
 # Load .env - adjust path as needed
@@ -41,7 +44,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-redis_client: redis.Redis = None # Глобальный клиент для фоновой задачи
+redis_client: Optional[redis.Redis] = None # Уточняем тип
 inactivity_check_task: Optional[asyncio.Task] = None
 
 # --- Pydantic Models for API ---
@@ -70,15 +73,111 @@ async def lifespan(app: FastAPI):
     global redis_client, inactivity_check_task # Объявляем глобальные переменные
     # Startup
     logger.info("Agent Manager Service starting up...")
-    redis_client = await init_redis_pool() # Инициализируем и сохраняем клиент
+    # --- ИСПРАВЛЕНИЕ: Используем возвращаемое значение init_redis_pool ---
+    # Вызываем init_redis_pool и сохраняем результат
+    initialized_pool = await init_redis_pool()
+    if initialized_pool: # Проверяем возвращенное значение
+        try:
+            # Создаем клиент из возвращенного пула
+            redis_client = redis.Redis.from_pool(initialized_pool)
+            await redis_client.ping() # Проверяем соединение
+            logger.info("Successfully created Redis client from pool for lifespan.")
+        except Exception as e:
+            logger.error(f"Failed to create Redis client from pool or ping failed: {e}")
+            redis_client = None # Убедимся, что клиент None при ошибке
+    else:
+        # Эта ветка выполняется, если init_redis_pool вернула None
+        logger.warning("Redis pool initialization failed (init_redis_pool returned None), redis_client will be None.")
+        redis_client = None
+    # --- Конец исправления ---
+
     await init_db() # Initialize DB connection
 
+    # --- Auto-start agents and integrations ---
+    # Проверяем redis_client (который теперь должен быть экземпляром клиента, если пул инициализирован)
+    if redis_client:
+        logger.info("Attempting to auto-start agents and integrations from database...")
+        start_tasks = []
+        try:
+            async with SessionLocal() as db_session: # Создаем сессию для автозапуска
+                all_agents = await crud.db_get_all_agents(db_session, limit=1000) # Получаем всех агентов
+                logger.info(f"Found {len(all_agents)} agents in database.")
+                for agent in all_agents:
+                    logger.info(f"Initiating auto-start for agent: {agent.id}")
+                    # Создаем задачу для запуска агента
+                    start_tasks.append(
+                        # Передаем redis_client
+                        asyncio.create_task(process_manager.start_agent_process(agent.id, redis_client))
+                    )
+
+                    # --- ИСПРАВЛЕНИЕ: Проверяем integrations вместо tools ---
+                    try:
+                        config_data = agent.config_json or {}
+                        simple_config = config_data.get("simple", {})
+                        settings_data = simple_config.get("settings", {})
+                        # Получаем список интеграций
+                        integrations_config = settings_data.get("integrations", [])
+
+                        if not integrations_config:
+                            logger.debug(f"Agent {agent.id}: No integrations found in config['simple']['settings']['integrations'].")
+                        else:
+                            logger.debug(f"Agent {agent.id}: Found integrations in config: {integrations_config}")
+
+                        # Итерируем по списку интеграций
+                        for integration in integrations_config:
+                            integration_type = integration.get("type") # Получаем тип интеграции
+                            logger.debug(f"Agent {agent.id}: Checking integration with type: {integration_type}")
+
+                            # Проверяем тип "telegram"
+                            if integration_type == "telegram":
+                                # --- ИСПРАВЛЕНИЕ: Извлекаем токен и передаем его ---
+                                integration_settings = integration.get("settings", {})
+                                bot_token = integration_settings.get("botToken")
+                                if bot_token:
+                                    logger.info(f"Initiating auto-start for Telegram integration for agent: {agent.id}")
+                                    # Создаем задачу для запуска интеграции Telegram, передавая настройки
+                                    start_tasks.append(
+                                        asyncio.create_task(
+                                            process_manager.start_integration_process(
+                                                agent_id=agent.id,
+                                                integration_type=models.IntegrationType.TELEGRAM,
+                                                r=redis_client,
+                                                integration_settings=integration_settings # Передаем настройки
+                                            )
+                                        )
+                                    )
+                                else:
+                                    logger.warning(f"Agent {agent.id}: Telegram integration found but 'botToken' is missing in settings.")
+                                # --- Конец исправления ---
+                                # Добавьте другие типы интеграций здесь, если необходимо
+
+                    except Exception as config_err:
+                        logger.error(f"Error parsing config for agent {agent.id} during auto-start check: {config_err}")
+                    # --- Конец исправления ---
+
+            # Запускаем все задачи параллельно и ждем завершения
+            results = await asyncio.gather(*start_tasks, return_exceptions=True)
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.error(f"Error during auto-start task {i}: {result}", exc_info=result if not isinstance(result, asyncio.CancelledError) else None)
+            logger.info("Finished auto-start attempts.")
+
+        except Exception as auto_start_err:
+            logger.error(f"Failed to perform auto-start: {auto_start_err}", exc_info=True)
+    else:
+        # Уточняем лог
+        logger.warning("Redis client instance not available, skipping auto-start of agents.")
+    # --- End auto-start ---
+
+
     # Start the background task
+    # Проверяем redis_client
     if redis_client: # Запускаем задачу только если Redis доступен
         # Передаем redis_client в фоновую задачу
         inactivity_check_task = asyncio.create_task(check_inactive_agents(redis_client))
     else:
-        logger.warning("Redis client not initialized, inactivity check task will not start.")
+        # Уточняем лог
+        logger.warning("Redis client instance not available, inactivity check task will not start.")
 
 
     yield
@@ -96,8 +195,15 @@ async def lifespan(app: FastAPI):
         except Exception as e:
              logger.error(f"Error during inactivity check task shutdown: {e}")
 
+    # Закрываем глобальный клиент, если он был создан
+    if redis_client:
+        try:
+            await redis_client.aclose()
+            logger.info("Closed lifespan Redis client.")
+        except Exception as e:
+            logger.error(f"Error closing lifespan Redis client: {e}")
 
-    await close_redis_pool()
+    await close_redis_pool() # Закрываем пул (если это необходимо)
     await close_db_engine() # Close DB connection pool
 
 
@@ -139,14 +245,13 @@ async def read_root():
     """Root endpoint providing basic service status."""
     redis_status = "disconnected"
     db_status = "disconnected"
-    try:
-        # Check Redis
-        r = await get_redis().__anext__() # Get a connection to test
-        await r.ping()
-        redis_status = "connected"
-        # No need to explicitly close connection from pool here
-    except Exception:
-        pass # Status remains disconnected
+    # Проверяем redis_client для статуса
+    if redis_client:
+        try:
+            await redis_client.ping()
+            redis_status = "connected"
+        except Exception:
+            pass # Status remains disconnected
 
     try:
         # Check DB using SessionLocal directly for health check

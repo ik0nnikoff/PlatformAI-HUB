@@ -4,9 +4,10 @@ import logging
 import signal
 import asyncio
 import time # Добавляем time для сравнения
-from typing import Optional
+from typing import Optional, Dict, Any # Добавляем Dict, Any
 import redis.asyncio as redis
 from fastapi import HTTPException, status as fastapi_status
+import sys # Добавляем sys
 
 from .models import AgentStatus, IntegrationStatus, IntegrationType
 # Импортируем переменные из config, если они там определены, или используем os.getenv напрямую
@@ -390,7 +391,12 @@ async def get_integration_status(agent_id: str, integration_type: IntegrationTyp
         last_active=last_active,
     )
 
-async def start_integration_process(agent_id: str, integration_type: IntegrationType, r: redis.Redis) -> bool:
+async def start_integration_process(
+    agent_id: str,
+    integration_type: IntegrationType,
+    r: redis.Redis,
+    integration_settings: Optional[Dict[str, Any]] = None # Добавляем аргумент
+) -> bool:
     """Starts a specific integration subprocess (e.g., Telegram bot)."""
     status_key = _get_integration_status_key(agent_id, integration_type)
 
@@ -418,17 +424,26 @@ async def start_integration_process(agent_id: str, integration_type: Integration
     python_executable = sys.executable # Используем тот же python, что и менеджер
     module_path = None # Имя модуля для -m
     script_to_check = None # Путь к файлу для проверки существования
+    extra_args = [] # Дополнительные аргументы для команды
 
     if integration_type == IntegrationType.TELEGRAM:
-        # Путь к файлу для проверки
         script_to_check = os.path.join(PROJECT_ROOT, 'integrations', 'telegram_bot.py')
-        # Имя модуля для запуска через -m
         module_path = 'integrations.telegram_bot'
-        # args = ["--agent-id", agent_id] # Аргументы передаются ниже
-    # Add other integration types here
-    # elif integration_type == IntegrationType.WEBCHAT:
-    #     script_to_check = ...
-    #     module_path = ...
+        # --- ИСПРАВЛЕНИЕ: Извлекаем токен из настроек ---
+        if integration_settings:
+            bot_token = integration_settings.get("botToken")
+            if bot_token:
+                extra_args.extend(["--bot-token", bot_token])
+            else:
+                logger.error(f"Telegram integration for {agent_id} requires 'botToken' in settings.")
+                await r.hset(status_key, "status", "error_config_missing_token")
+                return False
+        else:
+            logger.error(f"Telegram integration settings not provided for {agent_id}.")
+            await r.hset(status_key, "status", "error_config_missing")
+            return False
+        # --- Конец исправления ---
+    # ... other integration types ...
     else:
         logger.error(f"Starting integration type '{integration_type.value}' is not implemented.")
         await r.hset(status_key, "status", f"error_unsupported_type")
@@ -450,7 +465,8 @@ async def start_integration_process(agent_id: str, integration_type: Integration
             module_path, # Specify the module path (e.g., integrations.telegram_bot)
             "--agent-id", agent_id,
             # Add other necessary args like --redis-url if needed by the integration script
-            "--redis-url", redis_url
+            "--redis-url", redis_url,
+            *extra_args # Добавляем дополнительные аргументы (включая --bot-token)
         ]
         # Добавляем рабочую директорию, чтобы python мог найти модуль
         process_cwd = PROJECT_ROOT

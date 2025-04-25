@@ -25,7 +25,7 @@ def auth_tool() -> str:
     Returns:
         str: Trigger to call external authorization function.
     """
-    return "необходима авторизация. Допиши в ответе: [AUTH_REQUIRED]"
+    return "необходима авторизация. Допиши в ответе, в квадратных скобках не меняя содержимое: [AUTH_REQUIRED]"
 
 @tool
 def get_bonus_points(state: Annotated[dict, InjectedState]) -> str:

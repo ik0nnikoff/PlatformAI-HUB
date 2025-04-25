@@ -16,8 +16,10 @@ from contextlib import asynccontextmanager
 # --- Configuration & Setup ---
 load_dotenv(dotenv_path=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env')))
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+# --- УДАЛЕНО: Глобальный токен из .env ---
+# TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+# --- Конец удаления ---
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379") # Оставляем для Redis
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -225,17 +227,20 @@ async def handle_message(message: Message):
 
 # --- Application Lifecycle ---
 @asynccontextmanager
-async def lifespan(dp: Dispatcher, agent_id: str):
+async def lifespan(dp: Dispatcher, agent_id: str, bot_token: str): # Добавляем bot_token
     """Manages application startup and shutdown."""
     global bot, redis_client, redis_listener_task, agent_id_global
 
-    if not TELEGRAM_BOT_TOKEN:
-        logger.critical("TELEGRAM_BOT_TOKEN not found in environment variables.")
-        return
+    # --- ИСПРАВЛЕНИЕ: Используем переданный bot_token ---
+    if not bot_token:
+        logger.critical("Bot token was not provided to lifespan.")
+        return # Не можем запустить бота без токена
 
     agent_id_global = agent_id
-    bot = Bot(token=TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
+    # Инициализируем бота с переданным токеном
+    bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
     logger.info("Bot initialized.")
+    # --- Конец исправления ---
 
     try:
         redis_client = await redis.from_url(REDIS_URL, decode_responses=True)
@@ -243,12 +248,9 @@ async def lifespan(dp: Dispatcher, agent_id: str):
         logger.info("Connected to Redis successfully.")
     except Exception as e:
         logger.critical(f"Failed to connect to Redis at {REDIS_URL}: {e}", exc_info=True)
-        # Decide if the bot should exit or try to run without Redis listener
-        # For now, let it run but log critical error
-        redis_client = None # Ensure client is None if connection failed
+        redis_client = None
 
     if redis_client:
-        # Start the Redis listener task
         redis_listener_task = asyncio.create_task(redis_output_listener(agent_id))
         logger.info(f"Redis listener task started for agent {agent_id}.")
 
@@ -274,27 +276,29 @@ async def lifespan(dp: Dispatcher, agent_id: str):
 
 
 # --- Main Execution ---
-async def main(agent_id: str):
+async def main(agent_id: str, bot_token: str): # Добавляем bot_token
     """Initializes and runs the bot."""
     # global dp # No longer needed to modify global dp here
     # dp = Dispatcher() # Remove initialization from here
 
-    async with lifespan(dp, agent_id):
+    # Передаем bot_token в lifespan
+    async with lifespan(dp, agent_id, bot_token):
         await dp.start_polling(bot)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Telegram Bot Integration for Configurable Agent")
     parser.add_argument("--agent-id", required=True, help="Unique ID of the agent this bot interacts with")
-    # Add the redis-url argument
     parser.add_argument("--redis-url", required=True, help="URL for the Redis server")
+    # --- ИСПРАВЛЕНИЕ: Добавляем аргумент для токена ---
+    parser.add_argument("--bot-token", required=True, help="Telegram Bot Token")
+    # --- Конец исправления ---
     args = parser.parse_args()
 
-    # Update REDIS_URL based on the argument if provided, otherwise keep the env var default
-    # This allows overriding the .env setting via command line
     REDIS_URL = args.redis_url
 
     try:
-        asyncio.run(main(args.agent_id))
+        # Передаем agent_id и bot_token в main
+        asyncio.run(main(args.agent_id, args.bot_token))
     except (KeyboardInterrupt, SystemExit):
         logger.info("Bot stopped manually.")
     except Exception as e:
