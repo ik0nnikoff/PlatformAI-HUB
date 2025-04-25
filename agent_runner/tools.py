@@ -4,7 +4,7 @@ import requests
 import json
 from typing import Annotated, Dict, List, Tuple, Set, Optional, Any
 from functools import partial
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator # Добавить validator
 from langchain_core.tools import tool, BaseTool, Tool
 from langgraph.prebuilt import ToolNode, InjectedState
 from langchain_openai import OpenAIEmbeddings
@@ -12,6 +12,7 @@ from qdrant_client import QdrantClient, models
 from langchain_qdrant import QdrantVectorStore
 from langchain.tools.retriever import create_retriever_tool
 from langchain_community.tools.tavily_search import TavilySearchResults
+import httpx # Добавить httpx
 
 logger = logging.getLogger(__name__)
 
@@ -295,7 +296,7 @@ def configure_tools(agent_config: Dict, agent_id: str) -> Tuple[List[BaseTool], 
                     search_limit = kb_settings.get("retrievalLimit", 4) # Use retrievalLimit
                     # Use rewriteAttempts from the *last* KB tool config found? Or first? Let's use last.
                     max_rewrites = kb_settings.get("rewriteAttempts", max_rewrites)
-                    tool_id = kb_config.get("id", f"kb_retriever_{'_'.join(kb_ids)}") # Generate ID if missing
+                    tool_id = kb_config.get("id", f"kb_retriever_{'_'.join([str(kb_id) for kb_id in kb_ids])}") # Generate ID if missing
                     tool_name = kb_config.get("name", "Knowledge Base Search") # Name for LLM
 
                     if not kb_ids:
@@ -312,7 +313,7 @@ def configure_tools(agent_config: Dict, agent_id: str) -> Tuple[List[BaseTool], 
                     must_conditions.append(
                         models.FieldCondition(
                             key="metadata.datasource_id",
-                            match=models.MatchAny(any=kb_ids) # Use MatchAny for list of IDs
+                            match=models.MatchAny(any=[str(kb_id) for kb_id in kb_ids]) # Use MatchAny for list of IDs
                         )
                     )
 

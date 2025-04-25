@@ -81,7 +81,7 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
     # --- ИСПРАВЛЕНИЕ: Извлекаем systemPrompt и useContextMemory из model_settings ---
     system_prompt_template = model_settings.get("systemPrompt", "You are a helpful AI assistant.") # Get systemPrompt from model_settings
     model_id = model_settings.get("modelId", "gpt-4o-mini") # Get modelId from model_settings
-    temperature = model_settings.get("temperature", 0.2) # Get temperature from model_settings
+    temperature = model_settings.get("temperature", 0.1) # Get temperature from model_settings
     use_memory = model_settings.get("useContextMemory", True) # Get useContextMemory from model_settings
     # --- Конец исправления ---
 

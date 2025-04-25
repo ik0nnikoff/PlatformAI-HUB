@@ -1,9 +1,10 @@
 import logging
 import os
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any # Добавить Any
 import redis.asyncio as redis
 from sqlalchemy.ext.asyncio import AsyncSession # Import AsyncSession
+import httpx # Добавить импорт httpx
 
 from ..redis_client import get_redis
 from ..db import get_db # Import DB dependency
@@ -15,6 +16,8 @@ import asyncio # Добавляем импорт asyncio
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+SOURCES_API_BASE_URL = os.getenv("SOURCES_API_BASE_URL") # Получаем URL из .env
 
 # --- Agent Management Endpoints ---
 
@@ -232,26 +235,109 @@ async def get_agent_config_for_runner(
     """
     Internal endpoint for the agent runner process to fetch its configuration.
     Returns the raw configuration dictionary stored in the database.
+    If knowledgeBase tools are present, replaces knowledgeBaseIds with source IDs fetched from an external API.
     """
     # Use DB CRUD
     db_agent = await crud.db_get_agent_config(db, agent_id)
     if db_agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
 
+    # --- Начало модификации: Получение source_ids ---
+    config_json_mutable = db_agent.config_json.copy() # Создаем изменяемую копию
+
+    if not SOURCES_API_BASE_URL:
+        logger.warning("SOURCES_API_BASE_URL environment variable is not set. Cannot fetch source IDs for knowledge bases.")
+    else:
+        try:
+            tools = config_json_mutable.get("simple", {}).get("settings", {}).get("tools", [])
+            async with httpx.AsyncClient(timeout=10.0) as client: # Используем httpx для асинхронных запросов
+                for tool in tools:
+                    if tool.get("type") == "knowledgeBase":
+                        settings = tool.get("settings", {})
+                        knowledge_base_ids = settings.get("knowledgeBaseIds")
+                        if knowledge_base_ids and isinstance(knowledge_base_ids, list):
+                            logger.info(f"Agent {agent_id}: Found knowledgeBase tool with IDs: {knowledge_base_ids}. Fetching source IDs...")
+                            source_ids_raw = [] # Храним исходные ID (могут быть int)
+                            fetch_tasks = []
+
+                            # Создаем задачи для получения источников для каждого ID базы знаний
+                            for kb_id in knowledge_base_ids:
+                                api_url = f"{SOURCES_API_BASE_URL}/admin-sources/?datastoreId={kb_id}&status=sync"
+                                fetch_tasks.append(client.get(api_url))
+
+                            # Выполняем запросы параллельно
+                            responses = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+
+                            for i, response in enumerate(responses):
+                                kb_id = knowledge_base_ids[i]
+                                if isinstance(response, httpx.Response):
+                                    if response.status_code == 200:
+                                        try:
+                                            sources_data = response.json()
+                                            if isinstance(sources_data, list):
+                                                # Получаем ID, проверяем что они не None
+                                                found_ids = [source.get("id") for source in sources_data if source.get("id") is not None]
+                                                source_ids_raw.extend(found_ids) # Добавляем в список исходных ID
+                                                logger.debug(f"Agent {agent_id}: Fetched {len(found_ids)} source IDs (raw) for KB ID {kb_id}.")
+                                            else:
+                                                logger.warning(f"Agent {agent_id}: Unexpected response format from sources API for KB ID {kb_id}. Expected list, got {type(sources_data)}.")
+                                        except json.JSONDecodeError:
+                                            logger.error(f"Agent {agent_id}: Failed to decode JSON response from sources API for KB ID {kb_id}.")
+                                    else:
+                                        logger.error(f"Agent {agent_id}: Error fetching sources for KB ID {kb_id}. Status: {response.status_code}, Response: {response.text[:200]}")
+                                elif isinstance(response, Exception):
+                                    logger.error(f"Agent {agent_id}: Exception fetching sources for KB ID {kb_id}: {response}")
+
+                            # --- ИСПРАВЛЕНИЕ: Преобразуем все ID в строки ---
+                            source_ids_str = [str(sid) for sid in source_ids_raw]
+
+                            if source_ids_str:
+                                logger.info(f"Agent {agent_id}: Replacing knowledgeBaseIds {knowledge_base_ids} with source IDs (as strings) {source_ids_str}")
+                                settings["knowledgeBaseIds"] = source_ids_str # Заменяем список ID строками
+                            else:
+                                logger.warning(f"Agent {agent_id}: No source IDs found for knowledgeBaseIds {knowledge_base_ids}. Keeping original IDs or potentially empty list.")
+                                # Решите, оставить ли старые ID или сделать список пустым, если ничего не найдено
+                                # settings["knowledgeBaseIds"] = [] # Раскомментируйте, если нужно очищать список при неудаче
+
+        except Exception as e:
+            logger.error(f"Agent {agent_id}: Error processing tools to fetch source IDs: {e}", exc_info=True)
+            # В случае ошибки обработки, возвращаем исходную конфигурацию (config_json_mutable может быть частично изменен)
+            # Можно вернуть db_agent.config_json, если нужна гарантия неизменности при ошибке
+
+    # --- Конец модификации ---
+
+
     # Return the raw JSON/Dict stored in the DB
     # Add agent_id, name etc. to the returned dict for the runner?
     # The runner currently expects the structure from AgentConfigOutput.model_dump()
-    # Let's mimic that for now.
-    config_structure = AgentConfigStructure.model_validate(db_agent.config_json)
-    output_model = AgentConfigOutput(
-        id=db_agent.id,
-        name=db_agent.name,
-        description=db_agent.description,
-        userId=db_agent.user_id,
-        config=config_structure,
-        created_at=db_agent.created_at,
-        updated_at=db_agent.updated_at
-    )
+    # Let's mimic that for now, using the potentially modified config_json_mutable.
+    try:
+        # Используем модифицированную конфигурацию
+        config_structure = AgentConfigStructure.model_validate(config_json_mutable)
+        output_model = AgentConfigOutput(
+            id=db_agent.id,
+            name=db_agent.name,
+            description=db_agent.description,
+            userId=db_agent.user_id,
+            config=config_structure,
+            created_at=db_agent.created_at,
+            updated_at=db_agent.updated_at
+        )
+    except Exception as validation_err:
+         logger.error(f"Agent {agent_id}: Error validating modified config structure: {validation_err}", exc_info=True)
+         # Если валидация не удалась, возвращаем исходную структуру
+         config_structure_original = AgentConfigStructure.model_validate(db_agent.config_json)
+         output_model = AgentConfigOutput(
+             id=db_agent.id,
+             name=db_agent.name,
+             description=db_agent.description,
+             userId=db_agent.user_id,
+             config=config_structure_original,
+             created_at=db_agent.created_at,
+             updated_at=db_agent.updated_at
+         )
+
+
     # Логируем конфигурацию перед отправкой, используя model_dump_json()
     try:
         # Используем model_dump_json() для корректной сериализации datetime в строку JSON

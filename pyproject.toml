@@ -13,6 +13,7 @@ dependencies = [
     "chromadb>=0.6.3",
     "fastapi>=0.111.1",
     "fastembed>=0.6.0",
+    "httpx>=0.28.1",
     "ipykernel>=6.29.5",
     "ipywidgets>=8.1.5",
     "langchain>=0.3.20",

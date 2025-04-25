@@ -86,6 +86,7 @@ experiments/
         *   `TELEGRAM_BOT_TOKEN`: Токен вашего бота Telegram (если используется интеграция с Telegram).
         *   `REDIS_URL`: URL вашего экземпляра Redis (например, `redis://localhost:6379`). По умолчанию localhost, если не установлено.
         *   `DATABASE_URL`: Строка подключения PostgreSQL (например, `postgresql+asyncpg://user:password@host:port/dbname`). **Обязательно**.
+        *   `SOURCES_API_BASE_URL`: Базовый URL для API источников данных (например, `http://localhost:3001/api/v1`), используется для получения ID источников для баз знаний. **Обязательно, если используется инструмент База Знаний**.
         *   `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`: Обязательны при запуске с Docker Compose (должны соответствовать `DATABASE_URL`).
         *   `AGENT_INACTIVITY_TIMEOUT`: Таймаут в секундах для автоматической остановки агентов (по умолчанию: 1800).
         *   `AGENT_INACTIVITY_CHECK_INTERVAL`: Как часто проверять неактивных агентов (по умолчанию: 300).
