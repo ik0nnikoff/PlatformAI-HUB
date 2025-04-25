@@ -5,6 +5,7 @@ import redis.asyncio as redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import delete as sqlalchemy_delete
+from sqlalchemy import update as sqlalchemy_update # Добавить импорт update
 
 # Import models
 from .models import AgentConfigInput, AgentConfigOutput, AgentConfigDB
@@ -83,6 +84,39 @@ async def db_delete_agent_config(db: AsyncSession, agent_id: str) -> bool:
         logger.warning(f"Agent config not found in DB for deletion: {agent_id}")
         return False
 
+async def db_update_agent_config(db: AsyncSession, agent_id: str, agent_config: AgentConfigInput) -> Optional[AgentConfigDB]:
+    """Updates an existing agent configuration in the database."""
+    logger.info(f"Updating agent config in DB for agent_id: {agent_id}")
+    # Используем select().where() и scalars().first() для получения объекта ORM
+    stmt = select(AgentConfigDB).where(AgentConfigDB.id == agent_id)
+    result = await db.execute(stmt)
+    db_agent = result.scalars().first() # Получаем экземпляр AgentConfigDB или None
+
+    if not db_agent:
+        logger.warning(f"Agent config not found in DB for update: {agent_id}")
+        return None
+
+    # Обновляем поля
+    db_agent.name = agent_config.name
+    db_agent.description = agent_config.description
+    db_agent.user_id = agent_config.userId # Убедитесь, что userId обновляется
+    # Преобразуем Pydantic config в JSON (словарь) для хранения
+    # Используем model_dump() для Pydantic v2+
+    if hasattr(agent_config.config, 'model_dump'):
+        db_agent.config_json = agent_config.config.model_dump()
+    else:
+        # Fallback для Pydantic v1 или если это уже словарь
+        db_agent.config_json = agent_config.config
+
+    try:
+        await db.commit()
+        await db.refresh(db_agent)
+        logger.info(f"Agent config updated in DB for agent_id: {agent_id}")
+        return db_agent
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Failed to update agent config in DB for {agent_id}: {e}", exc_info=True)
+        raise # Перевыбрасываем исключение для обработки на уровне API
 
 # --- Redis Operations (Keep for status, potentially remove config ops later) ---
 

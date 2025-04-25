@@ -67,18 +67,32 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
          raise ValueError("Invalid agent configuration: missing 'config' data")
 
     # --- Extract Settings ---
-    model_settings = config_data.get("model", {})
-    system_prompt_template = config_data.get("systemPrompt", "You are a helpful AI assistant.")
-    model_id = model_settings.get("modelId", "gpt-4o-mini")
-    temperature = model_settings.get("temperature", 0.2)
-    use_memory = model_settings.get("useContextMemory", True) # Needed for checkpointer
+    # Adjust path based on the actual structure logged: agent_config['config']['simple']['settings']
+    config_data = agent_config.get("config", {})
+    simple_config = config_data.get("simple", {}) # Get the 'simple' dictionary
+    settings_data = simple_config.get("settings", {}) # Get the 'settings' dictionary
+
+    if not settings_data:
+        log_adapter.error("Agent configuration is missing 'config.simple.settings' data.")
+        raise ValueError("Invalid agent configuration: missing 'config.simple.settings' data")
+
+    model_settings = settings_data.get("model", {}) # Get model settings from settings_data
+
+    # --- ИСПРАВЛЕНИЕ: Извлекаем systemPrompt и useContextMemory из model_settings ---
+    system_prompt_template = model_settings.get("systemPrompt", "You are a helpful AI assistant.") # Get systemPrompt from model_settings
+    model_id = model_settings.get("modelId", "gpt-4o-mini") # Get modelId from model_settings
+    temperature = model_settings.get("temperature", 0.2) # Get temperature from model_settings
+    use_memory = model_settings.get("useContextMemory", True) # Get useContextMemory from model_settings
+    # --- Конец исправления ---
 
     log_adapter.info(f"Model: {model_id}, Temperature: {temperature}")
+    # --- УДАЛЕНО: log_adapter.debug(f"Extracted system prompt template: '{system_prompt_template}'")
 
     # --- Configure Tools ---
     try:
-        # These tool instances will be accessed by nodes via closure
-        configured_tools, safe_tools_list, datastore_tool_names, max_rewrites = configure_tools(agent_config, agent_id)
+        # --- ИСПРАВЛЕНИЕ: Передаем весь agent_config в configure_tools ---
+        # configure_tools ожидает всю структуру для доступа, например, к userId
+        configured_tools, safe_tools_list, datastore_tool_names, max_rewrites = configure_tools(agent_config, agent_id) # Передаем agent_config
         safe_tool_names = {t.name for t in safe_tools_list} # Get names for state config
         datastore_tools_combined = [t for t in configured_tools if t.name in datastore_tool_names]
         valid_safe_tools = [t for t in safe_tools_list if t is not None]
@@ -88,6 +102,7 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
 
     # --- System Prompt Construction ---
     final_system_prompt = system_prompt_template
+    # Use model_settings directly
     if model_settings.get("limitToKnowledgeBase", False) and datastore_tool_names:
         final_system_prompt += "\nAnswer ONLY from the provided context from the knowledge base. If the answer is not in the context, say you don't know."
     if model_settings.get("answerInUserLanguage", True):
@@ -117,6 +132,12 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
         node_temperature = state["temperature"]
         node_model_id = state["model_id"]
 
+        # --- УДАЛЕНО: Логирование состояния перед вызовом LLM ---
+        # node_log_adapter.info(f"Agent Node State - Model ID: {node_model_id}")
+        # node_log_adapter.info(f"Agent Node State - Temperature: {node_temperature}")
+        # node_log_adapter.info(f"Agent Node State - System Prompt: '{node_system_prompt}'")
+        # --- Конец удаленного кода ---
+
         prompt = ChatPromptTemplate.from_messages([
             ("system", node_system_prompt),
             MessagesPlaceholder(variable_name="messages")
@@ -135,6 +156,11 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
 
         chain = prompt | model
         try:
+            # --- УДАЛЕНО: Логирование сообщений, отправляемых в LLM ---
+            # full_prompt_messages = prompt.format_messages(messages=messages)
+            # node_log_adapter.info(f"Messages sent to LLM: {full_prompt_messages}")
+            # --- Конец удаленного кода ---
+
             response = await chain.ainvoke({"messages": messages}, config=config)
             return {"messages": [response]}
         except Exception as e:

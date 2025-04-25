@@ -9,7 +9,9 @@ from ..redis_client import get_redis
 from ..db import get_db # Import DB dependency
 from ..models import AgentConfigInput, AgentConfigOutput, AgentStatus, AgentListItem, IntegrationStatus, IntegrationType, AgentConfigStructure # Import AgentConfigStructure
 from .. import crud
-from .. import process_manager
+from ..import process_manager
+import json # Добавляем импорт json
+import asyncio # Добавляем импорт asyncio
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -92,6 +94,71 @@ async def list_agents(
         ))
     return agents_list
 
+@router.put(
+    "/{agent_id}",
+    response_model=AgentConfigOutput,
+    summary="Update an agent configuration",
+    tags=["Agents"]
+)
+async def update_agent(
+    agent_id: str,
+    agent_config: AgentConfigInput,
+    r: redis.Redis = Depends(get_redis), # Для проверки статуса и публикации
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Updates an existing agent's configuration.
+    - **agent_id**: The ID of the agent to update.
+    - **agent_config**: The new configuration data matching AgentConfigInput schema.
+
+    **Note:** If the agent is currently running, its process will be signaled to
+    perform an internal restart via Redis Pub/Sub to apply the new configuration.
+    This involves a brief interruption and potential loss of conversation state.
+    """
+    # Проверяем статус агента *перед* обновлением
+    initial_status_info = await process_manager.get_agent_status(agent_id, r)
+    is_running = initial_status_info.status in ["running", "starting", "initializing"] # Считаем эти статусы "запущенными"
+
+    try:
+        # Используем DB CRUD для обновления
+        updated_db_agent = await crud.db_update_agent_config(db, agent_id, agent_config)
+
+        if updated_db_agent is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+
+        # Если агент был запущен, отправляем сигнал на внутренний перезапуск
+        if is_running:
+            control_channel = f"agent_control:{agent_id}"
+            # Меняем команду на restart
+            restart_command = json.dumps({"command": "restart"})
+            try:
+                # Отправляем сообщение клиентам WebSocket о предстоящем перезапуске (опционально)
+                # await websocket_api.manager.broadcast_to_agent(agent_id, json.dumps({"type": "status", "message": "Agent configuration updated. Restarting soon..."}))
+
+                await r.publish(control_channel, restart_command)
+                logger.info(f"Published restart command to {control_channel} for agent {agent_id} after config update.")
+            except Exception as pub_e:
+                logger.error(f"Failed to publish restart command to {control_channel} for agent {agent_id}: {pub_e}")
+                # Не прерываем основной процесс обновления, но логируем ошибку
+
+        # Преобразуем обновленную DB модель в Pydantic output модель
+        config_structure = AgentConfigStructure.model_validate(updated_db_agent.config_json)
+        return AgentConfigOutput(
+            id=updated_db_agent.id,
+            name=updated_db_agent.name,
+            description=updated_db_agent.description,
+            userId=updated_db_agent.user_id,
+            config=config_structure,
+            created_at=updated_db_agent.created_at,
+            updated_at=updated_db_agent.updated_at # SQLAlchemy onupdate должен обновить это
+        )
+    except HTTPException as http_exc:
+        raise http_exc # Перевыбрасываем HTTP исключения (например, 404)
+    except Exception as e:
+        logger.error(f"Failed to update agent config for {agent_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update agent configuration.")
+
+
 @router.delete(
     "/{agent_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -105,7 +172,7 @@ async def delete_agent(
 ):
     """
     Deletes an agent configuration from the database and cleans up Redis status.
-    Ensures the agent process is stopped first.
+    Sends a shutdown command to the agent process if it's running.
     """
     # 1. Check if agent exists in DB first
     db_agent_exists = await crud.db_get_agent_config(db, agent_id)
@@ -114,30 +181,32 @@ async def delete_agent(
          await r.delete(f"agent_status:{agent_id}") # Clean up potentially orphaned status
          raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
 
-    # 2. Ensure agent process is stopped (using process_manager)
+    # 2. Send shutdown command if agent process is running
     try:
         status_info = await process_manager.get_agent_status(agent_id, r)
-        # Allow deletion if stopped/error/lost/stopping/not_found
-        if status_info.status not in ["stopped", "error", "error_process_lost", "stopping", "not_found", "error_config", "error_app_create", "error_start_failed", "error_script_not_found"]:
-            logger.warning(f"Attempting to delete agent {agent_id} while it is {status_info.status}. Stopping first.")
-            # Use process_manager.stop_agent_process
-            stopped = await process_manager.stop_agent_process(agent_id, r, force=True)
-            if not stopped:
-                 logger.error(f"Failed to stop agent {agent_id} before deletion. Proceeding with config deletion anyway.")
-                 # Consider raising 500 if stop MUST succeed before delete
+        # Allow deletion if stopped/error/lost/stopping/not_found etc.
+        if status_info.status in ["running", "starting", "initializing"]:
+            logger.warning(f"Attempting to delete agent {agent_id} while it is {status_info.status}. Sending shutdown command.")
+            control_channel = f"agent_control:{agent_id}"
+            shutdown_command = json.dumps({"command": "shutdown"}) # Send shutdown, not restart
+            await r.publish(control_channel, shutdown_command)
+            # Wait a short time for the agent to potentially stop
+            await asyncio.sleep(2) # Give it a moment
+            # Re-check status (optional, deletion proceeds anyway)
+            status_info = await process_manager.get_agent_status(agent_id, r)
+            if status_info.status not in ["stopped", "stopping", "error_process_lost", "not_found"]: # Добавим not_found
+                 logger.warning(f"Agent {agent_id} status is still {status_info.status} after shutdown command. Proceeding with deletion.")
+
     except Exception as e:
-         # Handle potential errors from get_agent_status or stop_agent_process if they raise exceptions
-         logger.error(f"Error checking/stopping agent {agent_id} during deletion: {e}", exc_info=True)
-         # Decide if deletion should proceed or raise error
-         # raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to ensure agent stop before deletion.")
+         # Handle potential errors from get_agent_status or publish if they raise exceptions
+         logger.error(f"Error checking/signaling agent {agent_id} during deletion: {e}", exc_info=True)
+         # Proceed with deletion anyway, but log the error
 
     # 3. Delete configuration from DB
     try:
         deleted_db = await crud.db_delete_agent_config(db, agent_id)
         if not deleted_db:
-             # Should not happen if we checked existence earlier, but handle defensively
              logger.warning(f"Agent {agent_id} existed but failed to delete from DB.")
-             # Raise 500? Or maybe 404 if it disappeared?
              raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete agent from database.")
     except Exception as e:
          logger.error(f"Error deleting agent {agent_id} from DB: {e}", exc_info=True)
@@ -183,6 +252,16 @@ async def get_agent_config_for_runner(
         created_at=db_agent.created_at,
         updated_at=db_agent.updated_at
     )
+    # Логируем конфигурацию перед отправкой, используя model_dump_json()
+    try:
+        # Используем model_dump_json() для корректной сериализации datetime в строку JSON
+        config_json_for_log = output_model.model_dump_json()
+        # logger.info(f"Returning config for runner {agent_id}: {config_json_for_log}")
+    except Exception as log_err:
+        # Логируем ошибку сериализации для лога, но не прерываем основной ответ
+        logger.error(f"Error serializing config to JSON for logging (agent {agent_id}): {log_err}")
+
+    # Возвращаем словарь, FastAPI сам его корректно сериализует в JSON ответ
     return output_model.model_dump()
 
 @router.post(

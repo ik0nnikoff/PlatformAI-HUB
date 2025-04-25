@@ -201,7 +201,11 @@ experiments/
     *   Тело запроса: Конфигурация агента (см. `AgentConfigInput` в `agent_manager/models.py`).
 *   **Список Агентов:** `GET /agents`
 *   **Получить Детали Агента:** `GET /agents/{agent_id}`
-*   **Удалить Агента:** `DELETE /agents/{agent_id}` (Сначала останавливает агента)
+*   **Обновить Агента:** `PUT /agents/{agent_id}`
+    *   Тело запроса: Полная новая конфигурация агента (см. `AgentConfigInput`).
+    *   **Примечание:** Если агент запущен, ему будет отправлен сигнал для внутреннего перезапуска с новой конфигурацией. Это может привести к кратковременному прерыванию и потере состояния текущего диалога.
+*   **Удалить Агента:** `DELETE /agents/{agent_id}`
+    *   Отправляет сигнал завершения (`shutdown`) запущенному агенту перед удалением конфигурации.
 *   **Получить Статус Агента:** `GET /agents/{agent_id}/status`
 *   **Запустить Агента:** `POST /agents/{agent_id}/start`
 *   **Остановить Агента:** `POST /agents/{agent_id}/stop` (`?force=true` для SIGKILL)
@@ -226,7 +230,7 @@ experiments/
     {
       "type": "message",
       "message": "Ваше сообщение агенту",
-      "thread_id": numberoftread
+      "thread_id": "numberoftread"
       // Опционально: "user_data": {"first_name": "...", "is_authenticated": true, ...}
       // Опционально: "channel": "web" | "telegram" | ...
     }
