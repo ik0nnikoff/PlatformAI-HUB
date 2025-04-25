@@ -425,13 +425,13 @@ async def get_integration_status_api(
              logger.error(f"Failed to get DB session for integration status check (agent: {agent_id})")
              raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not get database session.")
 
-        logger.info(f"Checking DB for agent_id: '{agent_id}' in get_integration_status_api") # Лог для отладки
+        # logger.info(f"Checking DB for agent_id: '{agent_id}' in get_integration_status_api") # Лог для отладки
         db_agent = await crud.db_get_agent_config(db_session, agent_id) # <--- Используем полученную сессию
         if not db_agent:
             logger.warning(f"Agent config NOT FOUND in DB for agent_id: '{agent_id}' in get_integration_status_api") # Лог для отладки
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
 
-        logger.info(f"Agent config found for agent_id: '{agent_id}'. Fetching integration status.") # Лог для отладки
+        # logger.info(f"Agent config found for agent_id: '{agent_id}'. Fetching integration status.") # Лог для отладки
         # Fetch status from Redis
         return await process_manager.get_integration_status(agent_id, integration_type, r)
     except StopAsyncIteration:

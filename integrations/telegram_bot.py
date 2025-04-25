@@ -10,6 +10,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatAction
 from dotenv import load_dotenv
 import redis.asyncio as redis
+from redis import exceptions as redis_exceptions # Импортируем исключения из redis
 from contextlib import asynccontextmanager
 
 # --- Configuration & Setup ---
@@ -69,113 +70,80 @@ async def publish_to_agent(agent_id: str, chat_id: int, user_message: str, user_
     try:
         await redis_client.publish(input_channel, json.dumps(payload))
         logger.info(f"Published message to {input_channel} for chat {chat_id}")
-    except redis.exceptions.ConnectionError as e:
+    except redis_exceptions.ConnectionError as e:
         logger.error(f"Redis connection error publishing to {input_channel}: {e}")
         await bot.send_message(chat_id, "Ошибка: Не удалось отправить сообщение агенту (проблема с соединением).")
     except Exception as e:
         logger.error(f"Error publishing to {input_channel}: {e}", exc_info=True)
         await bot.send_message(chat_id, "Ошибка: Не удалось отправить сообщение агенту.")
 
+# --- Redis Listener ---
 async def redis_output_listener(agent_id: str):
-    """Listens to the agent's Redis output channel and sends messages to users."""
-    if not redis_client:
-        logger.error("Redis client not available for listener.")
-        return
-
+    """Listens to the agent's output channel and sends messages to Telegram."""
+    global redis_client, bot
     output_channel = f"agent:{agent_id}:output"
     pubsub = None
-    while True: # Keep trying to connect/subscribe
+    while True:
         try:
+            if not redis_client:
+                logger.warning("Redis client not available, listener cannot run.")
+                await asyncio.sleep(10)
+                continue
+
             if pubsub is None:
                 pubsub = redis_client.pubsub()
                 await pubsub.subscribe(output_channel)
-                logger.info(f"Subscribed to Redis channel: {output_channel}")
+                logger.info(f"Subscribed to Redis output channel: {output_channel}")
 
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             if message and message.get("type") == "message":
                 try:
-                    data = json.loads(message["data"])
-                    response_text = data.get("response")
-                    error_text = data.get("error")
-                    thread_id_str = data.get("thread_id")
+                    data = json.loads(message['data'])
+                    chat_id = data.get("thread_id") # Assuming thread_id is the chat_id
+                    response = data.get("response")
+                    error = data.get("error")
 
-                    if not thread_id_str:
-                        logger.warning(f"Received message without thread_id from {output_channel}: {data}")
-                        continue
-
-                    try:
-                        chat_id = int(thread_id_str)
-                    except (ValueError, TypeError):
-                        logger.warning(f"Invalid thread_id received: {thread_id_str}")
-                        continue
-
-                    final_text = None
-                    auth_required = False
-
-                    if error_text:
-                        final_text = f"⚠ Произошла ошибка у агента: {error_text}"
-                    elif response_text:
-                        final_text = response_text
-                        if AUTH_TRIGGER in final_text:
-                            auth_required = True
-                            final_text = final_text.replace(AUTH_TRIGGER, "").strip()
-                    else:
-                        final_text = "Агент не предоставил ответ."
-
-                    if auth_required:
-                        if chat_id in authorized_users:
-                            # User is authorized, send the response without auth prompt
-                            await bot.send_message(chat_id, final_text)
+                    if chat_id:
+                        if error:
+                            logger.error(f"Received error from agent for chat {chat_id}: {error}")
+                            await bot.send_message(chat_id, f"Произошла ошибка: {error}")
+                        elif response:
+                            logger.info(f"Received response from agent for chat {chat_id}: {response[:100]}...")
+                            await bot.send_message(chat_id, response)
                         else:
-                            # User not authorized, send response + auth prompt
-                            await bot.send_message(
-                                chat_id,
-                                f"{final_text}\n\nДля доступа к этой функции требуется авторизация. Используйте /login или кнопку ниже:",
-                                reply_markup=request_contact_markup()
-                            )
-                    elif final_text:
-                         # TODO: Add Markdown formatting if needed (e.g., using chatgpt_md_converter)
-                         # from chatgpt_md_converter import telegram_format
-                         # await bot.send_message(chat_id, telegram_format(final_text))
-                         await bot.send_message(chat_id, final_text, parse_mode=ParseMode.MARKDOWN)
+                            logger.warning(f"Received message from agent without response or error: {data}")
+                    else:
+                        logger.warning(f"Received message from agent without thread_id (chat_id): {data}")
 
                 except json.JSONDecodeError:
-                    logger.error(f"Failed to decode JSON from {output_channel}: {message['data']}")
+                    logger.error(f"Failed to decode JSON from Redis: {message['data']}")
                 except Exception as e:
-                    logger.error(f"Error processing message from {output_channel}: {e}", exc_info=True)
-                    # Optionally notify the user about the processing error
-                    # await bot.send_message(chat_id, "Произошла внутренняя ошибка при обработке ответа агента.")
+                    logger.error(f"Error processing message from Redis: {e}", exc_info=True)
+                    # Optionally send error to a default chat_id if available
 
-            await asyncio.sleep(0.1) # Prevent tight loop
-
-        except redis.exceptions.ConnectionError as e:
-            logger.error(f"Redis connection error in listener for {output_channel}: {e}. Reconnecting...")
+        except redis_exceptions.ConnectionError as e: # Используем импортированное имя
+            logger.error(f"Redis connection error in listener: {e}. Retrying...")
             if pubsub:
                 try:
                     await pubsub.unsubscribe(output_channel)
-                    await pubsub.close()
-                except Exception as close_err:
-                    logger.error(f"Error closing pubsub during reconnect: {close_err}")
-                pubsub = None # Reset pubsub to force re-subscription
+                    await pubsub.aclose()
+                except Exception: pass
+                pubsub = None
             await asyncio.sleep(5)
         except asyncio.CancelledError:
-            logger.info(f"Redis listener task cancelled for {output_channel}.")
-            if pubsub:
-                try:
-                    await pubsub.unsubscribe(output_channel)
-                    await pubsub.close()
-                except Exception as close_err:
-                    logger.error(f"Error closing pubsub during cancellation: {close_err}")
-            break # Exit loop on cancellation
+            logger.info("Redis listener task cancelled.")
+            break
         except Exception as e:
-            logger.error(f"Unexpected error in Redis listener for {output_channel}: {e}", exc_info=True)
-            if pubsub: # Attempt to clean up pubsub on unexpected errors too
-                 try:
-                     await pubsub.unsubscribe(output_channel)
-                     await pubsub.close()
-                 except Exception: pass
-                 pubsub = None
-            await asyncio.sleep(5) # Wait before retrying
+            logger.error(f"Unexpected error in Redis listener: {e}", exc_info=True)
+            await asyncio.sleep(5) # Avoid tight loop on unexpected errors
+    # Cleanup pubsub on exit
+    if pubsub:
+        try:
+            await pubsub.unsubscribe(output_channel)
+            await pubsub.aclose()
+            logger.info("Unsubscribed from Redis output channel.")
+        except Exception as clean_e:
+            logger.error(f"Error closing Redis pubsub in listener: {clean_e}")
 
 # --- Aiogram Handlers ---
 @dp.message(CommandStart())
@@ -295,10 +263,10 @@ async def lifespan(dp: Dispatcher, agent_id: str):
         except asyncio.CancelledError:
             logger.info("Redis listener task cancelled successfully.")
         except Exception as e:
-            logger.error(f"Error during Redis listener task shutdown: {e}")
+            logger.error(f"Error during Redis listener task shutdown: {e}") # Ошибка здесь была из-за redis.asyncio.exceptions
 
     if redis_client:
-        await redis_client.close()
+        await redis_client.aclose() # Используем aclose()
         logger.info("Redis connection closed.")
 
     await bot.session.close()
