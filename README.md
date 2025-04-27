@@ -226,18 +226,18 @@ experiments/
 
 Подключитесь к конечной точке WebSocket: `ws://localhost:8000/ws/agents/{agent_id}`
 
-*   **Отправка сообщений:** Отправляйте JSON-сообщения следующей структуры:
+*   **Отправка сообщений:** Отправляйте JSON-сообщения следующей структуры. **Важно:** Поле `thread_id` обязательно и должно быть уникальным идентификатором для каждой отдельной беседы или сессии чата.
     ```json
     {
       "type": "message",
-      "message": "Ваше сообщение агенту",
-      "thread_id": "numberoftread"
+      "message": "Ваше сообщение агенту", // или "content": "Ваше сообщение..."
+      "thread_id": "уникальный_id_беседы" // Например, UUID, сгенерированный клиентом
       // Опционально: "user_data": {"first_name": "...", "is_authenticated": true, ...}
-      // Опционально: "channel": "web" | "telegram" | ...
+      // Опционально: "channel": "websocket" // или "dashboard", "web" и т.д.
     }
     ```
-*   **Получение сообщений:** Получайте JSON-сообщения:
-    *   Ответы агента: `{"type": "message", "message": "Ответ агента", "message_object": {...}}`
+*   **Получение сообщений:** Получайте JSON-сообщения от агента, предназначенные для вашего `thread_id`:
+    *   Ответы агента: `{"type": "message", "response": "Ответ агента", "thread_id": "уникальный_id_беседы", "channel": "...", "message_object": {...}}`
     *   Обновления статуса: `{"type": "status", "message": "Агент запускается..."}`
     *   Ошибки: `{"type": "error", "message": "Детали ошибки"}`
 
@@ -333,8 +333,18 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, wsUrlBase = 'ws://localh
   }, [messages]);
 
   const sendMessage = () => {
+    // --- ИСПРАВЛЕНИЕ: Добавляем threadId при отправке ---
     if (input.trim() && ws.current && ws.current.readyState === WebSocket.OPEN) {
-      const messageToSend = { type: 'message', content: input }; // Структура для отправки через WebSocket manager'а
+      // Генерируем threadId один раз при инициализации или берем из состояния/пропсов
+      // В этом примере предполагается, что threadId хранится в состоянии или генерируется при необходимости
+      const currentThreadId = threadIdRef.current; // Пример: используем ref для хранения ID сессии
+
+      const messageToSend = {
+          type: 'message',
+          content: input,
+          thread_id: currentThreadId, // <--- Добавляем thread_id
+          channel: 'dashboard' // Пример указания канала
+      };
       console.log('Отправка сообщения:', messageToSend);
       ws.current.send(JSON.stringify(messageToSend));
       // Немедленно добавляем сообщение пользователя в чат
@@ -354,6 +364,20 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, wsUrlBase = 'ws://localh
       sendMessage();
     }
   };
+
+  // Добавьте useRef для хранения threadId в компоненте AgentChat
+  const threadIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    // Генерируем уникальный ID для этой сессии чата при монтировании
+    if (!threadIdRef.current) {
+      // Используйте библиотеку типа uuid или просто Date.now() + random для простоты
+      threadIdRef.current = `web-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      console.log("Generated thread ID for this chat session:", threadIdRef.current);
+    }
+    connectWebSocket();
+    // ... остальная часть useEffect ...
+  }, [connectWebSocket]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '400px', border: '1px solid #ccc', padding: '10px' }}>

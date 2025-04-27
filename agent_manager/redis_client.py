@@ -44,10 +44,18 @@ async def get_redis() -> AsyncGenerator[redis.Redis, None]:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Redis service not available.",
         )
+    client = None # Инициализируем client как None
     try:
         client = redis.Redis.from_pool(redis_pool)
         yield client
     finally:
-        # Connections borrowed from the pool are typically returned automatically.
-        # Explicit close might be needed depending on usage pattern, but usually not required here.
-        await client.close() # Ensure connection is closed/returned after use
+        # --- НАЧАЛО ИЗМЕНЕНИЯ: Убираем явный close ---
+        # При использовании пула соединений, явный вызов close() обычно не нужен,
+        # так как пул управляет жизненным циклом соединений.
+        # await client.close() # <--- Удаляем или комментируем эту строку
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+        # Дополнительная проверка, если client был успешно создан
+        if client:
+             # Можно добавить логирование, если нужно отследить возврат в пул
+             # logger.debug("Redis client yielded by dependency is being released.")
+             pass # Ничего не делаем, пул сам обработает

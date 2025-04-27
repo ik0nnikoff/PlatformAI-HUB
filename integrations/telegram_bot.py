@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 import redis.asyncio as redis
 from redis import exceptions as redis_exceptions
 from contextlib import asynccontextmanager
+from aiogram.exceptions import TelegramBadRequest # Импортируем исключение
 
 # --- Configuration & Setup ---
 load_dotenv(dotenv_path=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env')))
@@ -99,29 +100,48 @@ async def redis_output_listener(agent_id: str):
 
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             if message and message.get("type") == "message":
+                raw_data = message['data']
                 try:
-                    data = json.loads(message['data'])
-                    chat_id = data.get("thread_id") # Assuming thread_id is the chat_id
-                    response = data.get("response")
-                    error = data.get("error")
+                    data = json.loads(raw_data)
+                    response_channel = data.get("channel")
 
-                    if chat_id:
-                        if error:
-                            logger.error(f"Received error from agent for chat {chat_id}: {error}")
-                            await bot.send_message(chat_id, f"Произошла ошибка: {error}")
-                        elif response:
-                            logger.info(f"Received response from agent for chat {chat_id}: {response[:100]}...")
-                            await bot.send_message(chat_id, response)
+                    # --- НАЧАЛО ИЗМЕНЕНИЯ: Фильтрация по каналу ---
+                    if response_channel == "telegram":
+                        chat_id = data.get("thread_id") # Предполагаем, что thread_id это chat_id
+                        response = data.get("response")
+                        error = data.get("error")
+
+                        if chat_id:
+                            # Конвертируем chat_id в integer для aiogram
+                            try:
+                                chat_id_int = int(chat_id)
+                            except (ValueError, TypeError):
+                                logger.error(f"Invalid chat_id (thread_id) received from agent: {chat_id}")
+                                continue # Пропускаем это сообщение
+
+                            if error:
+                                logger.error(f"Received error from agent for chat {chat_id_int}: {error}")
+                                await bot.send_message(chat_id_int, f"Произошла ошибка: {error}")
+                            elif response:
+                                logger.info(f"Received response from agent for chat {chat_id_int}: {response[:100]}...")
+                                await bot.send_message(chat_id_int, response)
+                            else:
+                                logger.warning(f"Received message from agent for chat {chat_id_int} without response or error: {data}")
                         else:
-                            logger.warning(f"Received message from agent without response or error: {data}")
+                            logger.warning(f"Received 'telegram' channel message from agent without thread_id (chat_id): {data}")
                     else:
-                        logger.warning(f"Received message from agent without thread_id (chat_id): {data}")
+                        # Игнорируем сообщения не для Telegram
+                        logger.debug(f"Ignoring message from Redis for Telegram - channel mismatch (channel: {response_channel})")
+                    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
                 except json.JSONDecodeError:
-                    logger.error(f"Failed to decode JSON from Redis: {message['data']}")
+                    logger.error(f"Failed to decode JSON from Redis: {raw_data}")
+                except TelegramBadRequest as e:
+                    # Ловим специфичные ошибки Telegram, например 'chat not found'
+                    logger.error(f"Telegram API error sending message to chat {chat_id}: {e}")
                 except Exception as e:
                     logger.error(f"Error processing message from Redis: {e}", exc_info=True)
-                    # Optionally send error to a default chat_id if available
+                    # Опционально отправить ошибку в default chat_id, если доступно
 
         except redis_exceptions.ConnectionError as e: # Используем импортированное имя
             logger.error(f"Redis connection error in listener: {e}. Retrying...")

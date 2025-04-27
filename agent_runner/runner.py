@@ -324,7 +324,8 @@ async def redis_listener(app, agent_id: str, redis_client: redis.Redis, static_s
                         response_payload_dict = {
                             "thread_id": thread_id,
                             "response": final_response_content,
-                            "message_object": None
+                            "message_object": None,
+                            "channel": channel # <--- Добавляем исходный канал сюда
                         }
                         if final_message_object:
                             try:
