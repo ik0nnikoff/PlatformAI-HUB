@@ -70,16 +70,18 @@ async def redis_websocket_listener(websocket: WebSocket, agent_id: str, r: redis
 
         while True:
             # Проверяем соединение WebSocket перед ожиданием сообщения Redis
-            try:
-                # Быстрая проверка, жив ли сокет (может вызвать исключение при разрыве)
-                await websocket.send_text("") # Отправляем пустую строку как пинг
-                await asyncio.sleep(0.01) # Небольшая пауза
-            except WebSocketDisconnect:
-                 logger.info(f"WebSocket for {agent_id} disconnected (detected by ping). Stopping listener.")
-                 break
-            except Exception as ws_err:
-                 logger.error(f"WebSocket error for {agent_id} during ping: {ws_err}. Stopping listener.")
-                 break
+            # --- УДАЛЕНО: Проверка соединения отправкой пинга ---
+            # try:
+            #     # Быстрая проверка, жив ли сокет (может вызвать исключение при разрыве)
+            #     await websocket.send_text("") # Отправляем пустую строку как пинг
+            #     await asyncio.sleep(0.01) # Небольшая пауза
+            # except WebSocketDisconnect:
+            #      logger.info(f"WebSocket for {agent_id} disconnected (detected by ping). Stopping listener.")
+            #      break
+            # except Exception as ws_err:
+            #      logger.error(f"WebSocket error for {agent_id} during ping: {ws_err}. Stopping listener.")
+            #      break
+            # --- Конец удаления ---
 
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             if message and message.get("type") == "message":
