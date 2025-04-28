@@ -592,83 +592,6 @@ wheels = [
 ]
 
 [[package]]
-name = "experiments"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "aiogram" },
-    { name = "alembic" },
-    { name = "asyncpg" },
-    { name = "beautifulsoup4" },
-    { name = "chatgpt-md-converter" },
-    { name = "chromadb" },
-    { name = "fastapi" },
-    { name = "fastembed" },
-    { name = "httpx" },
-    { name = "ipykernel" },
-    { name = "ipywidgets" },
-    { name = "langchain" },
-    { name = "langchain-community" },
-    { name = "langchain-openai" },
-    { name = "langchain-qdrant" },
-    { name = "langchainhub" },
-    { name = "langgraph" },
-    { name = "minio" },
-    { name = "numpy" },
-    { name = "openai" },
-    { name = "pandas" },
-    { name = "pydantic" },
-    { name = "pymupdf" },
-    { name = "pypdf" },
-    { name = "python-docx" },
-    { name = "python-dotenv" },
-    { name = "qdrant-client" },
-    { name = "redis" },
-    { name = "requests" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
-    { name = "tavily-python" },
-    { name = "tiktoken" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiogram", specifier = ">=3.18.0" },
-    { name = "alembic", specifier = ">=1.15.2" },
-    { name = "asyncpg", specifier = ">=0.30.0" },
-    { name = "beautifulsoup4", specifier = ">=4.13.3" },
-    { name = "chatgpt-md-converter", specifier = ">=0.2.0" },
-    { name = "chromadb", specifier = ">=0.6.3" },
-    { name = "fastapi", specifier = ">=0.111.1" },
-    { name = "fastembed", specifier = ">=0.6.0" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "ipykernel", specifier = ">=6.29.5" },
-    { name = "ipywidgets", specifier = ">=8.1.5" },
-    { name = "langchain", specifier = ">=0.3.20" },
-    { name = "langchain-community", specifier = ">=0.3.19" },
-    { name = "langchain-openai", specifier = ">=0.3.9" },
-    { name = "langchain-qdrant", specifier = ">=0.2.0" },
-    { name = "langchainhub", specifier = ">=0.1.21" },
-    { name = "langgraph", specifier = ">=0.3.14" },
-    { name = "minio", specifier = ">=7.2.15" },
-    { name = "numpy", specifier = ">=2.2.4" },
-    { name = "openai", specifier = ">=1.66.3" },
-    { name = "pandas", specifier = ">=2.2.3" },
-    { name = "pydantic", specifier = ">=2.10.6" },
-    { name = "pymupdf", specifier = ">=1.25.4" },
-    { name = "pypdf", specifier = ">=5.4.0" },
-    { name = "python-docx", specifier = ">=1.1.2" },
-    { name = "python-dotenv", specifier = ">=1.0.1" },
-    { name = "qdrant-client", specifier = ">=1.13.3" },
-    { name = "redis", specifier = ">=5.0.7" },
-    { name = "requests", specifier = ">=2.32.3" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
-    { name = "tavily-python", specifier = ">=0.5.1" },
-    { name = "tiktoken", specifier = ">=0.9.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.3" },
-]
-
-[[package]]
 name = "fastapi"
 version = "0.115.11"
 source = { registry = "https://pypi.org/simple" }
@@ -2147,6 +2070,83 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e5/fb/a7960e838bc5df57a2ce23183bfd2290d97c33028b96bde332a9057834d3/pillow-11.1.0-cp313-cp313t-win32.whl", hash = "sha256:dda60aa465b861324e65a78c9f5cf0f4bc713e4309f83bc387be158b077963d9", size = 2295494 },
     { url = "https://files.pythonhosted.org/packages/d7/6c/6ec83ee2f6f0fda8d4cf89045c6be4b0373ebfc363ba8538f8c999f63fcd/pillow-11.1.0-cp313-cp313t-win_amd64.whl", hash = "sha256:ad5db5781c774ab9a9b2c4302bbf0c1014960a0a7be63278d13ae6fdf88126fe", size = 2631595 },
     { url = "https://files.pythonhosted.org/packages/cf/6c/41c21c6c8af92b9fea313aa47c75de49e2f9a467964ee33eb0135d47eb64/pillow-11.1.0-cp313-cp313t-win_arm64.whl", hash = "sha256:67cd427c68926108778a9005f2a04adbd5e67c442ed21d95389fe1d595458756", size = 2377651 },
+]
+
+[[package]]
+name = "platformai-hub"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "aiogram" },
+    { name = "alembic" },
+    { name = "asyncpg" },
+    { name = "beautifulsoup4" },
+    { name = "chatgpt-md-converter" },
+    { name = "chromadb" },
+    { name = "fastapi" },
+    { name = "fastembed" },
+    { name = "httpx" },
+    { name = "ipykernel" },
+    { name = "ipywidgets" },
+    { name = "langchain" },
+    { name = "langchain-community" },
+    { name = "langchain-openai" },
+    { name = "langchain-qdrant" },
+    { name = "langchainhub" },
+    { name = "langgraph" },
+    { name = "minio" },
+    { name = "numpy" },
+    { name = "openai" },
+    { name = "pandas" },
+    { name = "pydantic" },
+    { name = "pymupdf" },
+    { name = "pypdf" },
+    { name = "python-docx" },
+    { name = "python-dotenv" },
+    { name = "qdrant-client" },
+    { name = "redis" },
+    { name = "requests" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "tavily-python" },
+    { name = "tiktoken" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiogram", specifier = ">=3.18.0" },
+    { name = "alembic", specifier = ">=1.15.2" },
+    { name = "asyncpg", specifier = ">=0.30.0" },
+    { name = "beautifulsoup4", specifier = ">=4.13.3" },
+    { name = "chatgpt-md-converter", specifier = ">=0.2.0" },
+    { name = "chromadb", specifier = ">=0.6.3" },
+    { name = "fastapi", specifier = ">=0.111.1" },
+    { name = "fastembed", specifier = ">=0.6.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "ipykernel", specifier = ">=6.29.5" },
+    { name = "ipywidgets", specifier = ">=8.1.5" },
+    { name = "langchain", specifier = ">=0.3.20" },
+    { name = "langchain-community", specifier = ">=0.3.19" },
+    { name = "langchain-openai", specifier = ">=0.3.9" },
+    { name = "langchain-qdrant", specifier = ">=0.2.0" },
+    { name = "langchainhub", specifier = ">=0.1.21" },
+    { name = "langgraph", specifier = ">=0.3.14" },
+    { name = "minio", specifier = ">=7.2.15" },
+    { name = "numpy", specifier = ">=2.2.4" },
+    { name = "openai", specifier = ">=1.66.3" },
+    { name = "pandas", specifier = ">=2.2.3" },
+    { name = "pydantic", specifier = ">=2.10.6" },
+    { name = "pymupdf", specifier = ">=1.25.4" },
+    { name = "pypdf", specifier = ">=5.4.0" },
+    { name = "python-docx", specifier = ">=1.1.2" },
+    { name = "python-dotenv", specifier = ">=1.0.1" },
+    { name = "qdrant-client", specifier = ">=1.13.3" },
+    { name = "redis", specifier = ">=5.0.7" },
+    { name = "requests", specifier = ">=2.32.3" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
+    { name = "tavily-python", specifier = ">=0.5.1" },
+    { name = "tiktoken", specifier = ">=0.9.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.3" },
 ]
 
 [[package]]
