@@ -142,12 +142,14 @@ class ChatMessageOutput(BaseModel):
 
 class ChatListItemOutput(BaseModel):
     thread_id: str
+    # --- ИЗМЕНЕНИЕ: Добавляем поля для первого сообщения ---
+    first_message_content: str
+    first_message_timestamp: datetime
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     last_message_content: str
     last_message_timestamp: datetime
-    # --- ИЗМЕНЕНИЕ: Добавляем поля ---
-    last_message_sender_type: SenderType # От кого последнее сообщение
-    last_message_channel: Optional[str] = None # Канал последнего сообщения
-    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+    last_message_sender_type: SenderType
+    last_message_channel: Optional[str] = None
     message_count: int
 
     model_config = ConfigDict(from_attributes=True)

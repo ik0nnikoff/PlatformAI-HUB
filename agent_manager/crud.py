@@ -158,57 +158,81 @@ async def db_get_chat_history(db: AsyncSession, agent_id: str, thread_id: str, s
 
 
 async def db_get_agent_chats(db: AsyncSession, agent_id: str, skip: int = 0, limit: int = 100) -> List[ChatListItemOutput]:
-    """Retrieves a list of unique threads for an agent with the last message details."""
+    """
+    Retrieves a list of unique threads for an agent with details of the first and last messages.
+    """
     logger.debug(f"Fetching chat list for Agent={agent_id} (skip={skip}, limit={limit})")
 
-    # Подзапрос для нумерации сообщений в каждом треде по убыванию времени
-    subquery = (
+    # --- ИЗМЕНЕНИЕ: Подзапрос для последнего сообщения ---
+    last_message_subquery = (
         select(
             ChatMessageDB.thread_id,
-            ChatMessageDB.content,
-            ChatMessageDB.timestamp,
-            # --- ИЗМЕНЕНИЕ: Добавляем sender_type и channel ---
-            ChatMessageDB.sender_type,
-            ChatMessageDB.channel,
-            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+            ChatMessageDB.content.label("last_message_content"),
+            ChatMessageDB.timestamp.label("last_message_timestamp"),
+            ChatMessageDB.sender_type.label("last_message_sender_type"),
+            ChatMessageDB.channel.label("last_message_channel"),
             func.count(ChatMessageDB.id).over(partition_by=ChatMessageDB.thread_id).label("message_count"),
-            func.row_number().over(partition_by=ChatMessageDB.thread_id, order_by=ChatMessageDB.timestamp.desc()).label("rn")
+            func.row_number().over(partition_by=ChatMessageDB.thread_id, order_by=ChatMessageDB.timestamp.desc()).label("rn_desc")
         )
         .where(ChatMessageDB.agent_id == agent_id)
-        .subquery('ranked_messages')
+        .subquery('last_ranked_messages')
     )
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
-    # Основной запрос: выбираем только последние сообщения (rn=1) для каждого треда
+    # --- НОВОЕ: Подзапрос для первого сообщения ---
+    first_message_subquery = (
+        select(
+            ChatMessageDB.thread_id,
+            ChatMessageDB.content.label("first_message_content"),
+            ChatMessageDB.timestamp.label("first_message_timestamp"),
+            func.row_number().over(partition_by=ChatMessageDB.thread_id, order_by=ChatMessageDB.timestamp.asc()).label("rn_asc")
+        )
+        .where(ChatMessageDB.agent_id == agent_id)
+        .subquery('first_ranked_messages')
+    )
+    # --- КОНЕЦ НОВОГО ---
+
+    # --- ИЗМЕНЕНИЕ: Основной запрос с JOIN ---
     stmt = (
         select(
-            subquery.c.thread_id,
-            subquery.c.content.label("last_message_content"),
-            subquery.c.timestamp.label("last_message_timestamp"),
-            # --- ИЗМЕНЕНИЕ: Добавляем sender_type и channel ---
-            subquery.c.sender_type.label("last_message_sender_type"),
-            subquery.c.channel.label("last_message_channel"),
-            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
-            subquery.c.message_count
+            last_message_subquery.c.thread_id,
+            first_message_subquery.c.first_message_content, # Из подзапроса первого сообщения
+            first_message_subquery.c.first_message_timestamp, # Из подзапроса первого сообщения
+            last_message_subquery.c.last_message_content,
+            last_message_subquery.c.last_message_timestamp,
+            last_message_subquery.c.last_message_sender_type,
+            last_message_subquery.c.last_message_channel,
+            last_message_subquery.c.message_count
         )
-        .where(subquery.c.rn == 1)
-        .order_by(subquery.c.timestamp.desc()) # Сортируем треды по времени последнего сообщения
+        # Соединяем подзапросы по thread_id
+        .join(
+            first_message_subquery,
+            last_message_subquery.c.thread_id == first_message_subquery.c.thread_id
+        )
+        # Выбираем только последние (rn_desc=1) и первые (rn_asc=1) строки для каждого треда
+        .where(last_message_subquery.c.rn_desc == 1)
+        .where(first_message_subquery.c.rn_asc == 1)
+        .order_by(last_message_subquery.c.last_message_timestamp.desc()) # Сортируем треды по времени последнего сообщения
         .offset(skip)
         .limit(limit)
     )
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
     result = await db.execute(stmt)
     # Преобразуем результат в список Pydantic моделей
     chat_list = [
         ChatListItemOutput(
             thread_id=row.thread_id,
+            # --- ИЗМЕНЕНИЕ: Добавляем поля первого сообщения ---
+            first_message_content=row.first_message_content,
+            first_message_timestamp=row.first_message_timestamp,
+            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
             last_message_content=row.last_message_content,
             last_message_timestamp=row.last_message_timestamp,
-            # --- ИЗМЕНЕНИЕ: Добавляем sender_type и channel ---
             last_message_sender_type=row.last_message_sender_type,
             last_message_channel=row.last_message_channel,
-            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
             message_count=row.message_count
-        ) for row in result.mappings().all() # Используем mappings() для доступа по именам колонок
+        ) for row in result.mappings().all()
     ]
     logger.debug(f"Fetched {len(chat_list)} chat threads for Agent={agent_id}")
     return chat_list
