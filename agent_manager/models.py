@@ -1,10 +1,15 @@
-from pydantic import BaseModel, Field as PydanticField, field_validator, model_validator
-from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field as PydanticField, field_validator, model_validator, ConfigDict
+from typing import List, Dict, Any, Optional, Union
 from enum import Enum
 from datetime import datetime
 
 # --- SQLAlchemy Imports ---
-from sqlalchemy import Column, String, Text, DateTime, func, JSON
+# --- ИЗМЕНЕНИЕ: Добавляем Integer и ForeignKey ---
+from sqlalchemy import Column, String, Text, DateTime, func, JSON, Integer, ForeignKey, Enum as SQLEnum # Добавляем SQLEnum
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
+# --- ИЗМЕНЕНИЕ: Добавляем relationship ---
+from sqlalchemy.orm import declarative_base, relationship
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
 # Import Base from db.py
 from .db import Base
@@ -39,14 +44,20 @@ class AgentConfigSimple(BaseModel):
 
     @model_validator(mode='before')
     @classmethod
-    def ensure_settings_structure(cls, data: Any) -> Any:
-        """Ensure 'settings' contains 'model' and 'tools' keys if present."""
-        if isinstance(data, dict) and 'settings' in data and isinstance(data['settings'], dict):
-            if 'model' not in data['settings']:
-                data['settings']['model'] = AgentConfigSimpleSettingsModel().model_dump()
-            if 'tools' not in data['settings']:
-                data['settings']['tools'] = []
+    def check_config_structure(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # Check if 'settings' exists and is a dict
+            if 'settings' in data and isinstance(data['settings'], dict):
+                # Check for known top-level keys within settings if needed
+                # Example: if 'modelId' in data['settings']: ...
+                pass # Basic validation passed
+            else:
+                # If settings is missing or not a dict, wrap it
+                # This might not be the desired behavior, adjust as needed
+                # For now, let's assume the input structure is correct or handled by AgentConfigInput
+                pass
         return data
+
 
 class AgentConfigStructure(BaseModel):
     # Define different config structures if needed, e.g., "simple", "advanced"
@@ -55,75 +66,125 @@ class AgentConfigStructure(BaseModel):
 
 class AgentConfigInput(BaseModel):
     name: str = PydanticField(..., min_length=1, max_length=100)
-    description: Optional[str] = PydanticField(None, max_length=500)
-    userId: str # TODO: Link to a User model later
-    # Use a structured config model
+    description: str = PydanticField("", max_length=500)
+    userId: str # TODO: Add validation if needed
+    # Используем config_json: Dict[str, Any] для хранения сырого JSON
+    config_json: Dict[str, Any] = PydanticField(..., alias='config')
+
+    # Убираем model_config = ConfigDict(from_attributes=True), т.к. это модель ввода
+
+class AgentConfigOutput(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    userId: str
+    # Возвращаем валидированную структуру config
     config: AgentConfigStructure
-
-    # Example validator for config structure
-    @field_validator('config')
-    def check_at_least_one_config_type(cls, v):
-        if not v.simple and not getattr(v, 'advanced', None): # Check for other types if added
-            raise ValueError("At least one configuration type (e.g., 'simple') must be provided")
-        return v
-
-class AgentConfigOutput(AgentConfigInput):
-    id: str = PydanticField(..., description="Unique Agent ID assigned by the service")
     created_at: datetime
     updated_at: datetime
+
+    # Используем ConfigDict для from_attributes
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_encoders={datetime: lambda v: v.isoformat()}
+    )
 
 class AgentListItem(BaseModel):
     id: str
     name: str
     description: Optional[str] = None
-    status: str # From AgentStatus
+    status: str # Статус получаем из Redis
+
+    # Используем ConfigDict для from_attributes
+    model_config = ConfigDict(
+        from_attributes=True
+    )
 
 class AgentStatus(BaseModel):
     agent_id: str
-    status: str = PydanticField(..., description="e.g., 'stopped', 'running', 'starting', 'error', 'error_config', 'error_app_create', 'error_script_not_found', 'error_start_failed', 'error_process_lost', 'stopping'")
+    status: str
     pid: Optional[int] = None
     last_active: Optional[float] = None
+    error_detail: Optional[str] = None
+
 
 class IntegrationType(str, Enum):
     TELEGRAM = "telegram"
-    # Add other integration types here later (e.g., webchat, slack)
+    # Add other integration types here
+
 
 class IntegrationStatus(BaseModel):
-    agent_id: str
     integration_type: IntegrationType
-    status: str = PydanticField(..., description="e.g., 'stopped', 'running', 'starting', 'error', 'error_script_not_found', 'error_start_failed', 'error_unsupported_type', 'stopping'")
+    status: str
     pid: Optional[int] = None
-    last_active: Optional[float] = None # May not be applicable for all integrations
+    last_active: Optional[float] = None
+    error_detail: Optional[str] = None
+
+
+# --- НОВОЕ: Модели для истории чатов ---
+class SenderType(str, Enum):
+    USER = "user"
+    AGENT = "agent"
+    SYSTEM = "system" # Добавим system для возможных ошибок/уведомлений
+
+
+class ChatMessageOutput(BaseModel):
+    id: int
+    agent_id: str
+    thread_id: str
+    sender_type: SenderType
+    content: str
+    channel: Optional[str] = None
+    timestamp: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ChatListItemOutput(BaseModel):
+    thread_id: str
+    last_message_content: str
+    last_message_timestamp: datetime
+    # --- ИЗМЕНЕНИЕ: Добавляем поля ---
+    last_message_sender_type: SenderType # От кого последнее сообщение
+    last_message_channel: Optional[str] = None # Канал последнего сообщения
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+    message_count: int
+
+    model_config = ConfigDict(from_attributes=True)
+
 
 # --- SQLAlchemy Models (Database Layer) ---
 
 class AgentConfigDB(Base):
     __tablename__ = "agent_configs"
 
-    # Use UUID for primary key if desired, otherwise keep string
-    # id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    id = Column(String, primary_key=True, index=True) # Using string ID for now
+    id = Column(String, primary_key=True, index=True)
     name = Column(String, index=True, nullable=False)
     description = Column(Text, nullable=True)
-    user_id = Column(String, index=True, nullable=False) # TODO: Add ForeignKey constraint when User model exists
-    # Store the flexible config structure as JSON
+    user_id = Column(String, index=True, nullable=False) # Добавлено nullable=False и index=True
     config_json = Column(JSON, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    # Add relationships later if needed, e.g., to User or ChatHistory
-    # owner = relationship("User", back_populates="agents")
-    # chat_history = relationship("ChatMessageDB", back_populates="agent")
+    # Связь с сообщениями чата (если нужно будет получать все сообщения агента)
+    chat_messages = relationship("ChatMessageDB", back_populates="agent_config")
 
-# TODO: Add ChatMessageDB model for storing history
-# class ChatMessageDB(Base):
-#     __tablename__ = "chat_messages"
-#     id = Column(Integer, primary_key=True, index=True) # Or UUID
-#     agent_id = Column(String, ForeignKey("agent_configs.id"), nullable=False, index=True)
-#     thread_id = Column(String, nullable=False, index=True)
-#     timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-#     sender_type = Column(String, nullable=False) # e.g., 'user', 'agent', 'system', 'tool'
-#     content = Column(Text, nullable=False)
-#     metadata_json = Column(JSON, nullable=True) # For tool calls, latency, etc.
-#
-#     agent = relationship("AgentConfigDB", back_populates="chat_history")
+
+# --- НОВОЕ: Модель для хранения истории чатов ---
+class ChatMessageDB(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(String, ForeignKey("agent_configs.id"), nullable=False, index=True)
+    thread_id = Column(String, nullable=False, index=True)
+    # Используем SQLEnum для хранения типа отправителя
+    sender_type = Column(SQLEnum(SenderType, name="sender_type_enum", create_type=True), nullable=False)
+    content = Column(Text, nullable=False)
+    channel = Column(String, nullable=True) # Канал, из которого пришло сообщение (websocket, telegram, etc.)
+    # Добавляем timestamp
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True, server_default=func.now()) # Добавляем server_default для удобства
+
+    # Связь с конфигом агента
+    agent_config = relationship("AgentConfigDB", back_populates="chat_messages")
+
+# --- КОНЕЦ НОВОГО ---

@@ -1,22 +1,31 @@
 import os
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status, Depends # Добавил Depends, если его нет
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field as PydanticField
 from typing import Dict, Any, Optional
 import redis.asyncio as redis
 import asyncio
 from contextlib import asynccontextmanager
+from sqlalchemy.exc import SQLAlchemyError
 
 # Импортируем зависимости и модули
 # --- ИСПРАВЛЕНИЕ: Удаляем импорт redis_pool ---
 from .redis_client import init_redis_pool, close_redis_pool, get_redis # Убрали redis_pool
 # --- Конец исправления ---
-from .db import init_db, close_db_engine, get_db, SessionLocal # Импортируем SessionLocal
+# --- ИЗМЕНЕНИЕ: Убедимся, что SessionLocal импортирован ---
+from .db import init_db, close_db_engine, get_db, SessionLocal # Импортируем SessionLocal (или AsyncSessionLocal, если имя другое)
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 from .process_manager import check_inactive_agents # Импортируем фоновую задачу
 from .api import agents as agents_api # Импортируем новый роутер для агентов
 from .api import websocket as websocket_api # Импортируем роутер для WebSocket
 from . import crud, process_manager, models # Добавляем импорты
+# --- ИЗМЕНЕНИЕ: Импортируем супервизор ---
+from .history_saver import supervise_history_saver # Импортируем супервизор
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
 
 # --- Configuration & Globals ---
 # Load .env - adjust path as needed
@@ -42,6 +51,10 @@ logger = logging.getLogger(__name__)
 
 redis_client: Optional[redis.Redis] = None # Уточняем тип
 inactivity_check_task: Optional[asyncio.Task] = None
+# --- ИЗМЕНЕНИЕ: Добавляем переменную для задачи history_saver ---
+history_saver_task: Optional[asyncio.Task] = None
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
 
 # --- Pydantic Models for API ---
 class AgentConfigInput(BaseModel):
@@ -66,7 +79,9 @@ class AgentStatus(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handles application startup and shutdown events."""
-    global redis_client, inactivity_check_task # Объявляем глобальные переменные
+    # --- ИЗМЕНЕНИЕ: Добавляем history_saver_task в global ---
+    global redis_client, inactivity_check_task, history_saver_task
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     # Startup
     logger.info("Agent Manager Service starting up...")
     # --- ИСПРАВЛЕНИЕ: Используем возвращаемое значение init_redis_pool ---
@@ -166,7 +181,7 @@ async def lifespan(app: FastAPI):
     # --- End auto-start ---
 
 
-    # Start the background task
+    # Start the background task for inactivity check
     # Проверяем redis_client
     if redis_client: # Запускаем задачу только если Redis доступен
         # Передаем redis_client в фоновую задачу
@@ -176,11 +191,37 @@ async def lifespan(app: FastAPI):
         logger.warning("Redis client instance not available, inactivity check task will not start.")
 
 
+    # --- ИЗМЕНЕНИЕ: Запуск супервизора history_saver ---
+    logger.info("Attempting to start History Saver Supervisor...")
+    try:
+        # Используем глобальный REDIS_URL и импортированный SessionLocal
+        history_saver_task = asyncio.create_task(
+            supervise_history_saver(REDIS_URL, SessionLocal) # Используем SessionLocal
+        )
+        # Сохраняем задачу в глобальную переменную (app.state не используется в текущей логике)
+        logger.info(f"History Saver Supervisor task created successfully (ID: {id(history_saver_task)}).")
+    except Exception as e:
+        logger.error(f"Failed to create History Saver Supervisor task: {e}", exc_info=True)
+        history_saver_task = None # Убедимся, что None при ошибке
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
     yield
     # Shutdown
     logger.info("Agent Manager Service shutting down...")
 
-    # Cancel the background task
+    # --- ИЗМЕНЕНИЕ: Остановка супервизора history_saver ---
+    if history_saver_task and not history_saver_task.done():
+        logger.info("Attempting to cancel History Saver Supervisor task...")
+        history_saver_task.cancel()
+        try:
+            await history_saver_task
+        except asyncio.CancelledError:
+            logger.info("History Saver Supervisor task successfully cancelled.")
+        except Exception as e:
+            logger.error(f"Error during History Saver Supervisor shutdown: {e}", exc_info=True)
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
+    # Cancel the inactivity check task
     if inactivity_check_task and not inactivity_check_task.done(): # Проверяем, что задача существует и не завершена
         logger.info("Cancelling inactivity check task...")
         inactivity_check_task.cancel()
@@ -276,6 +317,35 @@ async def read_root():
         "redis_status": redis_status,
         "db_status": db_status # Add DB status
     }
+
+# --- Exception Handlers ---
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    # Log the detailed validation errors
+    logger.warning(f"Request validation error: {exc.errors()}")
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors()},
+    )
+
+@app.exception_handler(SQLAlchemyError)
+async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
+    # Log the database error
+    logger.error(f"Database error during request: {exc}", exc_info=True) # Log traceback
+    # В реальном приложении можно скрыть детали ошибки от клиента
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": f"An internal database error occurred: {type(exc).__name__}"},
+    )
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    # Log any other unexpected errors
+    logger.error(f"Unhandled exception during request: {exc}", exc_info=True) # Log traceback
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": f"An unexpected internal server error occurred: {type(exc).__name__}"},
+    )
 
 # --- Main execution (for running with uvicorn directly) ---
 # This part is usually not needed if using `make manager` target

@@ -6,6 +6,7 @@ import argparse
 import signal
 import sys
 from typing import Dict, Optional, Any
+from datetime import datetime, timezone # <--- Добавляем datetime и timezone
 from dotenv import load_dotenv
 import requests
 import redis.asyncio as redis
@@ -17,16 +18,23 @@ from .graph_factory import create_agent_app # Импортируем фабри�
 from langchain_core.messages import HumanMessage, AIMessage # Ensure AIMessage is imported
 
 # --- Configuration & Setup ---
+REDIS_HISTORY_QUEUE_NAME = "chat_history_queue" # Имя очереди по умолчанию
+
 def load_environment():
     """Loads environment variables from .env file."""
+    global REDIS_HISTORY_QUEUE_NAME # <--- Объявляем глобальной для изменения
     # Assume .env is in the parent directory (project root)
     dotenv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env'))
     if os.path.exists(dotenv_path):
         load_dotenv(dotenv_path=dotenv_path)
         print(f"Agent Runner: Loaded environment variables from {dotenv_path}")
+        # Перезаписываем значение по умолчанию, если оно есть в .env
+        REDIS_HISTORY_QUEUE_NAME = os.getenv("REDIS_HISTORY_QUEUE_NAME", REDIS_HISTORY_QUEUE_NAME)
+        print(f"Agent Runner: Using Redis history queue: {REDIS_HISTORY_QUEUE_NAME}")
         return True
     else:
         print(f"Agent Runner: Warning! .env file not found at {dotenv_path}")
+        print(f"Agent Runner: Using default Redis history queue: {REDIS_HISTORY_QUEUE_NAME}")
         return False
 
 # --- Custom Logging Filter ---
@@ -219,82 +227,100 @@ async def update_redis_status(redis_client: redis.Redis, status_key: str, status
 
 
 async def redis_listener(app, agent_id: str, redis_client: redis.Redis, static_state_config: Dict[str, Any]):
-    """Listens to Redis input channel, processes messages, and publishes output."""
+    """Listens to Redis input channel, processes messages, publishes output, and queues history."""
     log_adapter = logging.LoggerAdapter(logging.getLogger(__name__), {'agent_id': agent_id}) # Use __name__ for logger
     input_channel = f"agent:{agent_id}:input"
     output_channel = f"agent:{agent_id}:output"
     status_key = f"agent_status:{agent_id}"
+    history_queue = REDIS_HISTORY_QUEUE_NAME # Используем загруженное имя очереди
 
     pubsub = None # Initialize pubsub to None
 
     async def update_status(status: str, error_detail: Optional[str] = None):
         """Helper to update Redis status using the outer function."""
-        # Используем глобальный running флаг для определения, нужно ли обновлять PID
-        # При перезапуске PID не меняется, но статус может быть restarting
         pid_to_set = os.getpid() if running else None
         await update_redis_status(redis_client, status_key, status, pid_to_set, error_detail, log_adapter)
+
+    async def queue_message_for_history(sender_type: str, thread_id: str, content: str, channel: Optional[str]):
+        """Helper function to push message details to the history queue."""
+        try:
+            history_payload = {
+                "agent_id": agent_id,
+                "thread_id": thread_id,
+                "sender_type": sender_type,
+                "content": content,
+                "channel": channel,
+                "timestamp": datetime.now(timezone.utc).isoformat() # Используем UTC ISO формат
+            }
+            await redis_client.lpush(history_queue, json.dumps(history_payload))
+            log_adapter.debug(f"Queued {sender_type} message for history (Thread: {thread_id})")
+        except redis.RedisError as e:
+            log_adapter.error(f"Failed to queue message for history (Thread: {thread_id}): {e}")
+        except Exception as e:
+            log_adapter.error(f"Unexpected error queuing message for history (Thread: {thread_id}): {e}", exc_info=True)
 
 
     try:
         pubsub = redis_client.pubsub()
         await pubsub.subscribe(input_channel)
         log_adapter.info(f"Subscribed to Redis channel: {input_channel}")
-        # Не устанавливаем running сразу, ждем завершения инициализации в main_loop
-        # await update_status("running") # Set status to running after successful setup
 
-        global running, needs_restart # Добавляем needs_restart
+        global running, needs_restart
         last_active_update_time = 0
-        update_interval = 30 # Update last_active every 30 seconds
+        update_interval = 30
 
-        while running and not needs_restart: # Проверяем флаги running и needs_restart
+        while running and not needs_restart:
             try:
-                # Update last active time periodically
                 current_time = time.time()
                 if current_time - last_active_update_time > update_interval:
                     await redis_client.hset(status_key, "last_active", current_time)
                     last_active_update_time = current_time
 
-                # Listen for messages with timeout
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.5)
-                if not running or needs_restart: # Проверяем флаги после get_message
+                if not running or needs_restart:
                      break
 
                 if message and message.get("type") == "message":
-                    # ... (обработка входящих сообщений как и раньше) ...
                     raw_data = message['data']
-                    # Decode JSON first
                     try:
                         data = json.loads(raw_data)
                         log_adapter.info(f"Received message from Redis: {data}")
                     except json.JSONDecodeError:
                         log_adapter.error(f"Received invalid JSON from Redis: {raw_data[:200]}...")
-                        continue # Skip processing invalid message
+                        continue
 
-                    # Update last active time immediately on message
                     await redis_client.hset(status_key, "last_active", time.time())
                     last_active_update_time = time.time()
 
-                    thread_id = "unknown" # Default thread_id
+                    thread_id = "unknown"
                     try:
-                        user_message = data.get("message")
-                        thread_id = data.get("thread_id") # Update thread_id if available
+                        user_message_content = data.get("message")
+                        thread_id = data.get("thread_id")
                         user_data = data.get("user_data", {})
                         channel = data.get("channel", "unknown")
 
-                        if not user_message or not thread_id:
+                        if not user_message_content or not thread_id:
                              log_adapter.error("Missing 'message' or 'thread_id' in Redis payload.")
                              continue
 
-                        # Prepare initial state for the graph
+                        # --- ИЗМЕНЕНИЕ: Ставим сообщение пользователя в очередь ---
+                        await queue_message_for_history(
+                            sender_type="user",
+                            thread_id=thread_id,
+                            content=user_message_content,
+                            channel=channel
+                        )
+                        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
                         graph_input = {
-                            "messages": [HumanMessage(content=user_message)],
+                            "messages": [HumanMessage(content=user_message_content)],
                             "user_data": user_data,
                             "channel": channel,
-                            "original_question": user_message,
-                            "question": user_message,
+                            "original_question": user_message_content,
+                            "question": user_message_content,
                             "rewrite_count": 0,
                             "documents": [],
-                            **static_state_config # Add static config here
+                            **static_state_config
                         }
                         config = {"configurable": {"thread_id": str(thread_id), "agent_id": agent_id}}
 
@@ -303,7 +329,7 @@ async def redis_listener(app, agent_id: str, redis_client: redis.Redis, static_s
                         final_message_object = None
 
                         async for output in app.astream(graph_input, config, stream_mode="updates"):
-                            if not running or needs_restart: # Check flags during stream
+                            if not running or needs_restart:
                                 log_adapter.warning("Shutdown or restart requested during graph stream.")
                                 break
 
@@ -316,16 +342,24 @@ async def redis_listener(app, agent_id: str, redis_client: redis.Redis, static_s
                                              final_response_content = last_msg.content
                                              final_message_object = last_msg
 
-                        if not running or needs_restart: break # Exit main loop if flags set during stream
+                        if not running or needs_restart: break
 
                         log_adapter.info(f"Graph execution finished. Final response: {final_response_content[:100]}...")
 
-                        # Serialize response payload
+                        # --- ИЗМЕНЕНИЕ: Ставим сообщение агента в очередь ПЕРЕД отправкой ---
+                        await queue_message_for_history(
+                            sender_type="agent",
+                            thread_id=thread_id,
+                            content=final_response_content,
+                            channel=channel
+                        )
+                        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
                         response_payload_dict = {
                             "thread_id": thread_id,
                             "response": final_response_content,
                             "message_object": None,
-                            "channel": channel # <--- Добавляем исходный канал сюда
+                            "channel": channel
                         }
                         if final_message_object:
                             try:
@@ -338,32 +372,40 @@ async def redis_listener(app, agent_id: str, redis_client: redis.Redis, static_s
 
                         response_payload = json.dumps(response_payload_dict)
                         await redis_client.publish(output_channel, response_payload)
-                        log_adapter.info(f"Published response to Redis channel: {output_channel}")
+                        log_adapter.info(f"Published response to Redis channel: {output_channel}") # <--- Ваша выделенная строка
 
                     except asyncio.CancelledError:
                          log_adapter.info("Graph invocation cancelled.")
-                         if running and not needs_restart: raise # Re-raise only if not due to shutdown/restart
+                         if running and not needs_restart: raise
                     except Exception as e:
                         log_adapter.error(f"Error processing message: {e}", exc_info=True)
                         error_payload = json.dumps({"thread_id": thread_id, "error": f"Agent error: {e}"})
                         await redis_client.publish(output_channel, error_payload)
+                        # --- ИЗМЕНЕНИЕ: Ставим системное сообщение об ошибке в очередь? (Опционально) ---
+                        # await queue_message_for_history(
+                        #     sender_type="system", # Или оставить agent?
+                        #     thread_id=thread_id,
+                        #     content=f"Error processing message: {e}",
+                        #     channel=channel
+                        # )
+                        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
 
             except asyncio.CancelledError:
                 log_adapter.info("Redis listener task cancelled.")
-                break # Выходим из цикла
+                break
             except redis.exceptions.ConnectionError as e:
                  log_adapter.error(f"Redis connection error: {e}. Attempting to reconnect...")
                  await update_status("error_redis", f"Connection failed: {e}")
-                 await asyncio.sleep(5) # Wait before next attempt
+                 await asyncio.sleep(5)
                  if pubsub:
                      try:
-                         # Проверяем running и needs_restart перед переподпиской
                          if running and not needs_restart:
                              await pubsub.unsubscribe(input_channel)
                              await pubsub.subscribe(input_channel)
                              log_adapter.info("Resubscribed after connection error.")
-                             await update_status("running") # Back to running if resubscribed
-                         elif running and not needs_restart: # Если флаги ОК, но pubsub не подключен
+                             await update_status("running")
+                         elif running and not needs_restart:
                               log_adapter.warning("Pubsub disconnected, cannot resubscribe yet.")
                               pubsub = redis_client.pubsub()
                               await pubsub.subscribe(input_channel)
@@ -372,17 +414,16 @@ async def redis_listener(app, agent_id: str, redis_client: redis.Redis, static_s
 
                      except Exception as resub_e:
                          log_adapter.error(f"Failed to resubscribe after connection error: {resub_e}")
-                         await asyncio.sleep(10) # Longer wait if resubscribe fails
+                         await asyncio.sleep(10)
             except Exception as e:
                 log_adapter.error(f"Error in Redis listener loop: {e}", exc_info=True)
                 await update_status("error_listener_unexpected", f"Listener loop error: {e}")
-                await asyncio.sleep(1) # Avoid tight loop on unexpected errors
+                await asyncio.sleep(1)
 
     except Exception as setup_e:
          log_adapter.error(f"Failed during Redis listener setup: {setup_e}", exc_info=True)
          await update_status("error_listener_setup", f"Listener setup failed: {setup_e}")
     finally:
-        # Cleanup on exit
         log_adapter.info("Cleaning up Redis listener...")
         if pubsub:
             try:
@@ -391,16 +432,15 @@ async def redis_listener(app, agent_id: str, redis_client: redis.Redis, static_s
                 log_adapter.info("Unsubscribed from Redis and closed pubsub connection.")
             except Exception as clean_e:
                  log_adapter.error(f"Error during Redis cleanup: {clean_e}")
-        # Final status update depends on why we exited
         if needs_restart:
              log_adapter.info("Redis listener finished due to restart request.")
-             # Статус будет обновлен в main_loop
         elif not running:
              log_adapter.info("Redis listener finished due to shutdown request.")
              await update_status("stopped")
-        else: # If loop exited due to error
+        else:
              log_adapter.warning("Redis listener finished unexpectedly (error).")
-             await update_status("error_listener_unexpected", "Listener unexpectedly stopped")
+             # Не обновляем статус на ошибку здесь, т.к. это может быть нормальное завершение из-за ошибки выше
+             # await update_status("error_listener_unexpected", "Listener unexpectedly stopped")
 
 
 # --- Main Execution Loop ---

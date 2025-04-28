@@ -13,6 +13,10 @@ from ..import process_manager
 import json
 import asyncio
 
+# --- ИЗМЕНЕНИЕ: Добавляем импорты для чатов ---
+from ..models import ChatMessageOutput, ChatListItemOutput
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -676,4 +680,71 @@ async def restart_integration(
         return {"message": f"{integration_type.value} integration restart initiated, but an unexpected error occurred: {e}"}
 
     return {"message": f"{integration_type.value} integration restart initiated"}
+
+# --- НОВОЕ: Эндпоинты для истории чатов ---
+
+@router.get(
+    "/{agent_id}/chats",
+    response_model=List[ChatListItemOutput],
+    summary="List chat threads for an agent",
+    tags=["Chats"] # Добавляем тег Chats
+)
+async def list_agent_chats(
+    agent_id: str,
+    skip: int = Query(0, ge=0, description="Number of threads to skip"),
+    limit: int = Query(100, ge=1, le=500, description="Maximum number of threads to return"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retrieves a list of unique chat threads for the specified agent,
+    ordered by the timestamp of the last message in descending order.
+    Includes details of the last message for each thread.
+    """
+    # Проверяем, существует ли агент
+    db_agent = await crud.db_get_agent_config(db, agent_id)
+    if not db_agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+
+    try:
+        chats = await crud.db_get_agent_chats(db, agent_id, skip=skip, limit=limit)
+        return chats
+    except Exception as e:
+        logger.error(f"Error fetching chat list for agent {agent_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve chat list.")
+
+
+@router.get(
+    "/{agent_id}/chats/{thread_id}",
+    response_model=List[ChatMessageOutput],
+    summary="Get chat history for a specific thread",
+    tags=["Chats"] # Добавляем тег Chats
+)
+async def get_chat_history(
+    agent_id: str,
+    thread_id: str,
+    skip: int = Query(0, ge=0, description="Number of messages to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of messages to return"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retrieves the chat message history for a specific agent and thread ID,
+    ordered by timestamp in ascending order.
+    """
+    # Проверяем, существует ли агент (опционально, но полезно)
+    db_agent = await crud.db_get_agent_config(db, agent_id)
+    if not db_agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+
+    try:
+        history = await crud.db_get_chat_history(db, agent_id, thread_id, skip=skip, limit=limit)
+        # Проверяем, есть ли история для данного thread_id. Если нет, можно вернуть 404 или пустой список.
+        # FastAPI автоматически вернет пустой список, если history пуст, что обычно является ожидаемым поведением.
+        # if not history and skip == 0: # Проверка, что история вообще существует для этого треда
+        #     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat thread not found or is empty")
+        return history
+    except Exception as e:
+        logger.error(f"Error fetching chat history for agent {agent_id}, thread {thread_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve chat history.")
+
+# --- КОНЕЦ НОВОГО ---
 
