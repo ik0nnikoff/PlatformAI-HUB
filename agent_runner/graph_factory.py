@@ -4,6 +4,9 @@ import logging
 from dotenv import load_dotenv
 import redis.asyncio as redis
 from pydantic import BaseModel, Field
+# --- ДОБАВЛЕНО: Импорт datetime ---
+from datetime import datetime
+# --- КОНЕЦ ДОБАВЛЕНИЯ ---
 from typing import Any, Dict, Literal, Optional, Tuple
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
@@ -131,16 +134,17 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
         node_temperature = state["temperature"]
         node_model_id = state["model_id"]
 
-        # --- УДАЛЕНО: Логирование состояния перед вызовом LLM ---
-        # node_log_adapter.info(f"Agent Node State - Model ID: {node_model_id}")
-        # node_log_adapter.info(f"Agent Node State - Temperature: {node_temperature}")
-        # node_log_adapter.info(f"Agent Node State - System Prompt: '{node_system_prompt}'")
-        # --- Конец удаленного кода ---
+        # --- ДОБАВЛЕНО: Вставка текущего времени ---
+        # Добавляем плейсхолдер {current_time} в системный промпт, если его еще нет
+        if "{current_time}" not in node_system_prompt:
+            node_system_prompt += "\nТекущее время: {current_time}"
 
         prompt = ChatPromptTemplate.from_messages([
             ("system", node_system_prompt),
             MessagesPlaceholder(variable_name="messages")
-        ])
+        ]).partial(current_time=datetime.now().isoformat()) # Вставляем текущее время
+        # --- КОНЕЦ ДОБАВЛЕНИЯ ---
+
         model = ChatOpenAI(temperature=node_temperature, streaming=True, model=node_model_id)
 
         # Use configured_tools from the outer scope
@@ -155,11 +159,6 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
 
         chain = prompt | model
         try:
-            # --- УДАЛЕНО: Логирование сообщений, отправляемых в LLM ---
-            # full_prompt_messages = prompt.format_messages(messages=messages)
-            # node_log_adapter.info(f"Messages sent to LLM: {full_prompt_messages}")
-            # --- Конец удаленного кода ---
-
             response = await chain.ainvoke({"messages": messages}, config=config)
             return {"messages": [response]}
         except Exception as e:
@@ -310,19 +309,28 @@ Rephrased Question:"""
         node_log_adapter.info(f"Generating answer for question: {current_question} using {len(documents)} documents.")
         documents_str = "\n\n".join(documents)
 
-        prompt = PromptTemplate(
-            template="""Ты помощник для задач с ответами на вопросы. Используйте следующие фрагменты извлеченного контекста, чтобы ответить на вопрос.
+        # --- ДОБАВЛЕНО: Вставка текущего времени ---
+        prompt_template_str = """Ты помощник для задач с ответами на вопросы. Используйте следующие фрагменты извлеченного контекста, чтобы ответить на вопрос.
             Если у тебя нет ответа на вопрос, просто скажи что у тебя нет данных для ответа на этот вопрос, предложи переформулировать фопрос.
             Старайся отвечать кратко и содержательно.\n
+                Текущее время: {current_time}\n
                 Вопрос: {question} \n
                 Контекст: {context} \n
-                Ответ:""",
-            input_variables=["context", "question"],
-        )
+                Ответ:"""
+
+        prompt = PromptTemplate(
+            template=prompt_template_str,
+            input_variables=["context", "question", "current_time"],
+        ).partial(current_time=datetime.now().isoformat()) # Вставляем текущее время
+        # --- КОНЕЦ ДОБАВЛЕНИЯ ---
+
         llm = ChatOpenAI(model_name=node_model_id, temperature=node_temperature, streaming=True)
         rag_chain = prompt | llm
         try:
+            # --- ИЗМЕНЕНО: Передаем current_time в invoke (хотя оно уже в partial) ---
+            # partial уже вставил время, но для ясности можно оставить
             response = await rag_chain.ainvoke({"context": documents_str, "question": current_question})
+            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
             if not isinstance(response, BaseMessage):
                  response = AIMessage(content=str(response))
             return {"messages": [response]}
