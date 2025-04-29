@@ -1,11 +1,17 @@
 import logging
-from typing import List, Optional
+# --- ИЗМЕНЕНИЕ: Добавляем select, update, delete ---
+from sqlalchemy import select, update, delete, desc, func as sql_func # Добавляем delete и func
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func, label, and_, text, literal_column, delete, asc # Добавляем импорт asc
-from sqlalchemy.orm import aliased
-from datetime import datetime # Импортируем datetime
-
-from .models import AgentConfigInput, AgentConfigDB, ChatMessageDB, ChatListItemOutput, SenderType # Импортируем SenderType
+# --- ИЗМЕНЕНИЕ: Добавляем UserDB ---
+from .models import AgentConfigDB, AgentConfigInput, ChatListItemOutput, ChatMessageDB, SenderType, UserDB # Добавляем UserDB
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
+# --- УДАЛЕНО: Убираем неиспользуемый импорт ---
+# from .schemas import AgentConfigStructure # Используем схему для валидации
+# --- КОНЕЦ УДАЛЕНИЯ ---
+from typing import List, Optional, Dict, Any
+from datetime import datetime, timezone
+from sqlalchemy.orm import aliased # Добавляем aliased
 
 logger = logging.getLogger(__name__)
 
@@ -202,8 +208,8 @@ async def db_get_agent_chats(db: AsyncSession, agent_id: str, skip: int = 0, lim
             ChatMessageDB.timestamp.label("last_message_timestamp"),
             ChatMessageDB.sender_type.label("last_message_sender_type"),
             ChatMessageDB.channel.label("last_message_channel"),
-            func.count(ChatMessageDB.id).over(partition_by=ChatMessageDB.thread_id).label("message_count"),
-            func.row_number().over(partition_by=ChatMessageDB.thread_id, order_by=ChatMessageDB.timestamp.desc()).label("rn_desc")
+            sql_func.count(ChatMessageDB.id).over(partition_by=ChatMessageDB.thread_id).label("message_count"), # Используем sql_func
+            sql_func.row_number().over(partition_by=ChatMessageDB.thread_id, order_by=ChatMessageDB.timestamp.desc()).label("rn_desc") # Используем sql_func
         )
         .where(ChatMessageDB.agent_id == agent_id)
         .subquery('last_ranked_messages')
@@ -216,7 +222,7 @@ async def db_get_agent_chats(db: AsyncSession, agent_id: str, skip: int = 0, lim
             ChatMessageDB.thread_id,
             ChatMessageDB.content.label("first_message_content"),
             ChatMessageDB.timestamp.label("first_message_timestamp"),
-            func.row_number().over(partition_by=ChatMessageDB.thread_id, order_by=ChatMessageDB.timestamp.asc()).label("rn_asc")
+            sql_func.row_number().over(partition_by=ChatMessageDB.thread_id, order_by=ChatMessageDB.timestamp.asc()).label("rn_asc") # Используем sql_func
         )
         .where(ChatMessageDB.agent_id == agent_id)
         .subquery('first_ranked_messages')
@@ -294,5 +300,86 @@ async def db_delete_chat_thread(db: AsyncSession, agent_id: str, thread_id: str)
         await db.rollback()
         logger.error(f"Error deleting chat thread for Agent={agent_id}, Thread={thread_id}: {e}", exc_info=True)
         raise # Передаем исключение дальше
+
+# --- КОНЕЦ НОВОГО ---
+
+# --- НОВОЕ: CRUD операции для пользователей ---
+
+async def get_user_by_platform_id(db: AsyncSession, platform: str, platform_user_id: str) -> Optional[UserDB]:
+    """Retrieves a user by their platform and platform-specific ID."""
+    try:
+        result = await db.execute(
+            select(UserDB).where(
+                UserDB.platform == platform,
+                UserDB.platform_user_id == platform_user_id
+            )
+        )
+        return result.scalar_one_or_none()
+    except Exception as e:
+        logger.error(f"Error getting user by platform ID ({platform}/{platform_user_id}): {e}", exc_info=True)
+        return None
+
+async def create_or_update_user(
+    db: AsyncSession,
+    platform: str,
+    platform_user_id: str,
+    user_details: Dict[str, Any]
+) -> Optional[UserDB]:
+    """
+    Creates a new user or updates an existing one based on platform and platform_user_id.
+
+    Args:
+        db: The database session.
+        platform: The platform identifier (e.g., 'telegram').
+        platform_user_id: The user's ID on that platform.
+        user_details: A dictionary containing user fields to create/update
+                      (e.g., 'username', 'first_name', 'last_name', 'phone_number', 'is_authorized').
+
+    Returns:
+        The created or updated UserDB object, or None if an error occurred.
+    """
+    try:
+        # Check if user exists
+        existing_user = await get_user_by_platform_id(db, platform, platform_user_id)
+
+        if existing_user:
+            # Update existing user
+            # Filter out None values from user_details to avoid overwriting existing data with None
+            update_data = {k: v for k, v in user_details.items() if v is not None}
+            # Ensure updated_at is updated
+            update_data['updated_at'] = datetime.now(timezone.utc)
+
+            await db.execute(
+                update(UserDB)
+                .where(UserDB.id == existing_user.id)
+                .values(**update_data)
+            )
+            # Refresh the object to get updated values (including updated_at)
+            await db.refresh(existing_user, attribute_names=list(update_data.keys()))
+            logger.info(f"Updated user: Platform={platform}, PlatformID={platform_user_id}, DB_ID={existing_user.id}")
+            await db.commit() # Commit after successful update
+            return existing_user
+        else:
+            # Create new user
+            new_user = UserDB(
+                platform=platform,
+                platform_user_id=platform_user_id,
+                username=user_details.get('username'),
+                first_name=user_details.get('first_name'),
+                last_name=user_details.get('last_name'),
+                phone_number=user_details.get('phone_number'),
+                is_authorized=user_details.get('is_authorized', False) # Default to False if not provided
+            )
+            db.add(new_user)
+            await db.flush() # Assigns ID to new_user
+            await db.refresh(new_user) # Load all attributes including defaults
+            logger.info(f"Created new user: Platform={platform}, PlatformID={platform_user_id}, DB_ID={new_user.id}")
+            await db.commit() # Commit after successful creation
+            return new_user
+
+    except Exception as e:
+        logger.error(f"Error creating/updating user ({platform}/{platform_user_id}): {e}", exc_info=True)
+        await db.rollback() # Rollback on error
+        return None
 
 # --- КОНЕЦ НОВОГО ---

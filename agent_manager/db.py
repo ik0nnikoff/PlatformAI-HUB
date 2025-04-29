@@ -57,6 +57,20 @@ async def init_db():
         return
     # In a real application, you might run migrations here or ensure connection
     logger.info("Database connection pool initialized.")
+    # --- ИЗМЕНЕНИЕ: Создание таблиц ---
+    try:
+        async with engine.begin() as conn:
+            # This will create tables based on Base.metadata if they don't exist
+            # Ensure all models inheriting from Base are imported before this runs
+            # (usually happens when importing models in main.py or crud.py)
+            from .models import Base # Импортируем Base здесь, чтобы все модели были загружены
+            await conn.run_sync(Base.metadata.create_all)
+            logger.info("Database tables checked/created successfully.")
+    except Exception as e:
+        logger.error(f"Error during table creation/check: {e}", exc_info=True)
+        # Consider if the application should stop if table creation fails
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
     # Example check: Try connecting
     try:
         async with engine.connect() as conn:

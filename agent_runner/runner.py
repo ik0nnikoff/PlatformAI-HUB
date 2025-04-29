@@ -344,6 +344,7 @@ async def redis_listener(
                         thread_id = data.get("thread_id")
                         user_data = data.get("user_data", {})
                         channel = data.get("channel", "unknown")
+                        platform_user_id = data.get("platform_user_id") # <--- Извлекаем platform_user_id
 
                         if not user_message_content or not thread_id:
                              log_adapter.error("Missing 'message' or 'thread_id' in Redis payload.")
@@ -434,6 +435,7 @@ async def redis_listener(
 
                         response_payload_dict = {
                             "thread_id": thread_id,
+                            "platform_user_id": platform_user_id, # <--- Добавляем platform_user_id
                             "response": final_response_content,
                             "message_object": None,
                             "channel": channel

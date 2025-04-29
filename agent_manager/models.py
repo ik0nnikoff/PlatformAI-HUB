@@ -5,7 +5,9 @@ from datetime import datetime
 
 # --- SQLAlchemy Imports ---
 # --- ИЗМЕНЕНИЕ: Добавляем Integer и ForeignKey ---
-from sqlalchemy import Column, String, Text, DateTime, func, JSON, Integer, ForeignKey, Enum as SQLEnum # Добавляем SQLEnum
+# --- ИЗМЕНЕНИЕ: Добавляем Boolean и UniqueConstraint ---
+from sqlalchemy import Column, String, Text, DateTime, func, JSON, Integer, ForeignKey, Enum as SQLEnum, Boolean, UniqueConstraint
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 # --- ИЗМЕНЕНИЕ: Добавляем relationship ---
 from sqlalchemy.orm import declarative_base, relationship
@@ -188,5 +190,26 @@ class ChatMessageDB(Base):
 
     # Связь с конфигом агента
     agent_config = relationship("AgentConfigDB", back_populates="chat_messages")
+
+# --- КОНЕЦ НОВОГО ---
+
+# --- НОВОЕ: Модель для хранения пользователей ---
+class UserDB(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    platform = Column(String, nullable=False, index=True) # e.g., 'telegram', 'vk', 'whatsapp'
+    platform_user_id = Column(String, nullable=False, index=True) # User ID on the specific platform
+    username = Column(String, nullable=True)
+    first_name = Column(String, nullable=True)
+    last_name = Column(String, nullable=True)
+    phone_number = Column(String, nullable=True, index=True)
+    is_authorized = Column(Boolean, default=False, nullable=False, index=True) # Authorization status within our system
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint('platform', 'platform_user_id', name='uq_user_platform_id'),
+    )
 
 # --- КОНЕЦ НОВОГО ---
