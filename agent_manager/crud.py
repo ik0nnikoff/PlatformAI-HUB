@@ -1,7 +1,7 @@
 import logging
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func, label, and_, text, literal_column, delete # Добавляем импорт delete
+from sqlalchemy import select, desc, func, label, and_, text, literal_column, delete, asc # Добавляем импорт asc
 from sqlalchemy.orm import aliased
 from datetime import datetime # Импортируем datetime
 
@@ -155,6 +155,37 @@ async def db_get_chat_history(db: AsyncSession, agent_id: str, thread_id: str, s
     messages = result.scalars().all()
     logger.debug(f"Fetched {len(messages)} messages for Agent={agent_id}, Thread={thread_id}")
     return messages
+
+# --- НОВОЕ: Функция для получения недавней истории для контекста ---
+async def db_get_recent_chat_history(db: AsyncSession, agent_id: str, thread_id: str, limit: int) -> List[ChatMessageDB]:
+    """
+    Retrieves the most recent 'limit' chat messages for a specific agent and thread,
+    ordered by timestamp ascending (oldest of the recent first).
+    """
+    logger.debug(f"Fetching recent chat history for context: Agent={agent_id}, Thread={thread_id}, Limit={limit}")
+    # Сначала получаем ID последних 'limit' сообщений, отсортированных по убыванию
+    subquery = (
+        select(ChatMessageDB.id)
+        .where(ChatMessageDB.agent_id == agent_id, ChatMessageDB.thread_id == thread_id)
+        .order_by(ChatMessageDB.timestamp.desc())
+        .limit(limit)
+        .subquery()
+    )
+    # Затем выбираем полные сообщения с этими ID и сортируем их по возрастанию
+    stmt = (
+        select(ChatMessageDB)
+        .join(subquery, ChatMessageDB.id == subquery.c.id)
+        .order_by(ChatMessageDB.timestamp.asc()) # Сортируем по возрастанию для правильного порядка в контексте
+    )
+    try:
+        result = await db.execute(stmt)
+        messages = result.scalars().all()
+        logger.debug(f"Fetched {len(messages)} recent messages for context: Agent={agent_id}, Thread={thread_id}")
+        return messages
+    except Exception as e:
+        logger.error(f"Error fetching recent chat history for context: Agent={agent_id}, Thread={thread_id}: {e}", exc_info=True)
+        return [] # Возвращаем пустой список в случае ошибки
+# --- КОНЕЦ НОВОГО ---
 
 
 async def db_get_agent_chats(db: AsyncSession, agent_id: str, skip: int = 0, limit: int = 100) -> List[ChatListItemOutput]:

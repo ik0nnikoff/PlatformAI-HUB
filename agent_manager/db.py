@@ -3,10 +3,28 @@ from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from contextlib import asynccontextmanager
+import sys # Добавляем импорт sys
 
 from .config import DATABASE_URL # Import from config
 
 logger = logging.getLogger(__name__)
+
+# --- ИЗМЕНЕНИЕ: Явная настройка логгера для этого модуля ---
+# Устанавливаем уровень
+logger.setLevel(logging.INFO)
+# Создаем обработчик (вывод в stdout)
+handler = logging.StreamHandler(sys.stdout)
+# Создаем простой форматтер, не использующий agent_id или другие специфичные поля
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+# Удаляем существующие обработчики, чтобы избежать дублирования
+if logger.hasHandlers():
+    logger.handlers.clear()
+# Добавляем наш обработчик
+logger.addHandler(handler)
+# Предотвращаем передачу сообщений корневому логгеру
+logger.propagate = False
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
 if not DATABASE_URL:
     logger.warning("DATABASE_URL not set in environment variables. Database features will be disabled.")
