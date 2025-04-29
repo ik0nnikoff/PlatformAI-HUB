@@ -1,8 +1,11 @@
 import logging
 # --- ИЗМЕНЕНИЕ: Добавляем select, update, delete ---
-from sqlalchemy import select, update, delete, desc, func as sql_func # Добавляем delete и func
+from sqlalchemy import select, update, delete, desc, func as sql_func, or_ # Добавляем delete, func и or_
 # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 from sqlalchemy.ext.asyncio import AsyncSession
+# --- НОВОЕ: Импортируем SQLAlchemyError ---
+from sqlalchemy.exc import SQLAlchemyError
+# --- КОНЕЦ НОВОГО ---
 # --- ИЗМЕНЕНИЕ: Добавляем UserDB ---
 from .models import AgentConfigDB, AgentConfigInput, ChatListItemOutput, ChatMessageDB, SenderType, UserDB # Добавляем UserDB
 # --- КОНЕЦ ИЗМЕНЕНИЯ ---
@@ -382,4 +385,53 @@ async def create_or_update_user(
         await db.rollback() # Rollback on error
         return None
 
+# --- КОНЕЦ НОВОГО ---
+
+# --- НОВОЕ: Функция для получения пользователей с фильтрами ---
+async def db_get_users(
+    db: AsyncSession,
+    platform: Optional[str] = None,
+    is_authorized: Optional[bool] = None,
+    search_query: Optional[str] = None, # Для поиска по имени, username, телефону
+    skip: int = 0,
+    limit: int = 100
+) -> List[UserDB]:
+    """
+    Retrieves a list of users from the database with optional filtering and pagination.
+    """
+    logger.debug(f"Fetching users with filters: platform={platform}, is_authorized={is_authorized}, search='{search_query}', skip={skip}, limit={limit}")
+    try:
+        stmt = select(UserDB)
+
+        if platform:
+            stmt = stmt.where(UserDB.platform == platform)
+        if is_authorized is not None:
+            stmt = stmt.where(UserDB.is_authorized == is_authorized)
+        if search_query:
+            # Ищем по части строки в нескольких полях
+            search_ilike = f"%{search_query}%"
+            # --- ИЗМЕНЕНИЕ: Используем or_ ---
+            stmt = stmt.where(
+                or_(
+                    UserDB.platform_user_id.ilike(search_ilike),
+                    UserDB.phone_number.ilike(search_ilike),
+                    UserDB.first_name.ilike(search_ilike), # <--- Строка 424
+                    UserDB.last_name.ilike(search_ilike),
+                    UserDB.username.ilike(search_ilike)
+                )
+            )
+            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
+        stmt = stmt.order_by(desc(UserDB.updated_at)).offset(skip).limit(limit)
+
+        result = await db.execute(stmt)
+        users = result.scalars().all()
+        logger.debug(f"Found {len(users)} users matching criteria.")
+        return users
+    except SQLAlchemyError as e:
+        logger.error(f"Database error fetching users: {e}", exc_info=True)
+        raise # Передаем исключение выше для обработки в API
+    except Exception as e:
+        logger.error(f"Unexpected error fetching users: {e}", exc_info=True)
+        raise
 # --- КОНЕЦ НОВОГО ---

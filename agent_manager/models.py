@@ -157,6 +157,23 @@ class ChatListItemOutput(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+# --- НОВОЕ: Pydantic модель для вывода пользователя ---
+class UserOutput(BaseModel):
+    id: int
+    platform: str
+    platform_user_id: str
+    phone_number: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    username: Optional[str] = None
+    is_authorized: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+# --- КОНЕЦ НОВОГО ---
+
+
 # --- SQLAlchemy Models (Database Layer) ---
 
 class AgentConfigDB(Base):

@@ -21,6 +21,9 @@ from .db import init_db, close_db_engine, get_db, SessionLocal # Импорти�
 from .process_manager import check_inactive_agents # Импортируем фоновую задачу
 from .api import agents as agents_api # Импортируем новый роутер для агентов
 from .api import websocket as websocket_api # Импортируем роутер для WebSocket
+# --- НОВОЕ: Импортируем роутер для пользователей ---
+from .api import users as users_api
+# --- КОНЕЦ НОВОГО ---
 from . import crud, process_manager, models # Добавляем импорты
 # --- ИЗМЕНЕНИЕ: Импортируем супервизор ---
 from .history_saver import supervise_history_saver, REDIS_URL as HISTORY_REDIS_URL # Импортируем супервизора и URL
@@ -147,7 +150,7 @@ async def lifespan(app: FastAPI):
                                 # --- ИСПРАВЛЕНИЕ: Извлекаем токен и передаем его ---
                                 integration_settings = integration.get("settings", {})
                                 bot_token = integration_settings.get("botToken")
-                                if bot_token:
+                                if (bot_token):
                                     logger.info(f"Initiating auto-start for Telegram integration for agent: {agent.id}")
                                     # Создаем задачу для запуска интеграции Telegram, передавая настройки
                                     start_tasks.append(
@@ -264,6 +267,11 @@ app = FastAPI(
         {"name": "Agents", "description": "Manage agent configurations and processes."},
         {"name": "Integrations", "description": "Manage agent integrations (e.g., Telegram)."},
         {"name": "Status", "description": "Service status endpoints."},
+        # --- НОВОЕ: Добавляем тег для пользователей ---
+        {"name": "Users", "description": "Manage users."},
+        # --- КОНЕЦ НОВОГО ---
+        {"name": "Chats", "description": "Access chat history."}, # Добавляем тег Chats
+        {"name": "WebSocket", "description": "WebSocket communication."}, # Добавляем тег WebSocket
         {"name": "Internal", "description": "Internal endpoints used by other services (e.g., agent runner)."}
     ]
 )
@@ -292,6 +300,9 @@ app.add_middleware(
 # Используем роутер из agents.py
 app.include_router(agents_api.router, prefix="/agents", tags=["Agents"])
 app.include_router(websocket_api.router, tags=["WebSocket"]) # Добавляем роутер WebSocket
+# --- НОВОЕ: Подключаем роутер для пользователей ---
+app.include_router(users_api.router, prefix="/users", tags=["Users"])
+# --- КОНЕЦ НОВОГО ---
 
 # --- Root Endpoint ---
 @app.get("/", tags=["Status"])
