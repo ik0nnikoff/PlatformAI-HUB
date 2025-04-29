@@ -130,66 +130,148 @@ async def run_history_saver_worker(
 
 async def supervise_history_saver(
     redis_url: str,
-    # --- ИЗМЕНЕНИЕ: Используем SessionLocal в type hint ---
-    db_session_factory: async_sessionmaker[AsyncSession] # Тип фабрики остается прежним
+    db_session_factory: async_sessionmaker[AsyncSession],
+    # --- ИЗМЕНЕНИЕ: Добавляем shutdown_event ---
+    shutdown_event: asyncio.Event
     # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 ):
     """
     Запускает, мониторит и перезапускает воркер сохранения истории при сбоях.
+    Останавливается при установке shutdown_event.
     """
     logger.info("History Saver Supervisor started.")
-    while True:
+
+    while not shutdown_event.is_set(): # Проверяем событие в начале каждой итерации
         redis_client = None
         worker_task = None
+        # --- ИЗМЕНЕНИЕ: Создаем задачу ожидания события ---
+        shutdown_waiter = asyncio.create_task(shutdown_event.wait(), name="ShutdownWaiter")
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+        should_restart = False # По умолчанию не перезапускаем, только если воркер упал
+
         try:
             # Создаем Redis клиент для воркера
             redis_client = redis.from_url(redis_url)
-            await redis_client.ping() # Проверяем соединение
+            await redis_client.ping()
             logger.info("Redis connection successful for History Saver.")
 
             # Запускаем воркер как задачу asyncio
             worker_task = asyncio.create_task(
-                run_history_saver_worker(redis_client, db_session_factory) # Передаем SessionLocal
+                run_history_saver_worker(redis_client, db_session_factory),
+                name="HistoryWorker"
             )
             logger.info(f"History Saver Worker task created (ID: {id(worker_task)}).")
 
-            # Ожидаем завершения воркера
-            await worker_task
+            # --- ИЗМЕНЕНИЕ: Ожидаем либо воркера, либо события ---
+            done, pending = await asyncio.wait(
+                [worker_task, shutdown_waiter],
+                return_when=asyncio.FIRST_COMPLETED
+            )
 
-            # Если воркер завершился сам (без CancelledError), это неожиданно
-            logger.warning(f"History Saver Worker task {id(worker_task)} finished unexpectedly.")
+            if shutdown_waiter in done:
+                # Событие завершения установлено
+                logger.info("Supervisor received shutdown signal via event.")
+                if worker_task in pending:
+                    logger.info("Cancelling worker task due to shutdown signal...")
+                    worker_task.cancel()
+                    # Даем шанс воркеру завершиться чисто
+                    await asyncio.wait([worker_task], timeout=5.0)
+                break # Выходим из цикла while
+
+            if worker_task in done:
+                # Воркер завершился первым
+                try:
+                    # Проверяем, не было ли исключения в воркере
+                    worker_task.result()
+                    # Если исключения не было, это неожиданно (кроме случая отмены)
+                    if not worker_task.cancelled():
+                         logger.warning(f"History Saver Worker task {id(worker_task)} finished without error and without being cancelled.")
+                         should_restart = True # Перезапускаем, если завершился сам по себе
+                    else:
+                         # Воркер был отменен (возможно, из-за ошибки Redis или другой проблемы)
+                         # Не перезапускаем, если он был отменен
+                         logger.info("History Saver Worker task was cancelled.")
+
+                except (redis.RedisError, Exception) as e:
+                     # Воркер завершился с ошибкой
+                     logger.error(f"History Saver Worker task failed with error: {e}", exc_info=isinstance(e, Exception) and not isinstance(e, redis.RedisError))
+                     should_restart = True # Перезапускаем при ошибке
+
+                # Если воркер завершился (неважно как), а событие УЖЕ установлено, выходим
+                if shutdown_event.is_set():
+                    logger.info("Worker finished, and shutdown event is set. Exiting supervisor loop.")
+                    break # Выходим из цикла while
+            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
         except redis.RedisError as e:
-            logger.error(f"History Saver Supervisor: Failed to connect to Redis at {redis_url}: {e}")
+            # Ошибка при создании клиента Redis
+            logger.error(f"History Saver Supervisor: Failed to connect to Redis: {e}")
+            should_restart = True # Попробуем перезапустить
         except asyncio.CancelledError:
-            logger.info("History Saver Supervisor received cancellation request.")
+            # Сам супервизор был отменен
+            logger.info("History Saver Supervisor task itself was cancelled directly.")
+            # --- ИЗМЕНЕНИЕ: Обрабатываем воркер перед выходом ---
             if worker_task and not worker_task.done():
+                logger.info("Cancelling worker task due to supervisor cancellation...")
                 worker_task.cancel()
                 try:
-                    await worker_task # Даем воркеру шанс завершиться корректно
+                    # Ждем завершения воркера, чтобы поймать его исключение, если оно есть
+                    await worker_task
                 except asyncio.CancelledError:
-                    logger.info("History Saver Worker task cancelled successfully.")
+                    logger.info("Worker task confirmed cancelled during supervisor shutdown.")
+                except Exception as worker_err:
+                    # Логируем ошибку воркера, чтобы она не потерялась
+                    # Не считаем ConnectionError во время shutdown критической ошибкой супервизора
+                    if isinstance(worker_err, redis.exceptions.ConnectionError):
+                         logger.warning(f"Worker task encountered connection error during supervisor shutdown: {worker_err}")
+                    else:
+                         logger.error(f"Worker task failed unexpectedly during supervisor shutdown: {worker_err}", exc_info=True)
+            elif worker_task and worker_task.done():
+                 # Если воркер уже завершился (возможно, с ошибкой), проверим исключение, чтобы оно не потерялось
+                 try:
+                     worker_task.result() # Это вызовет исключение, если оно было
+                 except asyncio.CancelledError:
+                     pass # Ожидаемо, если воркер был отменен ранее
+                 except Exception as worker_err:
+                     if isinstance(worker_err, redis.exceptions.ConnectionError):
+                          logger.warning(f"Worker task had already encountered connection error when supervisor was cancelled: {worker_err}")
+                     else:
+                          logger.error(f"Worker task had already failed when supervisor was cancelled: {worker_err}", exc_info=True)
+            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
             break # Выходим из цикла супервизора
         except Exception as e:
-            logger.error(f"Unexpected error in History Saver Supervisor: {e}", exc_info=True)
-            if worker_task and not worker_task.done():
-                 logger.warning("Attempting to cancel running worker task due to supervisor error...")
-                 worker_task.cancel()
-                 try:
-                     await worker_task
-                 except asyncio.CancelledError:
-                     pass # Ожидаемо
-
+            # Неожиданная ошибка в цикле супервизора
+            logger.error(f"Unexpected error in History Saver Supervisor main loop: {e}", exc_info=True)
+            should_restart = True # Попробуем перезапустить
         finally:
+            # Отменяем shutdown_waiter, если он еще работает
+            if 'shutdown_waiter' in locals() and not shutdown_waiter.done(): # Проверяем существование переменной
+                shutdown_waiter.cancel()
+            # Очистка клиента Redis для текущей итерации
             if redis_client:
                 try:
                     await redis_client.aclose()
-                    logger.info("Redis client for History Saver closed.")
+                    logger.info("Redis client for History Saver iteration closed.")
                 except Exception as close_err:
-                    logger.error(f"Error closing Redis client for History Saver: {close_err}")
+                    logger.error(f"Error closing Redis client for History Saver iteration: {close_err}")
 
-        # Если мы здесь, значит воркер упал или была ошибка Redis
-        logger.info(f"Restarting History Saver Worker in {RESTART_DELAY} seconds...")
-        await asyncio.sleep(RESTART_DELAY)
+        # --- Логика перезапуска ---
+        if should_restart and not shutdown_event.is_set():
+            logger.info(f"Restarting History Saver Worker in {RESTART_DELAY} seconds...")
+            try:
+                # Ожидаем перед перезапуском, но прерываемся, если событие установлено
+                await asyncio.wait_for(shutdown_event.wait(), timeout=RESTART_DELAY)
+                # Если wait_for завершился без TimeoutError, значит событие установлено
+                logger.info("Shutdown event set during restart delay. Exiting loop.")
+                break # Выходим из цикла
+            except asyncio.TimeoutError:
+                # Время ожидания истекло, событие не установлено, продолжаем перезапуск
+                logger.debug("Restart delay finished.")
+            except asyncio.CancelledError:
+                logger.info("Supervisor cancelled during restart delay. Exiting loop.")
+                break # Выходим из цикла
+        elif shutdown_event.is_set():
+             logger.info("Shutdown event is set after finally block. Exiting loop.")
+             break # Дополнительная проверка на выход
 
     logger.info("History Saver Supervisor stopped.")

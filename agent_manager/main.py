@@ -23,7 +23,7 @@ from .api import agents as agents_api # Импортируем новый роу
 from .api import websocket as websocket_api # Импортируем роутер для WebSocket
 from . import crud, process_manager, models # Добавляем импорты
 # --- ИЗМЕНЕНИЕ: Импортируем супервизор ---
-from .history_saver import supervise_history_saver # Импортируем супервизор
+from .history_saver import supervise_history_saver, REDIS_URL as HISTORY_REDIS_URL # Импортируем супервизора и URL
 # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
 
@@ -54,6 +54,9 @@ inactivity_check_task: Optional[asyncio.Task] = None
 # --- ИЗМЕНЕНИЕ: Добавляем переменную для задачи history_saver ---
 history_saver_task: Optional[asyncio.Task] = None
 # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+# --- ИЗМЕНЕНИЕ: Добавляем глобальное событие ---
+shutdown_event: Optional[asyncio.Event] = None
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
 
 # --- Pydantic Models for API ---
@@ -80,7 +83,7 @@ class AgentStatus(BaseModel):
 async def lifespan(app: FastAPI):
     """Handles application startup and shutdown events."""
     # --- ИЗМЕНЕНИЕ: Добавляем history_saver_task в global ---
-    global redis_client, inactivity_check_task, history_saver_task
+    global redis_client, inactivity_check_task, history_saver_task, shutdown_event
     # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     # Startup
     logger.info("Agent Manager Service starting up...")
@@ -194,11 +197,15 @@ async def lifespan(app: FastAPI):
     # --- ИЗМЕНЕНИЕ: Запуск супервизора history_saver ---
     logger.info("Attempting to start History Saver Supervisor...")
     try:
-        # Используем глобальный REDIS_URL и импортированный SessionLocal
+        # --- ИЗМЕНЕНИЕ: Создаем событие и запускаем супервизора с ним ---
+        shutdown_event = asyncio.Event() # Создаем событие
         history_saver_task = asyncio.create_task(
-            supervise_history_saver(REDIS_URL, SessionLocal) # Используем SessionLocal
+            supervise_history_saver(
+                redis_url=HISTORY_REDIS_URL,
+                db_session_factory=SessionLocal,
+                shutdown_event=shutdown_event # Передаем событие
+            )
         )
-        # Сохраняем задачу в глобальную переменную (app.state не используется в текущей логике)
         logger.info(f"History Saver Supervisor task created successfully (ID: {id(history_saver_task)}).")
     except Exception as e:
         logger.error(f"Failed to create History Saver Supervisor task: {e}", exc_info=True)
@@ -210,6 +217,9 @@ async def lifespan(app: FastAPI):
     logger.info("Agent Manager Service shutting down...")
 
     # --- ИЗМЕНЕНИЕ: Остановка супервизора history_saver ---
+    if shutdown_event:
+        logger.info("Signaling shutdown to History Saver Supervisor...")
+        shutdown_event.set() # Сигнализируем о завершении
     if history_saver_task and not history_saver_task.done():
         logger.info("Attempting to cancel History Saver Supervisor task...")
         history_saver_task.cancel()
