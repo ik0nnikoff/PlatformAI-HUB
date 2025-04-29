@@ -17,9 +17,6 @@ from aiogram.exceptions import TelegramBadRequest # Импортируем ис�
 # --- Configuration & Setup ---
 load_dotenv(dotenv_path=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env')))
 
-# --- УДАЛЕНО: Глобальный токен из .env ---
-# TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-# --- Конец удаления ---
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379") # Оставляем для Redis
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -105,11 +102,12 @@ async def redis_output_listener(agent_id: str):
                     data = json.loads(raw_data)
                     response_channel = data.get("channel")
 
-                    # --- НАЧАЛО ИЗМЕНЕНИЯ: Фильтрация по каналу ---
+                    # --- НАЧАЛО ИЗМЕНЕНИЯ: Фильтрация по каналу и проверка AUTH_TRIGGER ---
                     if response_channel == "telegram":
                         chat_id = data.get("thread_id") # Предполагаем, что thread_id это chat_id
                         response = data.get("response")
                         error = data.get("error")
+                        auth_required = False # Флаг для запроса авторизации
 
                         if chat_id:
                             # Конвертируем chat_id в integer для aiogram
@@ -124,7 +122,25 @@ async def redis_output_listener(agent_id: str):
                                 await bot.send_message(chat_id_int, f"Произошла ошибка: {error}")
                             elif response:
                                 logger.info(f"Received response from agent for chat {chat_id_int}: {response[:100]}...")
-                                await bot.send_message(chat_id_int, response)
+
+                                # Проверяем наличие триггера авторизации
+                                if AUTH_TRIGGER in response:
+                                    auth_required = True
+                                    response = response.replace(AUTH_TRIGGER, "").strip() # Убираем триггер из ответа
+
+                                # Отправляем сообщение с учетом необходимости авторизации
+                                if auth_required and chat_id_int not in authorized_users:
+                                    # Пользователь не авторизован, но агент требует авторизацию
+                                    await bot.send_message(
+                                        chat_id_int,
+                                        f"{response}\n\nДля продолжения требуется авторизация. Используйте /login или кнопку ниже:",
+                                        reply_markup=request_contact_markup()
+                                    )
+                                else:
+                                    # Либо авторизация не требуется, либо пользователь уже авторизован
+                                    # Отправляем обычный ответ (возможно, без триггера)
+                                    await bot.send_message(chat_id_int, response)
+
                             else:
                                 logger.warning(f"Received message from agent for chat {chat_id_int} without response or error: {data}")
                         else:
@@ -211,7 +227,7 @@ async def handle_contact(message: Message):
 async def handle_message(message: Message):
     """Handles regular text messages from the user."""
     chat_id = message.chat.id
-    user_message = message.text # Use .text for plain text
+    user_message = message.md_text
 
     if not user_message: # Ignore empty messages or non-text messages not handled elsewhere
         return
