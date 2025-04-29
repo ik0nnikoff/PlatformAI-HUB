@@ -746,5 +746,36 @@ async def get_chat_history(
         logger.error(f"Error fetching chat history for agent {agent_id}, thread {thread_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve chat history.")
 
+# --- НОВОЕ: Эндпоинт для удаления треда ---
+@router.delete(
+    "/{agent_id}/chats/{thread_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a chat thread",
+    tags=["Chats"] # Добавляем тег Chats
+)
+async def delete_chat_thread(
+    agent_id: str,
+    thread_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Deletes all messages associated with a specific agent and thread ID.
+    Returns 204 No Content on successful deletion, even if the thread didn't exist.
+    Returns 404 if the agent itself does not exist.
+    """
+    # 1. Проверяем, существует ли агент
+    db_agent = await crud.db_get_agent_config(db, agent_id)
+    if not db_agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+
+    # 2. Вызываем CRUD-функцию для удаления
+    try:
+        await crud.db_delete_chat_thread(db, agent_id, thread_id)
+        # Не возвращаем тело ответа при статусе 204
+        return None
+    except Exception as e:
+        # Логирование ошибки происходит внутри CRUD функции
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete chat thread.")
+
 # --- КОНЕЦ НОВОГО ---
 

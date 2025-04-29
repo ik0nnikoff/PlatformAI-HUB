@@ -1,7 +1,7 @@
 import logging
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func, label, and_, text, literal_column
+from sqlalchemy import select, desc, func, label, and_, text, literal_column, delete # Добавляем импорт delete
 from sqlalchemy.orm import aliased
 from datetime import datetime # Импортируем datetime
 
@@ -237,5 +237,31 @@ async def db_get_agent_chats(db: AsyncSession, agent_id: str, skip: int = 0, lim
     logger.debug(f"Fetched {len(chat_list)} chat threads for Agent={agent_id}")
     return chat_list
 
+
+# --- КОНЕЦ НОВОГО ---
+
+# --- НОВОЕ: CRUD для удаления треда ---
+
+async def db_delete_chat_thread(db: AsyncSession, agent_id: str, thread_id: str) -> int:
+    """Deletes all chat messages for a specific agent and thread ID."""
+    logger.info(f"Deleting chat thread for Agent={agent_id}, Thread={thread_id}")
+    stmt = (
+        delete(ChatMessageDB)
+        .where(ChatMessageDB.agent_id == agent_id)
+        .where(ChatMessageDB.thread_id == thread_id)
+    )
+    try:
+        result = await db.execute(stmt)
+        await db.commit()
+        deleted_count = result.rowcount
+        if deleted_count > 0:
+            logger.info(f"Successfully deleted {deleted_count} messages for Agent={agent_id}, Thread={thread_id}")
+        else:
+            logger.warning(f"No messages found or deleted for Agent={agent_id}, Thread={thread_id}")
+        return deleted_count
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error deleting chat thread for Agent={agent_id}, Thread={thread_id}: {e}", exc_info=True)
+        raise # Передаем исключение дальше
 
 # --- КОНЕЦ НОВОГО ---
