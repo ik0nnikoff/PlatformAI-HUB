@@ -11,7 +11,7 @@ from alembic import context
 # --- Load .env file ---
 # Construct the path to the .env file relative to this script's location
 # Adjust the path depth ('..', '..') as needed
-DOTENV_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
+DOTENV_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '.env'))
 if os.path.exists(DOTENV_PATH):
     load_dotenv(dotenv_path=DOTENV_PATH)
     print(f"Alembic env.py: Loaded environment variables from {DOTENV_PATH}") # Debug print
@@ -28,8 +28,8 @@ sys.path.insert(0, PROJECT_ROOT)
 # Now import Base and models from your application
 # Ensure agent_manager is discoverable (e.g., via PYTHONPATH or installed package)
 try:
-    from agent_manager.db import Base
-    from agent_manager.models import AgentConfigDB # Import all your DB models here
+    from hub.agent_manager.db import Base
+    from hub.agent_manager.models import AgentConfigDB # Import all your DB models here
 except ImportError as e:
      print(f"Error importing agent_manager modules in alembic/env.py: {e}")
      print("Ensure agent_manager is in PYTHONPATH or installed.")

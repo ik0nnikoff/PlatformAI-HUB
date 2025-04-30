@@ -1,19 +1,9 @@
 from pydantic import BaseModel, Field as PydanticField, field_validator, model_validator, ConfigDict
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional
 from enum import Enum
 from datetime import datetime
-
-# --- SQLAlchemy Imports ---
-# --- ИЗМЕНЕНИЕ: Добавляем Integer и ForeignKey ---
-# --- ИЗМЕНЕНИЕ: Добавляем Boolean и UniqueConstraint ---
 from sqlalchemy import Column, String, Text, DateTime, func, JSON, Integer, ForeignKey, Enum as SQLEnum, Boolean, UniqueConstraint
-# --- КОНЕЦ ИЗМЕНЕНИЯ ---
-# --- КОНЕЦ ИЗМЕНЕНИЯ ---
-# --- ИЗМЕНЕНИЕ: Добавляем relationship ---
 from sqlalchemy.orm import declarative_base, relationship
-# --- КОНЕЦ ИЗМЕНЕНИЯ ---
-
-# Import Base from db.py
 from .db import Base
 
 # --- Pydantic Models (API Layer) ---
@@ -123,7 +113,6 @@ class IntegrationStatus(BaseModel):
     error_detail: Optional[str] = None
 
 
-# --- НОВОЕ: Модели для истории чатов ---
 class SenderType(str, Enum):
     USER = "user"
     AGENT = "agent"
@@ -144,10 +133,8 @@ class ChatMessageOutput(BaseModel):
 
 class ChatListItemOutput(BaseModel):
     thread_id: str
-    # --- ИЗМЕНЕНИЕ: Добавляем поля для первого сообщения ---
     first_message_content: str
     first_message_timestamp: datetime
-    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     last_message_content: str
     last_message_timestamp: datetime
     last_message_sender_type: SenderType
@@ -157,7 +144,6 @@ class ChatListItemOutput(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# --- НОВОЕ: Pydantic модель для вывода пользователя ---
 class UserOutput(BaseModel):
     id: int
     platform: str
@@ -171,8 +157,6 @@ class UserOutput(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
-# --- КОНЕЦ НОВОГО ---
-
 
 # --- SQLAlchemy Models (Database Layer) ---
 
@@ -190,8 +174,6 @@ class AgentConfigDB(Base):
     # Связь с сообщениями чата (если нужно будет получать все сообщения агента)
     chat_messages = relationship("ChatMessageDB", back_populates="agent_config")
 
-
-# --- НОВОЕ: Модель для хранения истории чатов ---
 class ChatMessageDB(Base):
     __tablename__ = "chat_messages"
 
@@ -208,9 +190,6 @@ class ChatMessageDB(Base):
     # Связь с конфигом агента
     agent_config = relationship("AgentConfigDB", back_populates="chat_messages")
 
-# --- КОНЕЦ НОВОГО ---
-
-# --- НОВОЕ: Модель для хранения пользователей ---
 class UserDB(Base):
     __tablename__ = "users"
 
@@ -228,5 +207,3 @@ class UserDB(Base):
     __table_args__ = (
         UniqueConstraint('platform', 'platform_user_id', name='uq_user_platform_id'),
     )
-
-# --- КОНЕЦ НОВОГО ---

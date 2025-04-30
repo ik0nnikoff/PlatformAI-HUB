@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 
 # Load from the project root .env
-dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+dotenv_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
 if os.path.exists(dotenv_path):
     load_dotenv(dotenv_path=dotenv_path)
     print(f"Agent Manager: Loaded environment variables from {dotenv_path}")

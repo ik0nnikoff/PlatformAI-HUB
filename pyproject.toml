@@ -51,8 +51,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]  # Look in the root directory
-include = ["agent_manager*", "agent_runner*", "integrations*"]  # Include only these packages and their submodules
-exclude = ["last_bot*", "temp_files*", "temp_files_qdrant*"] # Explicitly exclude others if needed
+include = ["hub*"]  # Include only these packages and their submodules
+#exclude = ["last_bot*", "temp_files*", "temp_files_qdrant*"] # Explicitly exclude others if needed
 
 # Optional: Configure linters/formatters like Ruff
 # [tool.ruff]

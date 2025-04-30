@@ -28,7 +28,7 @@ module_logger.propagate = False
 # Загружаем DATABASE_URL из .env
 # Путь к .env относительно этого файла
 current_dir = os.path.dirname(os.path.abspath(__file__))
-dotenv_path = os.path.join(current_dir, '..', '.env')
+dotenv_path = os.path.join(current_dir, '..', '..', '.env')
 if os.path.exists(dotenv_path):
     from dotenv import load_dotenv
     load_dotenv(dotenv_path=dotenv_path)

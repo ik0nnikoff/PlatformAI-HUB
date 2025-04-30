@@ -1,26 +1,5 @@
-qdrant:
-	uv run qdrant-worker.py
-# Remove old agent/bot targets if they exist
-# bot:
-#	uv run last_bot/bot.py
-# agent:
-#	uv run last_bot/agent.py
-docker:
-	docker compose -f docker-PAI/docker-compose.deps.yml --env-file docker-PAI/docker.env up -d
-worker:
-	uv run worker.py
-worker_qdrant:
-	uv run qdrant_sync_worker.py
-workers:
-	uv run worker.py & \
-	uv run qdrant_sync_worker.py & \
-	wait
-stop_workers:
-	pkill -f "uv run worker.py" || true
-	pkill -f "uv run qdrant_sync_worker.py" || true
-
 manager:
-	uv run uvicorn agent_manager.main:app --reload --port 8001 --host 0.0.0.0
+	uv run uvicorn hub.agent_manager.main:app --reload --port 8001 --host 0.0.0.0
 
 # Example of running a specific agent runner manually (for testing)
 # Usage: make run_agent AGENT_ID=my_agent_abc
@@ -28,7 +7,7 @@ run_agent:
 ifndef AGENT_ID
 	$(error AGENT_ID is not set. Usage: make run_agent AGENT_ID=<your_agent_id>)
 endif
-	python agent_runner/runner.py \
+	uv run hub.agent_runner.runner \
 		--agent-id $(AGENT_ID) \
 		--config-url http://localhost:8001/agents/$(AGENT_ID)/config \
 		--redis-url ${REDIS_URL:-redis://localhost:6379}
@@ -69,4 +48,4 @@ run_telegram_bot:
 ifndef AGENT_ID
 	$(error AGENT_ID is not set. Usage: make run_telegram_bot AGENT_ID=<your_agent_id>)
 endif
-	python integrations/telegram_bot.py --agent-id $(AGENT_ID)
+	uv run hub/integrations/telegram_bot.py --agent-id $(AGENT_ID)

@@ -24,9 +24,9 @@ from .db import get_db_session_factory, close_db_engine # Импортируем
 # Импортируем CRUD из agent_manager (предполагаем, что он доступен в PYTHONPATH)
 # Возможно, потребуется настроить PYTHONPATH или изменить структуру импорта
 try:
-    from agent_manager import crud
+    from hub.agent_manager import crud
     # --- ИЗМЕНЕНИЕ: Добавляем SenderType ---
-    from agent_manager.models import ChatMessageDB, SenderType # Импортируем модель и Enum
+    from hub.agent_manager.models import ChatMessageDB, SenderType # Импортируем модель и Enum
     # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 except ImportError:
     crud = None
@@ -45,7 +45,7 @@ AGENT_HISTORY_LIMIT = 20 # Значение по умолчанию
 def load_environment():
     """Loads environment variables from .env file."""
     global REDIS_HISTORY_QUEUE_NAME, AGENT_HISTORY_LIMIT
-    dotenv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env'))
+    dotenv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
     if os.path.exists(dotenv_path):
         load_dotenv(dotenv_path=dotenv_path)
         print(f"Agent Runner: Loaded environment variables from {dotenv_path}")

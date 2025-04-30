@@ -128,7 +128,7 @@ async def start_agent_process(agent_id: str, r: redis.Redis) -> bool:
         cmd = [
             python_executable,
             "-m", # Use the -m flag to run as a module
-            "agent_runner.runner", # Specify the module path
+            "hub.agent_runner.runner", # Specify the module path
             "--agent-id", agent_id,
             "--config-url", config_url,
             "--redis-url", redis_url_for_agent

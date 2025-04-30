@@ -49,13 +49,6 @@ async def get_redis() -> AsyncGenerator[redis.Redis, None]:
         client = redis.Redis.from_pool(redis_pool)
         yield client
     finally:
-        # --- НАЧАЛО ИЗМЕНЕНИЯ: Убираем явный close ---
-        # При использовании пула соединений, явный вызов close() обычно не нужен,
-        # так как пул управляет жизненным циклом соединений.
-        # await client.close() # <--- Удаляем или комментируем эту строку
-        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
-        # Дополнительная проверка, если client был успешно создан
         if client:
-             # Можно добавить логирование, если нужно отследить возврат в пул
              # logger.debug("Redis client yielded by dependency is being released.")
-             pass # Ничего не делаем, пул сам обработает
+             pass

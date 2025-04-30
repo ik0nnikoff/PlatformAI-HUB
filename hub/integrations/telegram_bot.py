@@ -3,13 +3,8 @@ import logging
 import asyncio
 import json
 import argparse
-# --- НОВОЕ: Импорты для БД ---
 from typing import AsyncGenerator, Optional, Dict, Any # Добавляем типы
-# --- УДАЛЕНО: Убираем импорт Depends ---
-# from fastapi import Depends
-# --- КОНЕЦ УДАЛЕНИЯ ---
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-# --- КОНЕЦ НОВОГО ---
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton
@@ -20,26 +15,23 @@ import redis.asyncio as redis
 from redis import exceptions as redis_exceptions
 from contextlib import asynccontextmanager
 from aiogram.exceptions import TelegramBadRequest # Импортируем исключение
-# --- НОВОЕ: Импорты из agent_manager ---
+
 try:
-    from agent_manager import crud
-    from agent_manager.models import UserDB # Импортируем модель UserDB
+    from hub.agent_manager import crud
+    from hub.agent_manager.models import UserDB # Импортируем модель UserDB
 except ImportError:
     crud = None
     UserDB = None
     logging.critical("Could not import 'crud' or 'UserDB' from 'agent_manager'. Database features will be disabled.")
-# --- КОНЕЦ НОВОГО ---
 
 
 # --- Configuration & Setup ---
-load_dotenv(dotenv_path=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env')))
+load_dotenv(dotenv_path=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env')))
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379") # Оставляем для Redis
-# --- НОВОЕ: Конфигурация БД и кэша ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 REDIS_USER_CACHE_TTL = int(os.getenv("REDIS_USER_CACHE_TTL", 3600)) # 1 час по умолчанию
 USER_CACHE_PREFIX = "user_cache:"
-# --- КОНЕЦ НОВОГО ---
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)

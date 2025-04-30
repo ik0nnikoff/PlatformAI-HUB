@@ -30,7 +30,7 @@ EXPOSE 8000
 # Define the command to run the application using uvicorn
 # Use 0.0.0.0 to allow connections from outside the container
 # Add --reload flag only for development, remove for production
-CMD ["uvicorn", "agent_manager.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "src.agent_manager.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 # Optional: Add healthcheck
 # HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \

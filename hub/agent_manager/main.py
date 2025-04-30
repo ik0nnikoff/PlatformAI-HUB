@@ -36,7 +36,7 @@ from dotenv import load_dotenv
 # Construct the path to the .env file relative to the current script's directory
 # Assuming .env is in the parent directory of agent_manager
 current_dir = os.path.dirname(os.path.abspath(__file__))
-dotenv_path = os.path.join(current_dir, '..', '.env')
+dotenv_path = os.path.join(current_dir, '..', '..', '.env')
 if os.path.exists(dotenv_path):
     load_dotenv(dotenv_path=dotenv_path)
 else:
