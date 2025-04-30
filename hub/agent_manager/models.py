@@ -175,8 +175,10 @@ class AgentConfigDB(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+    # --- ИЗМЕНЕНИЕ: Добавляем cascade="all, delete-orphan" ---
     # Связь с сообщениями чата (если нужно будет получать все сообщения агента)
-    chat_messages = relationship("ChatMessageDB", back_populates="agent_config")
+    chat_messages = relationship("ChatMessageDB", back_populates="agent_config", cascade="all, delete-orphan")
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     # --- НОВОЕ: Связь с авторизациями ---
     authorizations = relationship("AgentUserAuthorizationDB", back_populates="agent_config", cascade="all, delete-orphan")
     # --- КОНЕЦ НОВОГО ---
@@ -185,7 +187,9 @@ class ChatMessageDB(Base):
     __tablename__ = "chat_messages"
 
     id = Column(Integer, primary_key=True, index=True)
-    agent_id = Column(String, ForeignKey("agent_configs.id"), nullable=False, index=True)
+    # --- ИЗМЕНЕНИЕ: Добавляем ondelete="CASCADE" ---
+    agent_id = Column(String, ForeignKey("agent_configs.id", ondelete="CASCADE"), nullable=False, index=True)
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     thread_id = Column(String, nullable=False, index=True)
     # Используем SQLEnum для хранения типа отправителя
     sender_type = Column(SQLEnum(SenderType, name="sender_type_enum", create_type=True), nullable=False)

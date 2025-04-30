@@ -1,17 +1,23 @@
 import logging
 import os
+# --- ИЗМЕНЕНИЕ: Убедимся, что httpx и asyncio импортированы ---
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from typing import List
+from typing import List, Dict, Any # Добавляем Dict, Any
+from pydantic import ValidationError
 import redis.asyncio as redis
 from sqlalchemy.ext.asyncio import AsyncSession
-import httpx
+import httpx # Убедимся, что импортирован
+import asyncio # Убедимся, что импортирован
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 from ..redis_client import get_redis
 from ..db import get_db
 from ..models import AgentConfigInput, AgentConfigOutput, AgentStatus, AgentListItem, IntegrationStatus, IntegrationType, AgentConfigStructure, UserOutput
 from .. import crud
 from ..import process_manager
 import json
-import asyncio
+# --- ИЗМЕНЕНИЕ: Убираем asyncio, т.к. он уже импортирован выше ---
+# import asyncio
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
 # --- ИЗМЕНЕНИЕ: Добавляем импорты для чатов ---
 from ..models import ChatMessageOutput, ChatListItemOutput
@@ -21,6 +27,68 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 SOURCES_API_BASE_URL = os.getenv("SOURCES_API_BASE_URL") # Получаем URL из .env
+
+# --- НОВОЕ: Helper функция для разрешения Knowledge Base IDs ---
+async def _resolve_knowledge_base_ids(config_json: Dict[str, Any], client: httpx.AsyncClient, agent_id_for_log: str = "N/A"):
+    """
+    Находит инструменты knowledgeBase в конфигурации, запрашивает source IDs
+    из внешнего API и заменяет knowledgeBaseIds на source IDs (строки).
+    Модифицирует переданный словарь config_json.
+    """
+    if not SOURCES_API_BASE_URL:
+        logger.warning(f"Agent {agent_id_for_log}: SOURCES_API_BASE_URL not set. Skipping knowledge base ID resolution.")
+        return
+
+    try:
+        tools = config_json.get("simple", {}).get("settings", {}).get("tools", [])
+        for tool in tools:
+            if tool.get("type") == "knowledgeBase":
+                settings = tool.get("settings", {})
+                knowledge_base_ids = settings.get("knowledgeBaseIds")
+                if knowledge_base_ids and isinstance(knowledge_base_ids, list):
+                    logger.info(f"Agent {agent_id_for_log}: Found knowledgeBase tool with IDs: {knowledge_base_ids}. Fetching source IDs...")
+                    source_ids_raw = []
+                    fetch_tasks = []
+
+                    for kb_id in knowledge_base_ids:
+                        api_url = f"{SOURCES_API_BASE_URL}/admin-sources/?datastoreId={kb_id}&status=sync"
+                        fetch_tasks.append(client.get(api_url))
+
+                    responses = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+
+                    for i, response in enumerate(responses):
+                        kb_id = knowledge_base_ids[i]
+                        if isinstance(response, httpx.Response):
+                            if response.status_code == 200:
+                                try:
+                                    sources_data = response.json()
+                                    if isinstance(sources_data, list):
+                                        found_ids = [source.get("id") for source in sources_data if source.get("id") is not None]
+                                        source_ids_raw.extend(found_ids)
+                                        logger.debug(f"Agent {agent_id_for_log}: Fetched {len(found_ids)} source IDs (raw) for KB ID {kb_id}.")
+                                    else:
+                                        logger.warning(f"Agent {agent_id_for_log}: Unexpected response format from sources API for KB ID {kb_id}. Expected list, got {type(sources_data)}.")
+                                except json.JSONDecodeError:
+                                    logger.error(f"Agent {agent_id_for_log}: Failed to decode JSON response from sources API for KB ID {kb_id}.")
+                            else:
+                                logger.error(f"Agent {agent_id_for_log}: Error fetching sources for KB ID {kb_id}. Status: {response.status_code}, Response: {response.text[:200]}")
+                        elif isinstance(response, Exception):
+                            logger.error(f"Agent {agent_id_for_log}: Exception fetching sources for KB ID {kb_id}: {response}")
+
+                    source_ids_str = [str(sid) for sid in source_ids_raw]
+
+                    if source_ids_str:
+                        logger.info(f"Agent {agent_id_for_log}: Replacing knowledgeBaseIds {knowledge_base_ids} with source IDs (as strings) {source_ids_str}")
+                        settings["knowledgeBaseIds"] = source_ids_str
+                    else:
+                        logger.warning(f"Agent {agent_id_for_log}: No source IDs found for knowledgeBaseIds {knowledge_base_ids}. Keeping original IDs or potentially empty list.")
+                        # settings["knowledgeBaseIds"] = [] # Раскомментируйте, если нужно очищать список при неудаче
+
+    except Exception as e:
+        logger.error(f"Agent {agent_id_for_log}: Error processing tools to resolve source IDs: {e}", exc_info=True)
+        # Не прерываем выполнение, но логируем ошибку. Конфигурация может быть частично изменена.
+# --- КОНЕЦ НОВОГО ---
+
 
 # --- Agent Management Endpoints ---
 
@@ -37,19 +105,22 @@ async def create_agent(
     db: AsyncSession = Depends(get_db) # Add DB session
 ):
     """
-    Creates a new agent configuration and automatically starts the agent and its integrations.
-    - **name**: User-defined name for the agent.
-    - **description**: Optional description.
-    - **userId**: Identifier for the owner (placeholder).
-    - **config**: The actual agent configuration structure (e.g., model, tools).
+    Creates a new agent configuration. Resolves knowledgeBaseIds before saving.
+    Automatically starts the agent and its integrations.
     """
     # TODO: Validate userId against authenticated user
-    # TODO: Consider more robust agent ID generation (e.g., UUID)
     agent_id = f"agent_{agent_config.name.lower().replace(' ', '_')}_{os.urandom(4).hex()}"
+
+    # --- ИЗМЕНЕНИЕ: Вызов _resolve_knowledge_base_ids ---
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        await _resolve_knowledge_base_ids(agent_config.config_json, client, agent_id_for_log=agent_id)
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
     try:
-        # Use DB CRUD
+        # Use DB CRUD с потенциально измененным agent_config.config_json
         db_agent = await crud.db_create_agent_config(db, agent_config, agent_id)
 
+        # ... (остальная логика запуска процессов без изменений) ...
         # Set initial status in Redis (keep status in Redis for now)
         status_key = f"agent_status:{agent_id}"
         await r.hset(status_key, mapping={"status": "stopped"}) # Start as stopped before attempting start
@@ -106,7 +177,9 @@ async def create_agent(
             id=db_agent.id,
             name=db_agent.name,
             description=db_agent.description,
-            userId=db_agent.user_id,
+            # --- ИЗМЕНЕНИЕ: Используем owner_id ---
+            ownerId=db_agent.owner_id,
+            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
             config=config_structure,
             created_at=db_agent.created_at,
             updated_at=db_agent.updated_at
@@ -118,6 +191,7 @@ async def create_agent(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save agent configuration.")
 
 
+# ... (list_agents без изменений) ...
 @router.get(
     "/",
     response_model=List[AgentListItem],
@@ -145,6 +219,7 @@ async def list_agents(
         ))
     return agents_list
 
+
 @router.put(
     "/{agent_id}",
     response_model=AgentConfigOutput,
@@ -158,25 +233,26 @@ async def update_agent(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Updates an existing agent's configuration.
-    - **agent_id**: The ID of the agent to update.
-    - **agent_config**: The new configuration data matching AgentConfigInput schema.
-
-    **Note:** If the agent is currently running, its process will be signaled to
-    perform an internal restart via Redis Pub/Sub to apply the new configuration.
-    This involves a brief interruption and potential loss of conversation state.
+    Updates an existing agent's configuration. Resolves knowledgeBaseIds before saving.
+    Signals running agent process to restart internally via Redis Pub/Sub.
     """
     # Проверяем статус агента *перед* обновлением
     initial_status_info = await process_manager.get_agent_status(agent_id, r)
     is_running = initial_status_info.status in ["running", "starting", "initializing"] # Считаем эти статусы "запущенными"
 
+    # --- ИЗМЕНЕНИЕ: Вызов _resolve_knowledge_base_ids ---
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        await _resolve_knowledge_base_ids(agent_config.config_json, client, agent_id_for_log=agent_id)
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
     try:
-        # Используем DB CRUD для обновления
+        # Используем DB CRUD для обновления с потенциально измененным agent_config.config_json
         updated_db_agent = await crud.db_update_agent_config(db, agent_id, agent_config)
 
         if updated_db_agent is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
 
+        # ... (остальная логика перезапуска без изменений) ...
         # Если агент был запущен, отправляем сигнал на внутренний перезапуск
         if is_running:
             control_channel = f"agent_control:{agent_id}"
@@ -198,7 +274,9 @@ async def update_agent(
             id=updated_db_agent.id,
             name=updated_db_agent.name,
             description=updated_db_agent.description,
-            userId=updated_db_agent.user_id,
+            # --- ИЗМЕНЕНИЕ: Используем owner_id ---
+            ownerId=updated_db_agent.owner_id,
+            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
             config=config_structure,
             created_at=updated_db_agent.created_at,
             updated_at=updated_db_agent.updated_at # SQLAlchemy onupdate должен обновить это
@@ -210,6 +288,7 @@ async def update_agent(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update agent configuration.")
 
 
+# ... (delete_agent без изменений) ...
 @router.delete(
     "/{agent_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -269,6 +348,7 @@ async def delete_agent(
 
     return None # Return 204 No Content
 
+
 @router.get(
     "/{agent_id}/config",
     response_model=AgentConfigOutput, # Return raw config dict for runner
@@ -277,113 +357,63 @@ async def delete_agent(
 )
 async def get_agent_config_for_runner(
     agent_id: str,
-    r: redis.Redis = Depends(get_redis), # Keep Redis for status check? Not strictly needed here
+    # --- ИЗМЕНЕНИЕ: Убираем зависимость от Redis, она больше не нужна ---
+    # r: redis.Redis = Depends(get_redis),
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     db: AsyncSession = Depends(get_db) # Add DB session
 ):
     """
     Internal endpoint for the agent runner process to fetch its configuration.
-    Returns the raw configuration dictionary stored in the database.
-    If knowledgeBase tools are present, replaces knowledgeBaseIds with source IDs fetched from an external API.
+    Returns the configuration dictionary stored in the database.
     """
     # Use DB CRUD
     db_agent = await crud.db_get_agent_config(db, agent_id)
     if db_agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
 
-    # --- Начало модификации: Получение source_ids ---
-    config_json_mutable = db_agent.config_json.copy() # Создаем изменяемую копию
-
-    if not SOURCES_API_BASE_URL:
-        logger.warning("SOURCES_API_BASE_URL environment variable is not set. Cannot fetch source IDs for knowledge bases.")
-    else:
-        try:
-            tools = config_json_mutable.get("simple", {}).get("settings", {}).get("tools", [])
-            async with httpx.AsyncClient(timeout=10.0) as client: # Используем httpx для асинхронных запросов
-                for tool in tools:
-                    if tool.get("type") == "knowledgeBase":
-                        settings = tool.get("settings", {})
-                        knowledge_base_ids = settings.get("knowledgeBaseIds")
-                        if knowledge_base_ids and isinstance(knowledge_base_ids, list):
-                            logger.info(f"Agent {agent_id}: Found knowledgeBase tool with IDs: {knowledge_base_ids}. Fetching source IDs...")
-                            source_ids_raw = [] # Храним исходные ID (могут быть int)
-                            fetch_tasks = []
-
-                            # Создаем задачи для получения источников для каждого ID базы знаний
-                            for kb_id in knowledge_base_ids:
-                                api_url = f"{SOURCES_API_BASE_URL}/admin-sources/?datastoreId={kb_id}&status=sync"
-                                fetch_tasks.append(client.get(api_url))
-
-                            # Выполняем запросы параллельно
-                            responses = await asyncio.gather(*fetch_tasks, return_exceptions=True)
-
-                            for i, response in enumerate(responses):
-                                kb_id = knowledge_base_ids[i]
-                                if isinstance(response, httpx.Response):
-                                    if response.status_code == 200:
-                                        try:
-                                            sources_data = response.json()
-                                            if isinstance(sources_data, list):
-                                                # Получаем ID, проверяем что они не None
-                                                found_ids = [source.get("id") for source in sources_data if source.get("id") is not None]
-                                                source_ids_raw.extend(found_ids) # Добавляем в список исходных ID
-                                                logger.debug(f"Agent {agent_id}: Fetched {len(found_ids)} source IDs (raw) for KB ID {kb_id}.")
-                                            else:
-                                                logger.warning(f"Agent {agent_id}: Unexpected response format from sources API for KB ID {kb_id}. Expected list, got {type(sources_data)}.")
-                                        except json.JSONDecodeError:
-                                            logger.error(f"Agent {agent_id}: Failed to decode JSON response from sources API for KB ID {kb_id}.")
-                                    else:
-                                        logger.error(f"Agent {agent_id}: Error fetching sources for KB ID {kb_id}. Status: {response.status_code}, Response: {response.text[:200]}")
-                                elif isinstance(response, Exception):
-                                    logger.error(f"Agent {agent_id}: Exception fetching sources for KB ID {kb_id}: {response}")
-
-                            # --- ИСПРАВЛЕНИЕ: Преобразуем все ID в строки ---
-                            source_ids_str = [str(sid) for sid in source_ids_raw]
-
-                            if source_ids_str:
-                                logger.info(f"Agent {agent_id}: Replacing knowledgeBaseIds {knowledge_base_ids} with source IDs (as strings) {source_ids_str}")
-                                settings["knowledgeBaseIds"] = source_ids_str # Заменяем список ID строками
-                            else:
-                                logger.warning(f"Agent {agent_id}: No source IDs found for knowledgeBaseIds {knowledge_base_ids}. Keeping original IDs or potentially empty list.")
-                                # Решите, оставить ли старые ID или сделать список пустым, если ничего не найдено
-                                # settings["knowledgeBaseIds"] = [] # Раскомментируйте, если нужно очищать список при неудаче
-
-        except Exception as e:
-            logger.error(f"Agent {agent_id}: Error processing tools to fetch source IDs: {e}", exc_info=True)
-            # В случае ошибки обработки, возвращаем исходную конфигурацию (config_json_mutable может быть частично изменен)
-            # Можно вернуть db_agent.config_json, если нужна гарантия неизменности при ошибке
-
-    # --- Конец модификации ---
+    # --- ИЗМЕНЕНИЕ: Удаляем блок разрешения knowledgeBaseIds ---
+    # --- Начало удаления ---
+    # config_json_mutable = db_agent.config_json.copy() # Создаем изменяемую копию
+    #
+    # if not SOURCES_API_BASE_URL:
+    #     logger.warning("SOURCES_API_BASE_URL environment variable is not set. Cannot fetch source IDs for knowledge bases.")
+    # else:
+    #     try:
+    #         # ... (вся логика получения source_ids удалена) ...
+    #     except Exception as e:
+    #         logger.error(f"Agent {agent_id}: Error processing tools to fetch source IDs: {e}", exc_info=True)
+    # --- Конец удаления ---
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
 
     # Return the raw JSON/Dict stored in the DB
-    # Add agent_id, name etc. to the returned dict for the runner?
     # The runner currently expects the structure from AgentConfigOutput.model_dump()
     # Let's mimic that for now, using the potentially modified config_json_mutable.
     try:
-        # Используем модифицированную конфигурацию
-        config_structure = AgentConfigStructure.model_validate(config_json_mutable)
+        # --- ИЗМЕНЕНИЕ: Используем исходную конфигурацию из БД ---
+        config_structure = AgentConfigStructure.model_validate(db_agent.config_json)
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
         output_model = AgentConfigOutput(
             id=db_agent.id,
             name=db_agent.name,
             description=db_agent.description,
+            # --- ИЗМЕНЕНИЕ: Используем owner_id ---
             ownerId=db_agent.owner_id,
+            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
             config=config_structure,
             created_at=db_agent.created_at,
             updated_at=db_agent.updated_at
         )
-    except Exception as validation_err:
-         logger.error(f"Agent {agent_id}: Error validating modified config structure: {validation_err}", exc_info=True)
-         # Если валидация не удалась, возвращаем исходную структуру
-         config_structure_original = AgentConfigStructure.model_validate(db_agent.config_json)
-         output_model = AgentConfigOutput(
-             id=db_agent.id,
-             name=db_agent.name,
-             description=db_agent.description,
-             ownerId=db_agent.owner_id,
-             config=config_structure_original,
-             created_at=db_agent.created_at,
-             updated_at=db_agent.updated_at
-         )
+    # --- ИЗМЕНЕНИЕ: Возвращаем блок except для обработки ошибок валидации ---
+    except ValidationError as validation_err:
+         logger.error(f"Agent {agent_id}: Error validating config structure from DB: {validation_err}", exc_info=True)
+         # Если валидация не удалась, это проблема данных в БД
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Invalid configuration structure found in database for agent {agent_id}.")
+    except Exception as e:
+        # Ловим другие возможные ошибки при создании output_model
+        logger.error(f"Agent {agent_id}: Unexpected error creating output model from DB data: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal error processing configuration for agent {agent_id}.")
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
 
     # Логируем конфигурацию перед отправкой, используя model_dump_json()
@@ -398,6 +428,7 @@ async def get_agent_config_for_runner(
     # Возвращаем словарь, FastAPI сам его корректно сериализует в JSON ответ
     return output_model.model_dump()
 
+# ... (остальные эндпоинты start, stop, restart, status, integrations, chats, users без изменений) ...
 @router.post(
     "/{agent_id}/start",
     status_code=status.HTTP_202_ACCEPTED,
@@ -603,7 +634,24 @@ async def start_integration(
 
     # Proceed with starting the integration process
     try:
-        success = await process_manager.start_integration_process(agent_id, integration_type, r)
+        # --- ИЗМЕНЕНИЕ: Передаем настройки интеграции из БД ---
+        config_data = db_agent.config_json or {}
+        simple_config = config_data.get("simple", {})
+        settings_data = simple_config.get("settings", {})
+        integrations_config = settings_data.get("integrations", [])
+        integration_settings = {}
+        for integration in integrations_config:
+            if integration.get("type") == integration_type.value:
+                integration_settings = integration.get("settings", {})
+                break
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
+        success = await process_manager.start_integration_process(
+            agent_id,
+            integration_type,
+            r,
+            integration_settings=integration_settings # Передаем настройки
+        )
         if not success:
              # Check status for specific error
              status_info = await process_manager.get_integration_status(agent_id, integration_type, r)
@@ -669,7 +717,24 @@ async def restart_integration(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
 
     try:
-        success = await process_manager.restart_integration_process(agent_id, integration_type, r)
+        # --- ИЗМЕНЕНИЕ: Передаем настройки интеграции из БД ---
+        config_data = db_agent.config_json or {}
+        simple_config = config_data.get("simple", {})
+        settings_data = simple_config.get("settings", {})
+        integrations_config = settings_data.get("integrations", [])
+        integration_settings = {}
+        for integration in integrations_config:
+            if integration.get("type") == integration_type.value:
+                integration_settings = integration.get("settings", {})
+                break
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
+        success = await process_manager.restart_integration_process(
+            agent_id,
+            integration_type,
+            r,
+            integration_settings=integration_settings # Передаем настройки
+        )
         if not success:
             status_info = await process_manager.get_integration_status(agent_id, integration_type, r)
             detail = f"{integration_type.value} integration restart initiated, but failed during stop or start (current status: {status_info.status}). Check logs."
