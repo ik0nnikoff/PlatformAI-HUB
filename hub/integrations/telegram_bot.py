@@ -18,11 +18,16 @@ from aiogram.exceptions import TelegramBadRequest # Импортируем ис�
 
 try:
     from hub.agent_manager import crud
-    from hub.agent_manager.models import UserDB # Импортируем модель UserDB
+    # --- ИЗМЕНЕНИЕ: Импортируем AgentUserAuthorizationDB ---
+    from hub.agent_manager.models import UserDB, AgentUserAuthorizationDB # Импортируем модели
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 except ImportError:
     crud = None
     UserDB = None
-    logging.critical("Could not import 'crud' or 'UserDB' from 'agent_manager'. Database features will be disabled.")
+    # --- ИЗМЕНЕНИЕ: Добавляем AgentUserAuthorizationDB ---
+    AgentUserAuthorizationDB = None
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+    logging.critical("Could not import 'crud' or models from 'agent_manager'. Database features will be disabled.")
 
 
 # --- Configuration & Setup ---
@@ -44,14 +49,16 @@ redis_listener_task: asyncio.Task = None
 agent_id_global: str = None # Store agent_id globally for handlers
 
 # In-memory storage for authorized users (replace with DB/Redis later if needed)
-authorized_users = {}
+# authorized_users = {} # Больше не используется
 AUTH_TRIGGER = "AUTH_REQUIRED"
 
 # --- НОВОЕ: Настройка SQLAlchemy ---
 engine = None
 SessionLocal: Optional[async_sessionmaker[AsyncSession]] = None
 
-if DATABASE_URL and crud and UserDB:
+# --- ИЗМЕНЕНИЕ: Проверяем наличие всех нужных моделей ---
+if DATABASE_URL and crud and UserDB and AgentUserAuthorizationDB:
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
     try:
         engine = create_async_engine(DATABASE_URL, echo=False, future=True)
         SessionLocal = async_sessionmaker(
@@ -67,77 +74,86 @@ if DATABASE_URL and crud and UserDB:
         engine = None
         SessionLocal = None
 else:
-    logger.warning("Database URL not set or CRUD/UserDB not imported. Database features disabled.")
+    logger.warning("Database URL not set or CRUD/Models not imported. Database features disabled.")
 
 # --- УДАЛЕНО: Функция get_db_session больше не нужна ---
 # --- КОНЕЦ НОВОГО ---
 
-
 # --- Helper Functions ---
-def request_contact_markup() -> ReplyKeyboardMarkup:
-    """Creates the keyboard markup to request user contact."""
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="Поделиться контактом", request_contact=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True # Hide after use
-    )
+
+def request_contact_markup():
+    """Creates a keyboard asking the user to share their contact."""
+    button = KeyboardButton(text="Поделиться контактом", request_contact=True)
+    keyboard = ReplyKeyboardMarkup(keyboard=[[button]], resize_keyboard=True, one_time_keyboard=True)
+    return keyboard
 
 async def send_typing_periodically(chat_id: int):
-    """Sends typing action periodically until cancelled."""
-    try:
-        while True:
-            await bot.send_chat_action(chat_id, action=ChatAction.TYPING)
-            await asyncio.sleep(4) # Send typing action every 4 seconds
-    except asyncio.CancelledError:
-        logger.debug(f"Typing simulation cancelled for chat {chat_id}")
-    except Exception as e:
-        logger.error(f"Error in typing simulation for chat {chat_id}: {e}")
+    """Sends 'typing' action periodically while the agent is processing."""
+    while True:
+        try:
+            await bot.send_chat_action(chat_id, ChatAction.TYPING)
+            await asyncio.sleep(4) # Send typing status every 4 seconds
+        except asyncio.CancelledError:
+            break # Exit loop when task is cancelled
+        except Exception as e:
+            logger.warning(f"Failed to send typing action to chat {chat_id}: {e}")
+            await asyncio.sleep(10) # Wait longer on error
 
-# --- ИЗМЕНЕНИЕ: Добавляем platform_user_id в аргументы и payload ---
-async def publish_to_agent(agent_id: str, chat_id: int, platform_user_id: str, user_message: str, user_data: dict):
-# --- КОНЕЦ ИЗМЕНЕНИЯ ---
-    """Publishes a message to the agent's Redis input channel."""
+async def publish_to_agent(agent_id: str, chat_id: int, platform_user_id: str, message_text: str, user_data: dict):
+    """Publishes a user message to the agent's input Redis channel."""
+    global redis_client
     if not redis_client:
-        logger.error("Redis client not available for publishing.")
-        await bot.send_message(chat_id, "Ошибка: Не удалось подключиться к сервису агента.")
+        logger.error("Cannot publish to agent: Redis client not available.")
+        await bot.send_message(chat_id, "❌ Ошибка: Не удалось связаться с агентом (сервис недоступен).")
         return
 
     input_channel = f"agent:{agent_id}:input"
     payload = {
-        "message": user_message,
-        "thread_id": str(chat_id), # Ensure thread_id is string
-        "platform_user_id": platform_user_id, # <--- Добавлено
-        "user_data": user_data,
-        "channel": "telegram"
+        "message": message_text,
+        "thread_id": str(chat_id), # Use chat_id as thread_id for Telegram
+        "platform_user_id": platform_user_id, # Include platform user ID
+        "user_data": user_data, # Include user data (auth status, etc.)
+        "channel": "telegram" # Indicate the source channel
     }
     try:
         await redis_client.publish(input_channel, json.dumps(payload))
         logger.info(f"Published message to {input_channel} for chat {chat_id}")
-    except redis_exceptions.ConnectionError as e:
-        logger.error(f"Redis connection error publishing to {input_channel}: {e}")
-        await bot.send_message(chat_id, "Ошибка: Не удалось отправить сообщение агенту (проблема с соединением).")
+    except redis.RedisError as e:
+        logger.error(f"Redis error publishing message to {input_channel}: {e}")
+        await bot.send_message(chat_id, "❌ Ошибка: Не удалось отправить сообщение агенту.")
     except Exception as e:
-        logger.error(f"Error publishing to {input_channel}: {e}", exc_info=True)
-        await bot.send_message(chat_id, "Ошибка: Не удалось отправить сообщение агенту.")
+        logger.error(f"Unexpected error publishing message to {input_channel}: {e}", exc_info=True)
+        await bot.send_message(chat_id, "❌ Произошла внутренняя ошибка при отправке сообщения.")
 
-# --- НОВОЕ: Helper для проверки авторизации ---
-async def check_user_authorization(platform_user_id: str) -> bool:
-    """Checks user authorization status, using cache first, then DB."""
+# --- УДАЛЕНО: Старая функция get_user_data ---
+# async def get_user_data(platform_user_id: str) -> Dict[str, Any]:
+#     """
+#     Retrieves user data, checking cache first, then DB.
+#     Returns a dictionary with user details and authorization status.
+#     """
+#     # ... (старая логика) ...
+# --- КОНЕЦ УДАЛЕНИЯ ---
+
+# --- ИЗМЕНЕНИЕ: Обновляем check_user_authorization ---
+async def check_user_authorization(agent_id: str, platform_user_id: str) -> bool:
+    """Checks user authorization status for a specific agent, using cache first, then DB."""
     if not redis_client:
         logger.error("Cannot check authorization: Redis client not available.")
         return False # Assume not authorized if Redis is down
 
-    cache_key = f"{USER_CACHE_PREFIX}telegram:{platform_user_id}"
+    # --- ИЗМЕНЕНИЕ: Ключ кэша теперь включает agent_id ---
+    cache_key = f"{USER_CACHE_PREFIX}telegram:{platform_user_id}:agent:{agent_id}"
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     try:
         logger.debug(f"Authorization check: Attempting to get cache for key '{cache_key}'")
-        cached_data_raw = await redis_client.get(cache_key)
-        if cached_data_raw:
-            user_data = json.loads(cached_data_raw)
-            is_auth = user_data.get('is_authorized', False)
-            logger.debug(f"Authorization check cache hit for {platform_user_id}: {is_auth}")
+        cached_auth_status = await redis_client.get(cache_key)
+        if cached_auth_status is not None:
+            # Кэшируем только 'true' или 'false'
+            is_auth = cached_auth_status == 'true'
+            logger.debug(f"Authorization check cache hit for agent {agent_id}, user {platform_user_id}: {is_auth}")
             return is_auth
         else:
-            logger.debug(f"Authorization check cache miss for {platform_user_id}. Checking DB.")
+            logger.debug(f"Authorization check cache miss for agent {agent_id}, user {platform_user_id}. Checking DB.")
             # Cache miss, check DB
             if not SessionLocal:
                 logger.error("Cannot check authorization in DB: SessionLocal not configured.")
@@ -147,34 +163,33 @@ async def check_user_authorization(platform_user_id: str) -> bool:
                 logger.debug(f"Authorization check: Attempting to get user from DB for platform='telegram', platform_user_id='{platform_user_id}'")
                 user = await crud.get_user_by_platform_id(session, 'telegram', platform_user_id)
                 if user:
-                    is_auth = user.is_authorized
-                    # Cache the result from DB
-                    cache_data = {
-                        'db_id': user.id,
-                        'is_authorized': user.is_authorized,
-                        'first_name': user.first_name,
-                        'last_name': user.last_name,
-                        'phone_number': user.phone_number
-                    }
-                    logger.debug(f"Authorization check: Attempting to set cache for key '{cache_key}' with TTL {REDIS_USER_CACHE_TTL}")
-                    await redis_client.set(cache_key, json.dumps(cache_data), ex=REDIS_USER_CACHE_TTL)
-                    logger.debug(f"Authorization check DB hit for {platform_user_id}: {is_auth}. Cached.")
+                    # Пользователь найден, проверяем авторизацию для агента
+                    logger.debug(f"Authorization check: User found (ID: {user.id}). Checking authorization for agent {agent_id}.")
+                    auth_record = await crud.db_get_agent_authorization(session, agent_id, user.id)
+                    is_auth = auth_record.is_authorized if auth_record else False
+                    logger.debug(f"Authorization check DB result for agent {agent_id}, user {user.id}: {is_auth}")
+
+                    # Кэшируем результат (только статус авторизации)
+                    cache_value = 'true' if is_auth else 'false'
+                    logger.debug(f"Authorization check: Attempting to set cache for key '{cache_key}' with value '{cache_value}' and TTL {REDIS_USER_CACHE_TTL}")
+                    await redis_client.set(cache_key, cache_value, ex=REDIS_USER_CACHE_TTL)
+                    logger.debug(f"Authorization check DB hit for agent {agent_id}, user {platform_user_id}: {is_auth}. Cached.")
                     return is_auth
                 else:
-                    # User not found in DB, cache this status
-                    logger.debug(f"Authorization check: Attempting to set 'not found' cache for key '{cache_key}' with TTL {REDIS_USER_CACHE_TTL}")
-                    cache_data = {'is_authenticated': False, 'is_authorized': False} # Use both for consistency
-                    await redis_client.set(cache_key, json.dumps(cache_data), ex=REDIS_USER_CACHE_TTL)
-                    logger.debug(f"Authorization check DB miss for {platform_user_id}. Cached 'not found'.")
+                    # Пользователь не найден в DB, кэшируем этот статус (False)
+                    logger.debug(f"Authorization check: User not found in DB for platform_user_id='{platform_user_id}'. Caching 'false'.")
+                    logger.debug(f"Authorization check: Attempting to set 'false' cache for key '{cache_key}' with TTL {REDIS_USER_CACHE_TTL}")
+                    await redis_client.set(cache_key, 'false', ex=REDIS_USER_CACHE_TTL)
+                    logger.debug(f"Authorization check DB miss for {platform_user_id}. Cached 'false'.")
                     return False
 
     except redis.RedisError as e:
-        logger.error(f"Redis error during authorization check for {platform_user_id}: {e}")
+        logger.error(f"Redis error during authorization check for agent {agent_id}, user {platform_user_id}: {e}")
         return False # Assume not authorized on Redis error
     except Exception as e:
-        logger.error(f"Unexpected error during authorization check for {platform_user_id}: {e}", exc_info=True)
+        logger.error(f"Unexpected error during authorization check for agent {agent_id}, user {platform_user_id}: {e}", exc_info=True)
         return False # Assume not authorized on other errors
-# --- КОНЕЦ НОВОГО ---
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
 
 # --- Redis Listener ---
@@ -230,11 +245,12 @@ async def redis_output_listener(agent_id: str):
                                     response = response.replace(AUTH_TRIGGER, "").strip() # Убираем триггер из ответа
 
                                 # Отправляем сообщение с учетом необходимости авторизации
-                                # --- ИЗМЕНЕНИЕ: Проверяем авторизацию через helper ---
+                                # --- ИЗМЕНЕНИЕ: Проверяем авторизацию через helper с agent_id ---
                                 is_user_authorized = False # По умолчанию
                                 if auth_required and platform_user_id:
-                                    is_user_authorized = await check_user_authorization(platform_user_id)
-                                    logger.debug(f"Checked authorization for {platform_user_id} due to AUTH_TRIGGER: {is_user_authorized}")
+                                    # Используем agent_id_global, так как listener слушает конкретного агента
+                                    is_user_authorized = await check_user_authorization(agent_id_global, platform_user_id)
+                                    logger.debug(f"Checked authorization for agent {agent_id_global}, user {platform_user_id} due to AUTH_TRIGGER: {is_user_authorized}")
 
                                 if auth_required and not is_user_authorized:
                                 # --- КОНЕЦ ИЗМЕНЕНИЯ ---
@@ -247,7 +263,8 @@ async def redis_output_listener(agent_id: str):
                                 else:
                                     # Либо авторизация не требуется, либо пользователь уже авторизован
                                     # Отправляем обычный ответ (возможно, без триггера)
-                                    await bot.send_message(chat_id_int, response)
+                                    if response: # Убедимся, что есть что отправлять после удаления триггера
+                                        await bot.send_message(chat_id_int, response)
 
                             else:
                                 logger.warning(f"Received message from agent for chat {chat_id_int} without response or error: {data}")
@@ -305,103 +322,111 @@ async def login_command(message: Message):
         reply_markup=request_contact_markup()
     )
 
-# --- ИЗМЕНЕНИЕ: Убираем зависимость Depends, создаем сессию вручную ---
+# --- ИЗМЕНЕНИЕ: Обновляем handle_contact ---
 @dp.message(F.contact)
 async def handle_contact(message: Message):
-# --- КОНЕЦ ИЗМЕНЕНИЯ ---
-    """Handles receiving user contact information for authorization."""
+    """Handles receiving user contact information for authorization for the specific agent."""
     user_id = message.from_user.id
     contact = message.contact
     chat_id = message.chat.id
     platform_user_id = str(contact.user_id) # Используем ID из контакта как platform_user_id
 
     if contact.user_id == user_id:
-        # --- ИЗМЕНЕНИЕ: Логика сохранения в БД и кэширования ---
-        # --- ИЗМЕНЕНИЕ: Проверяем SessionLocal и создаем сессию ---
         if not SessionLocal:
             logger.error(f"Cannot process contact for user {user_id}: Database SessionLocal not configured.")
             await message.answer("❌ Ошибка: Сервис базы данных недоступен. Попробуйте позже.")
             return
-        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
         user_details = {
             'phone_number': contact.phone_number,
             'first_name': contact.first_name,
             'last_name': contact.last_name,
-            'username': message.from_user.username, # Добавляем username из from_user
-            'is_authorized': True
+            'username': message.from_user.username,
+            # 'is_authorized': True # Больше не используется здесь
         }
 
         db_user = None
         try:
-            async with SessionLocal() as session: # Создаем сессию
+            async with SessionLocal() as session:
                 logger.debug(f"handle_contact: Attempting to create/update user in DB for platform='telegram', platform_user_id='{platform_user_id}'")
+                # Создаем или обновляем пользователя (без установки is_authorized)
                 db_user = await crud.create_or_update_user(
-                    session, # Передаем созданную сессию
+                    session,
                     platform='telegram',
                     platform_user_id=platform_user_id,
                     user_details=user_details
                 )
-                # --- ИЗМЕНЕНИЕ: Переносим логику обработки результата внутрь try/async with ---
+
                 if db_user:
-                    logger.info(f"User {platform_user_id} authorized via contact. DB ID: {db_user.id}")
+                    logger.info(f"User {platform_user_id} found/created (DB ID: {db_user.id}). Setting authorization for agent {agent_id_global}.")
 
-                    # Кэшируем данные пользователя
-                    cache_key = f"{USER_CACHE_PREFIX}telegram:{platform_user_id}"
-                    cache_data = {
-                        'db_id': db_user.id,
-                        'is_authorized': True,
-                        'first_name': db_user.first_name,
-                        'last_name': db_user.last_name,
-                        'phone_number': db_user.phone_number
-                    }
-                    try:
-                        if redis_client:
-                            logger.debug(f"handle_contact: Attempting to set cache for key '{cache_key}' with TTL {REDIS_USER_CACHE_TTL}")
-                            await redis_client.set(cache_key, json.dumps(cache_data), ex=REDIS_USER_CACHE_TTL)
-                            logger.debug(f"Cached user data for {platform_user_id}")
-                        else:
-                            logger.warning(f"Redis client not available, cannot cache user data for {platform_user_id}")
-                    except redis.RedisError as e:
-                        logger.error(f"Failed to cache user data for {platform_user_id}: {e}")
-
-                    await message.answer(
-                        "✅ Авторизация прошла успешно!",
-                        reply_markup=ReplyKeyboardRemove() # Remove the contact button
+                    # --- НОВОЕ: Устанавливаем авторизацию для агента ---
+                    auth_record = await crud.db_create_or_update_agent_authorization(
+                        session,
+                        agent_id=agent_id_global,
+                        user_id=db_user.id,
+                        is_authorized=True
                     )
+                    # --- КОНЕЦ НОВОГО ---
 
-                    # Отправляем сообщение агенту (оставляем, как просил пользователь)
-                    agent_user_data = {
-                        "is_authenticated": True,
-                        "user_id": platform_user_id,
-                        "phone_number": db_user.phone_number,
-                        "first_name": db_user.first_name,
-                        "last_name": db_user.last_name
-                    }
-                    await publish_to_agent(
-                        agent_id_global,
-                        chat_id,
-                        platform_user_id,
-                        "Пользователь успешно авторизовался.",
-                        agent_user_data
-                    )
+                    if auth_record:
+                        logger.info(f"User {platform_user_id} authorized for agent {agent_id_global}.")
+
+                        # --- НОВОЕ: Обновляем кэш авторизации для агента ---
+                        cache_key = f"{USER_CACHE_PREFIX}telegram:{platform_user_id}:agent:{agent_id_global}"
+                        try:
+                            if redis_client:
+                                logger.debug(f"handle_contact: Attempting to set auth cache for key '{cache_key}' with value 'true' and TTL {REDIS_USER_CACHE_TTL}")
+                                await redis_client.set(cache_key, 'true', ex=REDIS_USER_CACHE_TTL)
+                                logger.debug(f"Cached agent authorization status for {platform_user_id}, agent {agent_id_global}")
+                            else:
+                                logger.warning(f"Redis client not available, cannot cache agent authorization for {platform_user_id}")
+                        except redis.RedisError as e:
+                            logger.error(f"Failed to cache agent authorization for {platform_user_id}: {e}")
+                        # --- КОНЕЦ НОВОГО ---
+
+                        await message.answer(
+                            "✅ Авторизация прошла успешно!",
+                            reply_markup=ReplyKeyboardRemove() # Remove the contact button
+                        )
+
+                        # Отправляем сообщение агенту (оставляем, как просил пользователь)
+                        agent_user_data = {
+                            "is_authenticated": True, # Пользователь теперь аутентифицирован для этого агента
+                            "user_id": platform_user_id,
+                            "phone_number": db_user.phone_number,
+                            "first_name": db_user.first_name,
+                            "last_name": db_user.last_name
+                        }
+                        await publish_to_agent(
+                            agent_id_global,
+                            chat_id,
+                            platform_user_id,
+                            "Пользователь успешно авторизовался.",
+                            agent_user_data
+                        )
+                    else:
+                        # Ошибка при создании/обновлении записи авторизации
+                        logger.error(f"Failed to save agent authorization to DB for user {db_user.id}, agent {agent_id_global}")
+                        await message.answer("❌ Ошибка: Не удалось сохранить данные авторизации для агента. Попробуйте позже.")
+
                 else:
                     # Эта ветка выполнится, если create_or_update_user вернул None (ошибка внутри CRUD)
-                    logger.error(f"Failed to save user authorization to DB for {platform_user_id} (CRUD returned None)")
-                    await message.answer("❌ Ошибка: Не удалось сохранить данные авторизации. Попробуйте позже.")
-                # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+                    logger.error(f"Failed to save user to DB for {platform_user_id} (CRUD returned None)")
+                    await message.answer("❌ Ошибка: Не удалось сохранить данные пользователя. Попробуйте позже.")
+
         except Exception as e:
             logger.error(f"Error during contact handling DB operation for {platform_user_id}: {e}", exc_info=True)
             await message.answer("❌ Произошла внутренняя ошибка при обработке контакта.")
-        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
     else:
         await message.answer("❌ Пожалуйста, поделитесь *своим* контактом для авторизации.")
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
-# --- ИЗМЕНЕНИЕ: Уточняем фильтр для текстовых сообщений ---
+# --- ИЗМЕНЕНИЕ: Обновляем handle_text_message ---
 @dp.message(F.text) # Явно указываем, что ловим только текст
 async def handle_text_message(message: Message):
-# --- КОНЕЦ ИЗМЕНЕНИЯ ---
-    """Handles regular text messages from the user."""
+    """Handles regular text messages from the user, checking agent-specific authorization."""
     chat_id = message.chat.id
     user_message = message.md_text
     platform_user_id = str(message.from_user.id) # Используем ID пользователя из сообщения
@@ -411,108 +436,57 @@ async def handle_text_message(message: Message):
 
     typing_task = asyncio.create_task(send_typing_periodically(chat_id))
 
-    # --- ИЗМЕНЕНИЕ: Получение user_data из кэша/БД ---
     try:
-        user_data_for_agent = {"is_authenticated": False} # По умолчанию для агента
-        cache_key = f"{USER_CACHE_PREFIX}telegram:{platform_user_id}"
-        cached_data_raw = None
+        # --- ИЗМЕНЕНИЕ: Получаем статус авторизации для агента ---
+        is_auth_for_agent = await check_user_authorization(agent_id_global, platform_user_id)
+        logger.debug(f"handle_text_message: Authorization status for agent {agent_id_global}, user {platform_user_id}: {is_auth_for_agent}")
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
-        if redis_client:
-            try:
-                logger.debug(f"handle_text_message: Attempting to get cache for key '{cache_key}'")
-                cached_data_raw = await redis_client.get(cache_key)
-            except redis.RedisError as e:
-                logger.error(f"Redis error getting user cache for {platform_user_id}: {e}")
+        # --- ИЗМЕНЕНИЕ: Получаем данные пользователя ТОЛЬКО если авторизован ---
+        user_data_for_agent = {
+            "is_authenticated": is_auth_for_agent,
+            "user_id": platform_user_id # Всегда отправляем platform_user_id как user_id
+        }
+        db_user = None
 
-        if cached_data_raw:
-            logger.debug(f"Cache hit for user {platform_user_id}")
-            cached_data = json.loads(cached_data_raw)
-            # Формируем данные для агента из кэша
-            user_data_for_agent = {
-                "is_authenticated": cached_data.get('is_authorized', False),
-                "user_id": platform_user_id,
-                "phone_number": cached_data.get('phone_number'),
-                "first_name": cached_data.get('first_name'),
-                "last_name": cached_data.get('last_name')
-            }
-        else:
-            logger.debug(f"Cache miss for user {platform_user_id}. Checking DB.")
-            # Cache miss, check DB
-            # --- ИЗМЕНЕНИЕ: Проверяем SessionLocal и создаем сессию ---
-            if not SessionLocal:
-                logger.warning(f"DB SessionLocal not configured for user {platform_user_id}. Assuming not authenticated.")
-            else:
-                async with SessionLocal() as session: # Создаем сессию
-                    logger.debug(f"handle_text_message: Attempting to get user from DB for platform='telegram', platform_user_id='{platform_user_id}'")
-                    user = await crud.get_user_by_platform_id(session, 'telegram', platform_user_id) # Передаем сессию
-                    if user:
-                        logger.debug(f"DB hit for user {platform_user_id}. Caching.")
-                        # Формируем данные для агента из БД
-                        user_data_for_agent = {
-                            "is_authenticated": user.is_authorized,
-                            "user_id": platform_user_id,
-                            "phone_number": user.phone_number,
-                            "first_name": user.first_name,
-                            "last_name": user.last_name
-                        }
-                        # Кэшируем данные из БД
-                        cache_data_to_set = {
-                            'db_id': user.id,
-                            'is_authorized': user.is_authorized,
-                            'first_name': user.first_name,
-                            'last_name': user.last_name,
-                            'phone_number': user.phone_number
-                        }
-                        if redis_client:
-                            try:
-                                logger.debug(f"handle_text_message: Attempting to set cache for key '{cache_key}' with TTL {REDIS_USER_CACHE_TTL}")
-                                await redis_client.set(cache_key, json.dumps(cache_data_to_set), ex=REDIS_USER_CACHE_TTL)
-                            except redis.RedisError as e:
-                                logger.error(f"Redis error setting user cache for {platform_user_id}: {e}")
+        if is_auth_for_agent: # Только если пользователь авторизован для этого агента
+            if SessionLocal:
+                async with SessionLocal() as session:
+                    logger.debug(f"handle_text_message: User is authorized. Attempting to get user details from DB for platform='telegram', platform_user_id='{platform_user_id}'")
+                    db_user = await crud.get_user_by_platform_id(session, 'telegram', platform_user_id)
+                    if db_user:
+                        logger.debug(f"User details found for {platform_user_id} (DB ID: {db_user.id})")
+                        # Добавляем остальные данные
+                        user_data_for_agent.update({
+                            "phone_number": db_user.phone_number,
+                            "first_name": db_user.first_name,
+                            "last_name": db_user.last_name
+                        })
                     else:
-                        logger.debug(f"DB miss for user {platform_user_id}. Caching 'not found'.")
-                        # Пользователь не найден в БД, кэшируем этот статус
-                        cache_data_to_set = {'is_authenticated': False, 'is_authorized': False}
-                        if redis_client:
-                            try:
-                                logger.debug(f"handle_text_message: Attempting to set 'not found' cache for key '{cache_key}' with TTL {REDIS_USER_CACHE_TTL}")
-                                await redis_client.set(cache_key, json.dumps(cache_data_to_set), ex=REDIS_USER_CACHE_TTL)
-                            except redis.RedisError as e:
-                                logger.error(f"Redis error setting 'not found' cache for {platform_user_id}: {e}")
-                        # user_data_for_agent остается {"is_authenticated": False}
-            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
-
-        # Убедимся, что is_authenticated всегда присутствует
-        if "is_authenticated" not in user_data_for_agent:
-            user_data_for_agent["is_authenticated"] = False
+                        # Это странная ситуация: авторизация есть, а пользователя нет. Логируем.
+                        logger.warning(f"User {platform_user_id} is authorized for agent {agent_id_global}, but user details not found in DB.")
+            else:
+                logger.warning(f"DB SessionLocal not configured. Cannot fetch user details for authorized user {platform_user_id}.")
+        else:
+            # Пользователь не авторизован, не извлекаем доп. данные
+            logger.debug(f"handle_text_message: User {platform_user_id} is not authorized for agent {agent_id_global}. Sending minimal data.")
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
         await publish_to_agent(
             agent_id_global,
             chat_id,
             platform_user_id, # Передаем platform_user_id
             user_message,
-            user_data_for_agent
+            user_data_for_agent # Передаем собранные данные
         )
-    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
-        # Don't wait for response here, the redis_output_listener handles it
 
     except Exception as e:
         logger.error(f"Error handling message from chat {chat_id}: {e}", exc_info=True)
         await message.answer("⚠ Произошла ошибка при обработке вашего запроса.")
     finally:
-        # Stop the typing simulation *after* publishing the message
-        # The listener will handle sending the actual response when it arrives
         await asyncio.sleep(1) # Keep typing briefly after sending
         typing_task.cancel()
-
-# --- НОВОЕ: Обработчик для всех остальных типов сообщений ---
-@dp.message()
-async def handle_other_messages(message: Message):
-    """Logs unhandled message types."""
-    logger.warning(
-        f"Received unhandled message type in chat {message.chat.id}. Message details: {message.model_dump_json(exclude_defaults=True)}"
-    )
-# --- КОНЕЦ НОВОГО ---
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
 # --- Application Lifecycle ---
 @asynccontextmanager

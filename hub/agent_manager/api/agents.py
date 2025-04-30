@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
 from ..redis_client import get_redis
 from ..db import get_db
-from ..models import AgentConfigInput, AgentConfigOutput, AgentStatus, AgentListItem, IntegrationStatus, IntegrationType, AgentConfigStructure
+from ..models import AgentConfigInput, AgentConfigOutput, AgentStatus, AgentListItem, IntegrationStatus, IntegrationType, AgentConfigStructure, UserOutput
 from .. import crud
 from ..import process_manager
 import json
@@ -366,7 +366,7 @@ async def get_agent_config_for_runner(
             id=db_agent.id,
             name=db_agent.name,
             description=db_agent.description,
-            userId=db_agent.user_id,
+            ownerId=db_agent.owner_id,
             config=config_structure,
             created_at=db_agent.created_at,
             updated_at=db_agent.updated_at
@@ -379,7 +379,7 @@ async def get_agent_config_for_runner(
              id=db_agent.id,
              name=db_agent.name,
              description=db_agent.description,
-             userId=db_agent.user_id,
+             ownerId=db_agent.owner_id,
              config=config_structure_original,
              created_at=db_agent.created_at,
              updated_at=db_agent.updated_at
@@ -777,5 +777,36 @@ async def delete_chat_thread(
         # Логирование ошибки происходит внутри CRUD функции
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete chat thread.")
 
+# --- КОНЕЦ НОВОГО ---
+
+# --- НОВОЕ: Эндпоинт для получения пользователей агента ---
+@router.get(
+    "/{agent_id}/users",
+    response_model=List[UserOutput],
+    summary="List users associated with an agent",
+    tags=["Agents", "Users"] # Добавляем тег Users
+)
+async def list_agent_users(
+    agent_id: str,
+    skip: int = Query(0, ge=0, description="Number of users to skip"),
+    limit: int = Query(100, ge=1, le=500, description="Maximum number of users to return"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retrieves a list of users who have interacted with or are authorized for
+    the specified agent.
+    """
+    # Проверяем, существует ли агент
+    db_agent = await crud.db_get_agent_config(db, agent_id)
+    if not db_agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
+
+    try:
+        users = await crud.db_get_users_for_agent(db, agent_id, skip=skip, limit=limit)
+        # FastAPI автоматически преобразует список UserDB в список UserOutput
+        return users
+    except Exception as e:
+        # Логирование происходит в CRUD
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve user list for agent.")
 # --- КОНЕЦ НОВОГО ---
 

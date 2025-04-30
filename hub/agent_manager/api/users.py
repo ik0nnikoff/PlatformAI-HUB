@@ -18,21 +18,19 @@ router = APIRouter()
 )
 async def list_users(
     platform: Optional[str] = Query(None, description="Filter by platform (e.g., 'telegram')"),
-    is_authorized: Optional[bool] = Query(None, description="Filter by authorization status"),
     search: Optional[str] = Query(None, description="Search query for platform ID, phone, name, or username"),
     skip: int = Query(0, ge=0, description="Number of users to skip"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of users to return"),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Retrieves a list of users, allowing filtering by platform, authorization status,
-    and a general search query across multiple fields. Supports pagination.
+    Retrieves a list of users, allowing filtering by platform and a general search query
+    across multiple fields. Supports pagination. Authorization status is no longer a filter.
     """
     try:
         users = await crud.db_get_users(
             db=db,
             platform=platform,
-            is_authorized=is_authorized,
             search_query=search,
             skip=skip,
             limit=limit

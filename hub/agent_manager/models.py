@@ -69,7 +69,7 @@ class AgentConfigOutput(BaseModel):
     id: str
     name: str
     description: Optional[str] = None
-    userId: str
+    ownerId: str # --- ИЗМЕНЕНИЕ: Переименовано из userId ---
     # Возвращаем валидированную структуру config
     config: AgentConfigStructure
     created_at: datetime
@@ -152,7 +152,9 @@ class UserOutput(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     username: Optional[str] = None
-    is_authorized: bool
+    # --- ИЗМЕНЕНИЕ: Удаляем is_authorized ---
+    # is_authorized: bool
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     created_at: datetime
     updated_at: datetime
 
@@ -166,13 +168,18 @@ class AgentConfigDB(Base):
     id = Column(String, primary_key=True, index=True)
     name = Column(String, index=True, nullable=False)
     description = Column(Text, nullable=True)
-    user_id = Column(String, index=True, nullable=False) # Добавлено nullable=False и index=True
+    # --- ИЗМЕНЕНИЕ: Переименовано user_id в owner_id ---
+    owner_id = Column(String, index=True, nullable=False)
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     config_json = Column(JSON, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Связь с сообщениями чата (если нужно будет получать все сообщения агента)
     chat_messages = relationship("ChatMessageDB", back_populates="agent_config")
+    # --- НОВОЕ: Связь с авторизациями ---
+    authorizations = relationship("AgentUserAuthorizationDB", back_populates="agent_config", cascade="all, delete-orphan")
+    # --- КОНЕЦ НОВОГО ---
 
 class ChatMessageDB(Base):
     __tablename__ = "chat_messages"
@@ -200,10 +207,37 @@ class UserDB(Base):
     first_name = Column(String, nullable=True)
     last_name = Column(String, nullable=True)
     phone_number = Column(String, nullable=True, index=True)
-    is_authorized = Column(Boolean, default=False, nullable=False, index=True) # Authorization status within our system
+    # --- ИЗМЕНЕНИЕ: Удаляем is_authorized ---
+    # is_authorized = Column(Boolean, default=False, nullable=False, index=True) # Authorization status within our system
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
         UniqueConstraint('platform', 'platform_user_id', name='uq_user_platform_id'),
     )
+
+    # --- НОВОЕ: Связь с авторизациями ---
+    agent_authorizations = relationship("AgentUserAuthorizationDB", back_populates="user")
+    # --- КОНЕЦ НОВОГО ---
+
+
+# --- НОВОЕ: Таблица авторизации пользователей для агентов ---
+class AgentUserAuthorizationDB(Base):
+    __tablename__ = "agent_user_authorizations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(String, ForeignKey("agent_configs.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    is_authorized = Column(Boolean, default=False, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Связи
+    agent_config = relationship("AgentConfigDB", back_populates="authorizations")
+    user = relationship("UserDB", back_populates="agent_authorizations")
+
+    __table_args__ = (
+        UniqueConstraint('agent_id', 'user_id', name='uq_agent_user_authorization'),
+    )
+# --- КОНЕЦ НОВОГО ---

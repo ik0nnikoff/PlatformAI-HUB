@@ -6,8 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # --- НОВОЕ: Импортируем SQLAlchemyError ---
 from sqlalchemy.exc import SQLAlchemyError
 # --- КОНЕЦ НОВОГО ---
-# --- ИЗМЕНЕНИЕ: Добавляем UserDB ---
-from .models import AgentConfigDB, AgentConfigInput, ChatListItemOutput, ChatMessageDB, SenderType, UserDB # Добавляем UserDB
+# --- ИЗМЕНЕНИЕ: Добавляем UserDB и AgentUserAuthorizationDB ---
+from .models import AgentConfigDB, AgentConfigInput, ChatListItemOutput, ChatMessageDB, SenderType, UserDB, AgentUserAuthorizationDB # Добавляем UserDB и AgentUserAuthorizationDB
 # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 # --- УДАЛЕНО: Убираем неиспользуемый импорт ---
 # from .schemas import AgentConfigStructure # Используем схему для валидации
@@ -30,7 +30,9 @@ async def db_create_agent_config(db: AsyncSession, agent_config: AgentConfigInpu
         id=agent_id,
         name=agent_config.name,
         description=agent_config.description,
-        user_id=agent_config.userId,
+        # --- ИЗМЕНЕНИЕ: Маппинг userId на owner_id ---
+        owner_id=agent_config.userId,
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
         config_json=config_json_data
     )
     db.add(db_agent)
@@ -102,7 +104,9 @@ async def db_update_agent_config(db: AsyncSession, agent_id: str, agent_config: 
     # Обновляем поля
     db_agent.name = agent_config.name
     db_agent.description = agent_config.description
-    db_agent.user_id = agent_config.userId # Убедитесь, что userId обновляется
+    # --- ИЗМЕНЕНИЕ: Маппинг userId на owner_id ---
+    db_agent.owner_id = agent_config.userId
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     # Преобразуем Pydantic config в JSON (словарь) для хранения
     db_agent.config_json = agent_config.config_json # Обновляем JSON как есть
 
@@ -330,13 +334,14 @@ async def create_or_update_user(
 ) -> Optional[UserDB]:
     """
     Creates a new user or updates an existing one based on platform and platform_user_id.
+    Authorization status is NOT handled here anymore.
 
     Args:
         db: The database session.
         platform: The platform identifier (e.g., 'telegram').
         platform_user_id: The user's ID on that platform.
         user_details: A dictionary containing user fields to create/update
-                      (e.g., 'username', 'first_name', 'last_name', 'phone_number', 'is_authorized').
+                      (e.g., 'username', 'first_name', 'last_name', 'phone_number').
 
     Returns:
         The created or updated UserDB object, or None if an error occurred.
@@ -347,20 +352,23 @@ async def create_or_update_user(
 
         if existing_user:
             # Update existing user
-            # Filter out None values from user_details to avoid overwriting existing data with None
-            update_data = {k: v for k, v in user_details.items() if v is not None}
+            # Filter out None values and 'is_authorized' from user_details
+            update_data = {k: v for k, v in user_details.items() if v is not None and k != 'is_authorized'}
             # Ensure updated_at is updated
             update_data['updated_at'] = datetime.now(timezone.utc)
 
-            await db.execute(
-                update(UserDB)
-                .where(UserDB.id == existing_user.id)
-                .values(**update_data)
-            )
-            # Refresh the object to get updated values (including updated_at)
-            await db.refresh(existing_user, attribute_names=list(update_data.keys()))
-            logger.info(f"Updated user: Platform={platform}, PlatformID={platform_user_id}, DB_ID={existing_user.id}")
-            await db.commit() # Commit after successful update
+            if update_data: # Only update if there's something to update
+                await db.execute(
+                    update(UserDB)
+                    .where(UserDB.id == existing_user.id)
+                    .values(**update_data)
+                )
+                # Refresh the object to get updated values (including updated_at)
+                await db.refresh(existing_user, attribute_names=list(update_data.keys()))
+                logger.info(f"Updated user: Platform={platform}, PlatformID={platform_user_id}, DB_ID={existing_user.id}")
+                await db.commit() # Commit after successful update
+            else:
+                logger.debug(f"No fields to update for user: Platform={platform}, PlatformID={platform_user_id}")
             return existing_user
         else:
             # Create new user
@@ -371,7 +379,9 @@ async def create_or_update_user(
                 first_name=user_details.get('first_name'),
                 last_name=user_details.get('last_name'),
                 phone_number=user_details.get('phone_number'),
-                is_authorized=user_details.get('is_authorized', False) # Default to False if not provided
+                # --- ИЗМЕНЕНИЕ: is_authorized больше не устанавливается здесь ---
+                # is_authorized=user_details.get('is_authorized', False)
+                # --- КОНЕЦ ИЗМЕНЕНИЯ ---
             )
             db.add(new_user)
             await db.flush() # Assigns ID to new_user
@@ -391,22 +401,29 @@ async def create_or_update_user(
 async def db_get_users(
     db: AsyncSession,
     platform: Optional[str] = None,
-    is_authorized: Optional[bool] = None,
+    # --- ИЗМЕНЕНИЕ: Удаляем is_authorized ---
+    # is_authorized: Optional[bool] = None,
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     search_query: Optional[str] = None, # Для поиска по имени, username, телефону
     skip: int = 0,
     limit: int = 100
 ) -> List[UserDB]:
     """
     Retrieves a list of users from the database with optional filtering and pagination.
+    Does not filter by authorization status anymore.
     """
-    logger.debug(f"Fetching users with filters: platform={platform}, is_authorized={is_authorized}, search='{search_query}', skip={skip}, limit={limit}")
+    # --- ИЗМЕНЕНИЕ: Обновляем лог ---
+    logger.debug(f"Fetching users with filters: platform={platform}, search='{search_query}', skip={skip}, limit={limit}")
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     try:
         stmt = select(UserDB)
 
         if platform:
             stmt = stmt.where(UserDB.platform == platform)
-        if is_authorized is not None:
-            stmt = stmt.where(UserDB.is_authorized == is_authorized)
+        # --- ИЗМЕНЕНИЕ: Удаляем фильтр is_authorized ---
+        # if is_authorized is not None:
+        #     stmt = stmt.where(UserDB.is_authorized == is_authorized)
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
         if search_query:
             # Ищем по части строки в нескольких полях
             search_ilike = f"%{search_query}%"
@@ -434,4 +451,97 @@ async def db_get_users(
     except Exception as e:
         logger.error(f"Unexpected error fetching users: {e}", exc_info=True)
         raise
+# --- КОНЕЦ НОВОГО ---
+
+# --- НОВОЕ: CRUD для AgentUserAuthorization ---
+
+async def db_get_agent_authorization(db: AsyncSession, agent_id: str, user_id: int) -> Optional[AgentUserAuthorizationDB]:
+    """Retrieves the authorization status for a specific user and agent."""
+    logger.debug(f"Fetching authorization for Agent={agent_id}, UserID={user_id}")
+    try:
+        stmt = select(AgentUserAuthorizationDB).where(
+            AgentUserAuthorizationDB.agent_id == agent_id,
+            AgentUserAuthorizationDB.user_id == user_id
+        )
+        result = await db.execute(stmt)
+        auth_record = result.scalar_one_or_none()
+        if auth_record:
+            logger.debug(f"Authorization found for Agent={agent_id}, UserID={user_id}: is_authorized={auth_record.is_authorized}")
+        else:
+            logger.debug(f"Authorization NOT found for Agent={agent_id}, UserID={user_id}")
+        return auth_record
+    except Exception as e:
+        logger.error(f"Error fetching authorization for Agent={agent_id}, UserID={user_id}: {e}", exc_info=True)
+        return None
+
+async def db_create_or_update_agent_authorization(
+    db: AsyncSession,
+    agent_id: str,
+    user_id: int,
+    is_authorized: bool
+) -> Optional[AgentUserAuthorizationDB]:
+    """Creates or updates the authorization status for a user and agent."""
+    logger.debug(f"Setting authorization for Agent={agent_id}, UserID={user_id} to {is_authorized}")
+    try:
+        existing_auth = await db_get_agent_authorization(db, agent_id, user_id)
+
+        if existing_auth:
+            # Update existing authorization
+            if existing_auth.is_authorized != is_authorized:
+                existing_auth.is_authorized = is_authorized
+                existing_auth.updated_at = datetime.now(timezone.utc)
+                await db.commit()
+                await db.refresh(existing_auth)
+                logger.info(f"Updated authorization for Agent={agent_id}, UserID={user_id} to {is_authorized}")
+            else:
+                logger.debug(f"Authorization already set to {is_authorized} for Agent={agent_id}, UserID={user_id}. No update needed.")
+            return existing_auth
+        else:
+            # Create new authorization record
+            new_auth = AgentUserAuthorizationDB(
+                agent_id=agent_id,
+                user_id=user_id,
+                is_authorized=is_authorized
+            )
+            db.add(new_auth)
+            await db.flush() # Assigns ID
+            await db.refresh(new_auth)
+            await db.commit()
+            logger.info(f"Created authorization for Agent={agent_id}, UserID={user_id} with status {is_authorized}")
+            return new_auth
+    except Exception as e:
+        logger.error(f"Error creating/updating authorization for Agent={agent_id}, UserID={user_id}: {e}", exc_info=True)
+        await db.rollback()
+        return None
+
+async def db_get_users_for_agent(
+    db: AsyncSession,
+    agent_id: str,
+    skip: int = 0,
+    limit: int = 100
+) -> List[UserDB]:
+    """Retrieves users who have interacted with (or are authorized for) a specific agent."""
+    logger.debug(f"Fetching users for Agent={agent_id} (skip={skip}, limit={limit})")
+    try:
+        # Выбираем уникальные user_id из AgentUserAuthorizationDB для данного agent_id
+        subquery = select(AgentUserAuthorizationDB.user_id).where(
+            AgentUserAuthorizationDB.agent_id == agent_id
+        ).distinct().subquery()
+
+        # Выбираем пользователей, чьи ID есть в результатах подзапроса
+        stmt = select(UserDB).join(
+            subquery, UserDB.id == subquery.c.user_id
+        ).order_by(desc(UserDB.updated_at)).offset(skip).limit(limit)
+
+        result = await db.execute(stmt)
+        users = result.scalars().all()
+        logger.debug(f"Found {len(users)} users associated with Agent={agent_id}")
+        return users
+    except SQLAlchemyError as e:
+        logger.error(f"Database error fetching users for agent {agent_id}: {e}", exc_info=True)
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error fetching users for agent {agent_id}: {e}", exc_info=True)
+        raise
+
 # --- КОНЕЦ НОВОГО ---
