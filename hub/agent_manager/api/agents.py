@@ -2,7 +2,7 @@ import logging
 import os
 # --- ИЗМЕНЕНИЕ: Убедимся, что httpx и asyncio импортированы ---
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from typing import List, Dict, Any # Добавляем Dict, Any
+from typing import List, Dict, Any, Optional # Добавляем Dict, Any
 from pydantic import ValidationError
 import redis.asyncio as redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -758,12 +758,16 @@ async def list_agent_chats(
     agent_id: str,
     skip: int = Query(0, ge=0, description="Number of threads to skip"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of threads to return"),
+    # --- ИЗМЕНЕНИЕ: Добавляем параметр channel ---
+    channel: Optional[str] = Query(None, description="Filter by channel of the last message (e.g., 'telegram', 'websocket')"),
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     db: AsyncSession = Depends(get_db)
 ):
     """
     Retrieves a list of unique chat threads for the specified agent,
     ordered by the timestamp of the last message in descending order.
     Includes details of the last message for each thread.
+    Allows filtering by the channel of the last message.
     """
     # Проверяем, существует ли агент
     db_agent = await crud.db_get_agent_config(db, agent_id)
@@ -771,7 +775,9 @@ async def list_agent_chats(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent configuration not found")
 
     try:
-        chats = await crud.db_get_agent_chats(db, agent_id, skip=skip, limit=limit)
+        # --- ИЗМЕНЕНИЕ: Передаем channel в CRUD ---
+        chats = await crud.db_get_agent_chats(db, agent_id, skip=skip, limit=limit, channel=channel)
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
         return chats
     except Exception as e:
         logger.error(f"Error fetching chat list for agent {agent_id}: {e}", exc_info=True)

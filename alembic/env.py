@@ -8,23 +8,6 @@ from dotenv import load_dotenv # Import load_dotenv
 
 from alembic import context
 
-# --- Load .env file ---
-# Construct the path to the .env file relative to this script's location
-# Adjust the path depth ('..', '..') as needed
-DOTENV_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '.env'))
-if os.path.exists(DOTENV_PATH):
-    load_dotenv(dotenv_path=DOTENV_PATH)
-    print(f"Alembic env.py: Loaded environment variables from {DOTENV_PATH}") # Debug print
-else:
-    print(f"Alembic env.py: Warning! .env file not found at {DOTENV_PATH}")
-
-
-# --- Import Base and Models ---
-# Add the project root directory to the Python path
-# Adjust the path depth ('..') based on where alembic/env.py is relative to the project root
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-sys.path.insert(0, PROJECT_ROOT)
-
 # Now import Base and models from your application
 # Ensure agent_manager is discoverable (e.g., via PYTHONPATH or installed package)
 try:
@@ -36,10 +19,6 @@ except ImportError as e:
      sys.exit(1)
 
 
-# --- Alembic Configuration ---
-
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
 config = context.config
 
 # Interpret the config file for Python logging.

@@ -201,14 +201,19 @@ async def db_get_recent_chat_history(db: AsyncSession, agent_id: str, thread_id:
 # --- КОНЕЦ НОВОГО ---
 
 
-async def db_get_agent_chats(db: AsyncSession, agent_id: str, skip: int = 0, limit: int = 100) -> List[ChatListItemOutput]:
+# --- ИЗМЕНЕНИЕ: Добавляем параметр channel ---
+async def db_get_agent_chats(db: AsyncSession, agent_id: str, skip: int = 0, limit: int = 100, channel: Optional[str] = None) -> List[ChatListItemOutput]:
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
     """
     Retrieves a list of unique threads for an agent with details of the first and last messages.
+    Allows filtering by the channel of the last message.
     """
-    logger.debug(f"Fetching chat list for Agent={agent_id} (skip={skip}, limit={limit})")
+    # --- ИЗМЕНЕНИЕ: Обновляем лог ---
+    logger.debug(f"Fetching chat list for Agent={agent_id} (skip={skip}, limit={limit}, channel={channel})")
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
     # --- ИЗМЕНЕНИЕ: Подзапрос для последнего сообщения ---
-    last_message_subquery = (
+    last_message_subquery_base = (
         select(
             ChatMessageDB.thread_id,
             ChatMessageDB.content.label("last_message_content"),
@@ -219,8 +224,12 @@ async def db_get_agent_chats(db: AsyncSession, agent_id: str, skip: int = 0, lim
             sql_func.row_number().over(partition_by=ChatMessageDB.thread_id, order_by=ChatMessageDB.timestamp.desc()).label("rn_desc") # Используем sql_func
         )
         .where(ChatMessageDB.agent_id == agent_id)
-        .subquery('last_ranked_messages')
     )
+    # --- ИЗМЕНЕНИЕ: Добавляем фильтр по channel, если он задан ---
+    if channel:
+        last_message_subquery_base = last_message_subquery_base.where(ChatMessageDB.channel == channel)
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+    last_message_subquery = last_message_subquery_base.subquery('last_ranked_messages')
     # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
     # --- НОВОЕ: Подзапрос для первого сообщения ---
@@ -232,6 +241,14 @@ async def db_get_agent_chats(db: AsyncSession, agent_id: str, skip: int = 0, lim
             sql_func.row_number().over(partition_by=ChatMessageDB.thread_id, order_by=ChatMessageDB.timestamp.asc()).label("rn_asc") # Используем sql_func
         )
         .where(ChatMessageDB.agent_id == agent_id)
+        # --- ИЗМЕНЕНИЕ: Добавляем фильтр по channel и сюда, чтобы не терять треды, где первое сообщение не совпадает по каналу ---
+        # Если фильтр по каналу активен, убедимся, что первое сообщение тоже из этого канала,
+        # ИЛИ что это действительно первое сообщение треда (rn_asc=1), чтобы не отфильтровать тред целиком,
+        # если только последнее сообщение совпадает с каналом.
+        # Однако, логика требует фильтровать ТРЕДЫ по ПОСЛЕДНЕМУ сообщению.
+        # Поэтому фильтр по каналу в first_message_subquery не нужен.
+        # Оставляем как было.
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
         .subquery('first_ranked_messages')
     )
     # --- КОНЕЦ НОВОГО ---
@@ -256,6 +273,13 @@ async def db_get_agent_chats(db: AsyncSession, agent_id: str, skip: int = 0, lim
         # Выбираем только последние (rn_desc=1) и первые (rn_asc=1) строки для каждого треда
         .where(last_message_subquery.c.rn_desc == 1)
         .where(first_message_subquery.c.rn_asc == 1)
+        # --- ИЗМЕНЕНИЕ: Добавляем фильтр по каналу из подзапроса последнего сообщения ---
+        # Фильтр по каналу уже применен внутри last_message_subquery_base,
+        # поэтому здесь дополнительное условие не требуется, если last_message_subquery используется.
+        # Если бы фильтр не был применен в подзапросе, его нужно было бы добавить здесь:
+        # if channel:
+        #     stmt = stmt.where(last_message_subquery.c.last_message_channel == channel)
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
         .order_by(last_message_subquery.c.last_message_timestamp.desc()) # Сортируем треды по времени последнего сообщения
         .offset(skip)
         .limit(limit)
@@ -278,7 +302,9 @@ async def db_get_agent_chats(db: AsyncSession, agent_id: str, skip: int = 0, lim
             message_count=row.message_count
         ) for row in result.mappings().all()
     ]
-    logger.debug(f"Fetched {len(chat_list)} chat threads for Agent={agent_id}")
+    # --- ИЗМЕНЕНИЕ: Обновляем лог ---
+    logger.debug(f"Fetched {len(chat_list)} chat threads for Agent={agent_id} matching criteria (channel={channel})")
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     return chat_list
 
 
