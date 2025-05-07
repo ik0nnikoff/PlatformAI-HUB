@@ -2,7 +2,7 @@ import logging
 import os
 # --- ИЗМЕНЕНИЕ: Убедимся, что httpx и asyncio импортированы ---
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from typing import List, Dict, Any, Optional # Добавляем Dict, Any
+from typing import List, Dict, Any, Optional, AsyncGenerator # Добавляем Dict, Any, AsyncGenerator
 from pydantic import ValidationError
 import redis.asyncio as redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +22,8 @@ import json
 # --- ИЗМЕНЕНИЕ: Добавляем импорты для чатов ---
 from ..models import ChatMessageOutput, ChatListItemOutput
 # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
+from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -880,4 +882,71 @@ async def list_agent_users(
         # Логирование происходит в CRUD
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve user list for agent.")
 # --- КОНЕЦ НОВОГО ---
+
+# --- НОВОЕ: Эндпоинт для SSE ---
+async def sse_stream(agent_id: str, thread_id: str) -> AsyncGenerator[str, None]:
+    """
+    Генератор для отправки данных через SSE, фильтруя по thread_id.
+    """
+    redis_client = await get_redis().__anext__()  # Получаем Redis клиент
+    output_channel = f"agent:{agent_id}:output"
+    pubsub = redis_client.pubsub()
+    await pubsub.subscribe(output_channel)
+
+    try:
+        while True:
+            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            if message and message.get("type") == "message":
+                try:
+                    data = json.loads(message["data"])
+                    if data.get("thread_id") == thread_id:
+                        yield f"data: {json.dumps(data)}\n\n"
+                except json.JSONDecodeError:
+                    logger.error(f"Invalid JSON received in SSE stream: {message['data']}")
+            await asyncio.sleep(0.01)  # Небольшая пауза для предотвращения высокой нагрузки
+    except asyncio.CancelledError:
+        logger.info(f"SSE connection for agent {agent_id}, thread {thread_id} closed.")
+        raise
+    finally:
+        await pubsub.unsubscribe(output_channel)
+        await pubsub.aclose()
+
+@router.get("/{agent_id}/sse", tags=["SSE"])
+async def agent_sse(agent_id: str, thread_id: str = Query(..., description="Уникальный идентификатор треда")):
+    """
+    Эндпоинт для SSE (Server-Sent Events) с фильтрацией по thread_id.
+    """
+    return StreamingResponse(sse_stream(agent_id, thread_id), media_type="text/event-stream")
+
+# --- КОНЕЦ НОВОГО ---
+
+# --- НОВОЕ: Эндпоинт для отправки сообщений агенту ---
+@router.post("/{agent_id}/messages", tags=["SSE"])
+async def send_message_to_agent(
+    agent_id: str,
+    message_data: Dict[str, str],
+    r: redis.Redis = Depends(get_redis)
+):
+    """
+    Эндпоинт для отправки сообщения агенту.
+    """
+    thread_id = message_data.get("thread_id")
+    message = message_data.get("message")
+
+    if not thread_id or not message:
+        raise HTTPException(status_code=400, detail="Both 'thread_id' and 'message' are required.")
+
+    # Формируем payload для Redis
+    payload = {
+        "message": message,
+        "thread_id": thread_id,
+        "channel": "api",  # Указываем источник сообщения
+        "user_data": message_data.get("user_data", {})  # Добавляем user_data, если есть
+    }
+
+    # Публикуем сообщение в Redis
+    input_channel = f"agent:{agent_id}:input"
+    await r.publish(input_channel, json.dumps(payload))
+
+    return {"status": "success", "message": "Message sent to agent."}
 

@@ -222,6 +222,21 @@ experiments/
 
 *   **Получить "сырую" конфигурацию агента:** `GET /agents/{agent_id}/config`
 
+### SSE для взаимодействия с агентом
+
+**Эндпоинт:** `GET /agents/{agent_id}/sse`
+
+**Описание:** Подключение к агенту через SSE для получения потоковых данных.
+
+**Пример ответа:**
+```json
+data: {"agent_id": "agent_123", "message": "Пример сообщения от агента"}
+```
+
+**Примечания:**
+- SSE поддерживает только одностороннюю передачу данных от сервера к клиенту.
+- Для отправки сообщений агенту используйте другие эндпоинты API.
+
 ## Взаимодействие с Агентами (WebSocket)
 
 Подключитесь к конечной точке WebSocket: `ws://localhost:8000/ws/agents/{agent_id}`
@@ -403,12 +418,12 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, wsUrlBase = 'ws://localh
         <button onClick={sendMessage} disabled={!isConnected || !input.trim()} style={{ padding: '8px 15px' }}>
           Отправить
         </button>
-      </div>
        {!isConnected && (
          <button onClick={connectWebSocket} style={{ marginTop: '10px', padding: '8px 15px' }}>
            Переподключиться
          </button>
        )}
+      </div>
     </div>
   );
 };
