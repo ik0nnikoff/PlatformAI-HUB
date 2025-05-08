@@ -894,6 +894,8 @@ async def sse_stream(agent_id: str, thread_id: str) -> AsyncGenerator[str, None]
     await pubsub.subscribe(output_channel)
 
     try:
+        # Отправляем начальный комментарий для подтверждения соединения
+        yield ":connected\n\n"
         while True:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             if message and message.get("type") == "message":
