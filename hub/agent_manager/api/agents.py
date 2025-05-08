@@ -925,6 +925,7 @@ async def agent_sse(agent_id: str, thread_id: str = Query(..., description="Ун
 async def send_message_to_agent(
     agent_id: str,
     message_data: Dict[str, str],
+    channel: Optional[str] = Query("api", description="Channel for the message (default: 'api')"),
     r: redis.Redis = Depends(get_redis)
 ):
     """
@@ -932,6 +933,8 @@ async def send_message_to_agent(
     """
     thread_id = message_data.get("thread_id")
     message = message_data.get("message")
+    channel = message_data.get("channel", "api")
+
 
     if not thread_id or not message:
         raise HTTPException(status_code=400, detail="Both 'thread_id' and 'message' are required.")
@@ -940,8 +943,8 @@ async def send_message_to_agent(
     payload = {
         "message": message,
         "thread_id": thread_id,
-        "channel": "api",  # Указываем источник сообщения
-        "user_data": message_data.get("user_data", {})  # Добавляем user_data, если есть
+        "channel": channel,
+        "user_data": message_data.get("user_data", {})
     }
 
     # Публикуем сообщение в Redis
