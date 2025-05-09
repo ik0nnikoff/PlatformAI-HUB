@@ -24,6 +24,9 @@ class AgentState(TypedDict):
         safe_tool_names: Set[str]
         datastore_tool_names: Set[str]
         max_rewrites: int
+        provider: str
+        enableContextMemory: bool
+        contextMemoryDepth: int
     """
     messages: Annotated[Sequence[BaseMessage], add_messages]
     documents: List[str]
@@ -41,3 +44,6 @@ class AgentState(TypedDict):
     safe_tool_names: Set[str]
     datastore_tool_names: Set[str]
     max_rewrites: int
+    provider: str
+    enableContextMemory: bool
+    contextMemoryDepth: int

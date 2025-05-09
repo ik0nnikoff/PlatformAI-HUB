@@ -38,7 +38,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 REDIS_USER_CACHE_TTL = int(os.getenv("REDIS_USER_CACHE_TTL", 3600)) # 1 час по умолчанию
 USER_CACHE_PREFIX = "user_cache:"
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 bot: Bot = None

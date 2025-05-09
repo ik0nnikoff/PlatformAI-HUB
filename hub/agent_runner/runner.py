@@ -40,27 +40,24 @@ except ImportError:
 
 # --- Configuration & Setup ---
 REDIS_HISTORY_QUEUE_NAME = "chat_history_queue" # Имя очереди по умолчанию
-AGENT_HISTORY_LIMIT = 20 # Значение по умолчанию
+# AGENT_HISTORY_LIMIT = 20 # Удалено, будет браться из конфига
 
 def load_environment():
     """Loads environment variables from .env file."""
-    global REDIS_HISTORY_QUEUE_NAME, AGENT_HISTORY_LIMIT
+    global REDIS_HISTORY_QUEUE_NAME # AGENT_HISTORY_LIMIT удален из globals
     dotenv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
     if os.path.exists(dotenv_path):
         load_dotenv(dotenv_path=dotenv_path)
         print(f"Agent Runner: Loaded environment variables from {dotenv_path}")
         REDIS_HISTORY_QUEUE_NAME = os.getenv("REDIS_HISTORY_QUEUE_NAME", REDIS_HISTORY_QUEUE_NAME)
-        try:
-            AGENT_HISTORY_LIMIT = int(os.getenv("AGENT_HISTORY_LIMIT", str(AGENT_HISTORY_LIMIT)))
-        except ValueError:
-            print(f"Agent Runner: Warning! Invalid AGENT_HISTORY_LIMIT value in .env. Using default: {AGENT_HISTORY_LIMIT}")
+        # Загрузка AGENT_HISTORY_LIMIT удалена
         print(f"Agent Runner: Using Redis history queue: {REDIS_HISTORY_QUEUE_NAME}")
-        print(f"Agent Runner: History limit for context recovery: {AGENT_HISTORY_LIMIT}")
+        # print(f"Agent Runner: History limit for context recovery: {AGENT_HISTORY_LIMIT}") # Удалено
         return True
     else:
         print(f"Agent Runner: Warning! .env file not found at {dotenv_path}")
         print(f"Agent Runner: Using default Redis history queue: {REDIS_HISTORY_QUEUE_NAME}")
-        print(f"Agent Runner: Using default history limit: {AGENT_HISTORY_LIMIT}")
+        # print(f"Agent Runner: Using default history limit: {AGENT_HISTORY_LIMIT}") # Удалено
         return False
 
 # --- Custom Logging Filter ---
@@ -281,6 +278,15 @@ async def redis_listener(
     if not can_load_history:
         log_adapter.warning("Database history loading is disabled (CRUD, DB session factory, ChatMessageDB, or SenderType not available).")
 
+    # Извлекаем настройки памяти из static_state_config
+    enable_context_memory = static_state_config.get("enableContextMemory", True)
+    context_memory_depth = static_state_config.get("contextMemoryDepth", 10)
+    
+    if not enable_context_memory:
+        log_adapter.info("Context memory is disabled. History will not be loaded from DB.")
+        # Если память контекста отключена, можно установить глубину в 0, чтобы не загружать историю
+        context_memory_depth = 0
+
 
     async def update_status(status: str, error_detail: Optional[str] = None):
         """Helper to update Redis status using the outer function."""
@@ -358,17 +364,18 @@ async def redis_listener(
                         )
 
                         loaded_messages: List[BaseMessage] = []
-                        if can_load_history:
+                        # Загружаем историю только если включена память контекста и есть глубина
+                        if can_load_history and enable_context_memory and context_memory_depth > 0:
                             try:
                                 is_loaded = await redis_client.sismember(loaded_threads_key, thread_id)
                                 if not is_loaded:
-                                    log_adapter.info(f"Thread '{thread_id}' not found in cache '{loaded_threads_key}'. Loading history from DB.")
+                                    log_adapter.info(f"Thread '{thread_id}' not found in cache '{loaded_threads_key}'. Loading history from DB with depth {context_memory_depth}.")
                                     async with db_session_factory() as session:
                                         history_from_db = await crud.db_get_recent_chat_history(
                                             db=session,
                                             agent_id=agent_id,
                                             thread_id=thread_id,
-                                            limit=AGENT_HISTORY_LIMIT
+                                            limit=context_memory_depth # Используем context_memory_depth
                                         )
                                         # --- ИЗМЕНЕНИЕ: Передаем список объектов ChatMessageDB ---
                                         loaded_messages = convert_db_history_to_langchain(history_from_db)
@@ -388,9 +395,13 @@ async def redis_listener(
                                 log_adapter.error(f"Database error loading history for thread '{thread_id}': {db_err}. Proceeding without history.", exc_info=True)
                                 loaded_messages = []
                         else:
-                             if not await redis_client.sismember(loaded_threads_key, thread_id):
-                                 log_adapter.warning(f"Cannot load history for thread '{thread_id}' because DB/CRUD/Models are unavailable.") # Обновляем сообщение
-                                 await redis_client.sadd(loaded_threads_key, thread_id)
+                             if not enable_context_memory:
+                                 log_adapter.info(f"History loading skipped for thread '{thread_id}' as context memory is disabled.")
+                             elif context_memory_depth == 0:
+                                 log_adapter.info(f"History loading skipped for thread '{thread_id}' as context memory depth is 0.")
+                             elif not await redis_client.sismember(loaded_threads_key, thread_id): # Только если еще не было в кеше
+                                 log_adapter.warning(f"Cannot load history for thread '{thread_id}' because DB/CRUD/Models are unavailable (but memory was enabled).")
+                                 await redis_client.sadd(loaded_threads_key, thread_id) # Добавляем в кеш, чтобы не пытаться снова
 
                         graph_input = {
                             "messages": loaded_messages + [HumanMessage(content=user_message_content)],
@@ -658,7 +669,7 @@ async def update_status_external(redis_url: str, status_key: str, status: str, l
 
 # --- Main Entry Point ---
 if __name__ == "__main__":
-    load_environment()
+    load_environment() # Загрузка AGENT_HISTORY_LIMIT отсюда удалена
 
     db_session_factory = get_db_session_factory()
     if not db_session_factory:

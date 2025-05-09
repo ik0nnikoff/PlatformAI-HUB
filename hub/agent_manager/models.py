@@ -12,9 +12,12 @@ class AgentConfigSimpleSettingsModel(BaseModel):
     modelId: str = "gpt-4o-mini"
     temperature: float = 0.2
     systemPrompt: str = "You are a helpful AI assistant."
-    limitToKnowledgeBase: bool = False
-    answerInUserLanguage: bool = True
-    useContextMemory: bool = True
+    limitToKnowledgeBase: bool = False # Ответы только из базы знаний
+    answerInUserLanguage: bool = True # Отвечать на языке пользователя
+    enableContextMemory: bool = True # Использовать память контекста (было useContextMemory)
+    contextMemoryDepth: int = 10 # Глубина памяти контекста (если enableContextMemory: true)
+    provider: str = "OpenAI" # Провайдер модели (OpenAI, OpenRouter)
+    useMarkdown: bool = True # Использовать Markdown в ответах
 
 class AgentConfigSimpleToolSettings(BaseModel):
     knowledgeBaseIds: Optional[List[str]] = None

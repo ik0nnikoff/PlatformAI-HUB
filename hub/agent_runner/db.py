@@ -14,7 +14,7 @@ module_logger.setLevel(logging.INFO)
 # Создаем обработчик (вывод в stdout)
 handler = logging.StreamHandler(sys.stdout)
 # Создаем простой форматтер, не использующий agent_id
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 handler.setFormatter(formatter)
 # Удаляем существующие обработчики, чтобы избежать дублирования, если они есть
 if module_logger.hasHandlers():

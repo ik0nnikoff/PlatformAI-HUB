@@ -49,7 +49,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 # from .database import SessionLocal, engine
 # models.Base.metadata.create_all(bind=engine)
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 redis_client: Optional[redis.Redis] = None # Уточняем тип
