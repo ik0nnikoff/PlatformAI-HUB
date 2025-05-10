@@ -887,31 +887,76 @@ async def list_agent_users(
 async def sse_stream(agent_id: str, thread_id: str) -> AsyncGenerator[str, None]:
     """
     Генератор для отправки данных через SSE, фильтруя по thread_id.
+    Включает механизм keep-alive.
     """
-    redis_client = await get_redis().__anext__()  # Получаем Redis клиент
-    output_channel = f"agent:{agent_id}:output"
-    pubsub = redis_client.pubsub()
-    await pubsub.subscribe(output_channel)
+    redis_client = None
+    pubsub = None
+    # --- ИЗМЕНЕНИЕ: Добавляем переменные для keep-alive ---
+    keep_alive_interval = 30.0  # секунды
+    last_event_time = asyncio.get_event_loop().time()
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
     try:
+        redis_client = await get_redis().__anext__()  # Получаем Redis клиент
+        output_channel = f"agent:{agent_id}:output"
+        pubsub = redis_client.pubsub()
+        await pubsub.subscribe(output_channel)
+
         # Отправляем начальный комментарий для подтверждения соединения
         yield ":connected\n\n"
+        last_event_time = asyncio.get_event_loop().time() # Обновляем время после первой отправки
+
         while True:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            current_time = asyncio.get_event_loop().time()
+
             if message and message.get("type") == "message":
                 try:
                     data = json.loads(message["data"])
                     if data.get("thread_id") == thread_id:
                         yield f"data: {json.dumps(data)}\n\n"
+                        last_event_time = current_time
                 except json.JSONDecodeError:
                     logger.error(f"Invalid JSON received in SSE stream: {message['data']}")
-            await asyncio.sleep(0.01)  # Небольшая пауза для предотвращения высокой нагрузки
+            else:  # message is None (таймаут pubsub.get_message)
+                if current_time - last_event_time >= keep_alive_interval:
+                    yield ":heartbeat\n\n"
+                    last_event_time = current_time
+            
+            # Убираем await asyncio.sleep(0.01), так как timeout в get_message управляет циклом
+            # Если необходимо предотвратить слишком частые итерации при отсутствии сообщений
+            # и не срабатывании keep-alive, можно вернуть короткий sleep,
+            # но get_message с timeout=1.0 уже обеспечивает паузу.
+
     except asyncio.CancelledError:
-        logger.info(f"SSE connection for agent {agent_id}, thread {thread_id} closed.")
+        logger.info(f"SSE connection for agent {agent_id}, thread {thread_id} closed by client.")
         raise
+    except redis.exceptions.ConnectionError as e:
+        logger.error(f"Redis connection error in SSE stream for agent {agent_id}, thread {thread_id}: {e}")
+        try:
+            yield f"event: error\ndata: {json.dumps({'error': 'Redis connection error'})}\n\n"
+        except Exception: # pragma: no cover
+            pass # Если не удалось отправить ошибку, просто выходим
+        # Можно добавить raise здесь, если хотим, чтобы StreamingResponse прервался
+    except Exception as e:
+        logger.error(f"Unexpected error in SSE stream for agent {agent_id}, thread {thread_id}: {e}", exc_info=True)
+        try:
+            yield f"event: error\ndata: {json.dumps({'error': 'Internal stream error'})}\n\n"
+        except Exception: # pragma: no cover
+            pass
+        # Можно добавить raise здесь
     finally:
-        await pubsub.unsubscribe(output_channel)
-        await pubsub.aclose()
+        if pubsub:
+            try:
+                await pubsub.unsubscribe(output_channel)
+                await pubsub.aclose()
+                logger.info(f"SSE stream for agent {agent_id}, thread {thread_id}: Unsubscribed and closed pubsub.")
+            except Exception as e_pubsub_close:
+                logger.error(f"SSE stream for agent {agent_id}, thread {thread_id}: Error closing pubsub: {e_pubsub_close}")
+        # Замечание: redis_client, полученный через get_redis().__анext__(),
+        # здесь явно не закрывается. Управление его жизненным циклом зависит от реализации get_redis.
+        # Если get_redis - это генератор зависимости FastAPI, то FastAPI должно управлять им.
+        # Если это прямой вызов, может потребоваться явное закрытие, если get_redis создает новый клиент.
 
 @router.get("/{agent_id}/sse", tags=["SSE"])
 async def agent_sse(agent_id: str, thread_id: str = Query(..., description="Уникальный идентификатор треда")):
