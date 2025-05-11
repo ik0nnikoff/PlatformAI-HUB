@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import redis.asyncio as redis
 from pydantic import BaseModel, Field
 # --- ДОБАВЛЕНО: Импорт datetime ---
-from datetime import datetime, timezone # Добавляем timezone
+from datetime import datetime, timedelta, timezone # Добавляем timezone
 # --- КОНЕЦ ДОБАВЛЕНИЯ ---
 from typing import Any, Dict, Literal, Optional, Tuple
 from langchain_openai import ChatOpenAI
@@ -50,11 +50,17 @@ def _get_llm(
     """
     log_adapter.info(f"Attempting to create LLM client for provider: {provider}, model: {model_name}")
     model_kwargs = {}
+    extra_body_kwargs = {}
+    
+    # Сначала проверяем, является ли модель Gemini через OpenRouter
+    is_gemini = model_name.startswith("google/")
+    if is_gemini and provider.lower() == "openrouter":
+        log_adapter.info(f"Detected Google Gemini model: {model_name}. Disabling streaming (not supported by Gemini through OpenRouter).")
+        streaming = False
+        
     if streaming:
-        # --- НОВОЕ: Добавляем stream_options для OpenAI и OpenRouter при стриминге ---
         if provider.lower() in ["openai", "openrouter"]:
             model_kwargs["stream_options"] = {"include_usage": True}
-        # --- КОНЕЦ НОВОГО ---
 
     if provider.lower() == "openai":
         api_key = os.getenv("OPENAI_API_KEY")
@@ -66,20 +72,34 @@ def _get_llm(
             temperature=temperature,
             streaming=streaming,
             openai_api_key=api_key,
-            model_kwargs=model_kwargs # Передаем model_kwargs
+            model_kwargs=model_kwargs
         )
     elif provider.lower() == "openrouter":
         api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key:
             log_adapter.error("OPENROUTER_API_KEY not found in environment variables for OpenRouter provider.")
             return None
+            
+        # Для Gemini через OpenRouter требуются особые настройки
+        if is_gemini:
+            log_adapter.info("Using safe configuration for Gemini through OpenRouter")
+            default_safety_settings = [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+            ]
+            extra_body_kwargs["safety_settings"] = default_safety_settings # Используем snake_case
+            log_adapter.info(f"Added Gemini safety settings (using snake_case key 'safety_settings'): {extra_body_kwargs.get('safety_settings')}")
+        
         return ChatOpenAI(
             model=model_name, # This will be the OpenRouter model string e.g. "anthropic/claude-3.5-sonnet"
             temperature=temperature,
-            streaming=streaming,
+            streaming=streaming, # Здесь streaming уже отключен для Gemini
             openai_api_key=api_key, # OpenRouter API Key
             base_url="https://openrouter.ai/api/v1", # OpenRouter API Base
-            model_kwargs=model_kwargs # Передаем model_kwargs
+            model_kwargs=model_kwargs, # Передаем model_kwargs
+            extra_body=extra_body_kwargs if extra_body_kwargs else None
         )
     else:
         log_adapter.error(f"Unsupported LLM provider: {provider}")
@@ -197,16 +217,15 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
         node_model_id = state["model_id"]
         node_provider = state["provider"] # Read provider from state
 
-        # --- ДОБАВЛЕНО: Вставка текущего времени ---
-        # Добавляем плейсхолдер {current_time} в системный промпт, если его еще нет
+        moscow_tz = timezone(timedelta(hours=3)) # Requires 'timedelta' to be imported from 'datetime'
+
         if "{current_time}" not in node_system_prompt:
-            node_system_prompt += "\nТекущее время: {current_time}"
+            node_system_prompt += "\nТекущее время (Москва): {current_time}"
 
         prompt = ChatPromptTemplate.from_messages([
             ("system", node_system_prompt),
             MessagesPlaceholder(variable_name="messages")
-        ]).partial(current_time=datetime.now(timezone.utc).isoformat()) # Вставляем текущее время и используем UTC
-        # --- КОНЕЦ ДОБАВЛЕНИЯ ---
+        ]).partial(current_time=datetime.now(moscow_tz).isoformat())
 
         model = _get_llm(
             provider=node_provider,
@@ -640,15 +659,16 @@ Rephrased Question:"""
         prompt_template_str = """Ты помощник для задач с ответами на вопросы. Используйте следующие фрагменты извлеченного контекста, чтобы ответить на вопрос.
             Если у тебя нет ответа на вопрос, просто скажи что у тебя нет данных для ответа на этот вопрос, предложи переформулировать фопрос.
             Старайся отвечать кратко и содержательно.\n
-                Текущее время: {current_time}\n
+                Текущее время (по Москве): {current_time}\n
                 Вопрос: {question} \n
                 Контекст: {context} \n
                 Ответ:"""
 
+        moscow_tz = timezone(timedelta(hours=3)) # Requires 'timedelta' and 'timezone' to be imported from 'datetime'
         prompt = PromptTemplate(
             template=prompt_template_str,
             input_variables=["context", "question", "current_time"],
-        ).partial(current_time=datetime.now().isoformat()) # Вставляем текущее время
+        ).partial(current_time=datetime.now(moscow_tz).isoformat()) # Вставляем текущее время по МСК
         # --- КОНЕЦ ДОБАВЛЕНИЯ ---
 
         llm = _get_llm(
