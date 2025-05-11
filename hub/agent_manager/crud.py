@@ -7,7 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 # --- КОНЕЦ НОВОГО ---
 # --- ИЗМЕНЕНИЕ: Добавляем UserDB и AgentUserAuthorizationDB ---
-from .models import AgentConfigDB, AgentConfigInput, ChatListItemOutput, ChatMessageDB, SenderType, UserDB, AgentUserAuthorizationDB # Добавляем UserDB и AgentUserAuthorizationDB
+from .models import ( # Импортируем модели в несколько строк для читаемости
+    AgentConfigDB, AgentConfigInput,
+    ChatListItemOutput, ChatMessageDB, SenderType,
+    UserDB, AgentUserAuthorizationDB,
+    TokenUsageLogDB # --- НОВОЕ: Импортируем TokenUsageLogDB ---
+)
 # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 # --- УДАЛЕНО: Убираем неиспользуемый импорт ---
 # from .schemas import AgentConfigStructure # Используем схему для валидации
@@ -130,17 +135,19 @@ async def db_add_chat_message(
     sender_type: SenderType, # Используем Enum
     content: str,
     channel: Optional[str],
-    timestamp: datetime # Принимаем timestamp
+    timestamp: datetime, # Принимаем timestamp
+    interaction_id: Optional[str] = None # --- НОВОЕ: Добавляем interaction_id ---
 ) -> ChatMessageDB:
     """Adds a new chat message to the database."""
-    logger.debug(f"Adding chat message to DB: Agent={agent_id}, Thread={thread_id}, Sender={sender_type}")
+    logger.debug(f"Adding chat message to DB: Agent={agent_id}, Thread={thread_id}, Sender={sender_type}, InteractionID={interaction_id}")
     db_message = ChatMessageDB(
         agent_id=agent_id,
         thread_id=thread_id,
         sender_type=sender_type,
         content=content,
         channel=channel,
-        timestamp=timestamp # Сохраняем переданный timestamp
+        timestamp=timestamp, # Сохраняем переданный timestamp
+        interaction_id=interaction_id # --- НОВОЕ ---
     )
     db.add(db_message)
     try:
@@ -315,6 +322,19 @@ async def db_get_agent_chats(db: AsyncSession, agent_id: str, skip: int = 0, lim
 async def db_delete_chat_thread(db: AsyncSession, agent_id: str, thread_id: str) -> int:
     """Deletes all chat messages for a specific agent and thread ID."""
     logger.info(f"Deleting chat thread for Agent={agent_id}, Thread={thread_id}")
+    # --- НОВОЕ: Перед удалением сообщений, удалим связанные логи токенов (если есть каскадное удаление FK, это не обязательно) ---
+    # Если нет каскадного удаления на уровне БД для token_usage_logs.message_id,
+    # то нужно сначала удалить зависимые записи или обработать это.
+    # Предположим, что FK token_usage_logs.message_id -> chat_messages.id имеет ON DELETE CASCADE.
+    # Если нет, то здесь нужно добавить удаление логов токенов:
+    # token_logs_stmt = delete(TokenUsageLogDB).where(
+    #     TokenUsageLogDB.message_id.in_(
+    #         select(ChatMessageDB.id).where(ChatMessageDB.agent_id == agent_id, ChatMessageDB.thread_id == thread_id)
+    #     )
+    # )
+    # await db.execute(token_logs_stmt)
+    # logger.info(f"Deleted associated token logs for Agent={agent_id}, Thread={thread_id}")
+    # --- КОНЕЦ НОВОГО ---
     stmt = (
         delete(ChatMessageDB)
         .where(ChatMessageDB.agent_id == agent_id)
@@ -333,6 +353,61 @@ async def db_delete_chat_thread(db: AsyncSession, agent_id: str, thread_id: str)
         await db.rollback()
         logger.error(f"Error deleting chat thread for Agent={agent_id}, Thread={thread_id}: {e}", exc_info=True)
         raise # Передаем исключение дальше
+
+# --- КОНЕЦ НОВОГО ---
+
+# --- НОВОЕ: CRUD для TokenUsageLogDB ---
+
+async def db_add_token_usage_log(db: AsyncSession, token_usage_data: Dict[str, Any]) -> TokenUsageLogDB:
+    """Adds a new token usage log entry to the database."""
+    db_log_entry = TokenUsageLogDB(**token_usage_data)
+    db.add(db_log_entry)
+    try:
+        await db.commit()
+        await db.refresh(db_log_entry)
+        logger.debug(f"Token usage log entry added successfully (ID: {db_log_entry.id}) for InteractionID: {db_log_entry.interaction_id}")
+        return db_log_entry
+    except SQLAlchemyError as e:
+        await db.rollback()
+        logger.error(f"Error adding token usage log for InteractionID {token_usage_data.get('interaction_id')}: {e}", exc_info=True)
+        raise
+    except Exception as e: # Общий Exception для непредвиденных ошибок
+        await db.rollback()
+        logger.error(f"Unexpected error adding token usage log for InteractionID {token_usage_data.get('interaction_id')}: {e}", exc_info=True)
+        raise
+
+
+async def db_get_token_usage_for_message(db: AsyncSession, message_id: int) -> List[TokenUsageLogDB]:
+    """Retrieves all token usage logs associated with a specific chat message ID."""
+    stmt = select(TokenUsageLogDB).where(TokenUsageLogDB.message_id == message_id).order_by(TokenUsageLogDB.timestamp.asc())
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+async def db_get_token_usage_for_interaction(db: AsyncSession, interaction_id: str) -> List[TokenUsageLogDB]:
+    """Retrieves all token usage logs associated with a specific interaction ID."""
+    stmt = select(TokenUsageLogDB).where(TokenUsageLogDB.interaction_id == interaction_id).order_by(TokenUsageLogDB.timestamp.asc())
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+async def db_get_chat_message_by_interaction_id(db: AsyncSession, agent_id: str, interaction_id: str, sender_type: SenderType = SenderType.AGENT) -> Optional[ChatMessageDB]:
+    """
+    Retrieves a specific chat message by agent_id and interaction_id.
+    Usually, we'd be looking for the agent's response.
+    """
+    logger.debug(f"Fetching chat message by interaction_id: Agent={agent_id}, InteractionID={interaction_id}, SenderType={sender_type.value}")
+    stmt = select(ChatMessageDB).where(
+        ChatMessageDB.agent_id == agent_id,
+        ChatMessageDB.interaction_id == interaction_id,
+        ChatMessageDB.sender_type == sender_type # Обычно ищем сообщение от агента
+    ).order_by(ChatMessageDB.timestamp.desc()) # В случае нескольких, берем последнее (хотя interaction_id должен быть уникален для ответа агента)
+    
+    result = await db.execute(stmt)
+    message = result.scalars().first()
+    if message:
+        logger.debug(f"Found chat message (ID: {message.id}) for InteractionID: {interaction_id}")
+    else:
+        logger.debug(f"No chat message found for InteractionID: {interaction_id} with AgentID: {agent_id} and SenderType: {sender_type.value}")
+    return message
 
 # --- КОНЕЦ НОВОГО ---
 

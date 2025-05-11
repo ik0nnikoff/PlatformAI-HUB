@@ -27,6 +27,9 @@ from .api import users as users_api
 from . import crud, process_manager, models # Добавляем импорты
 # --- ИЗМЕНЕНИЕ: Импортируем супервизор ---
 from .history_saver import supervise_history_saver, REDIS_URL as HISTORY_REDIS_URL # Импортируем супервизора и URL
+# --- НОВОЕ: Импортируем супервизор для token_usage_saver ---
+from .token_usage_saver import supervise_token_usage_saver, REDIS_URL as TOKEN_SAVER_REDIS_URL
+# --- КОНЕЦ НОВОГО ---
 # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
 
@@ -57,8 +60,12 @@ inactivity_check_task: Optional[asyncio.Task] = None
 # --- ИЗМЕНЕНИЕ: Добавляем переменную для задачи history_saver ---
 history_saver_task: Optional[asyncio.Task] = None
 # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+# --- НОВОЕ: Переменные для token_usage_saver ---
+token_usage_saver_task: Optional[asyncio.Task] = None
+token_usage_saver_shutdown_event: Optional[asyncio.Event] = None # Отдельное событие для token_usage_saver
+# --- КОНЕЦ НОВОГО ---
 # --- ИЗМЕНЕНИЕ: Добавляем глобальное событие ---
-shutdown_event: Optional[asyncio.Event] = None
+shutdown_event: Optional[asyncio.Event] = None # Это событие для history_saver
 # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
 
@@ -87,13 +94,16 @@ async def lifespan(app: FastAPI):
     """Handles application startup and shutdown events."""
     # --- ИЗМЕНЕНИЕ: Добавляем history_saver_task в global ---
     global redis_client, inactivity_check_task, history_saver_task, shutdown_event
+    # --- НОВОЕ: Добавляем переменные token_usage_saver в global ---
+    global token_usage_saver_task, token_usage_saver_shutdown_event
+    # --- КОНЕЦ НОВОГО ---
     # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     # Startup
     logger.info("Agent Manager Service starting up...")
     # --- ИСПРАВЛЕНИЕ: Используем возвращаемое значение init_redis_pool ---
     # Вызываем init_redis_pool и сохраняем результат
     initialized_pool = await init_redis_pool()
-    if initialized_pool: # Проверяем возвращенное значение
+    if (initialized_pool): # Проверяем возвращенное значение
         try:
             # Создаем клиент из возвращенного пула
             redis_client = redis.Redis.from_pool(initialized_pool)
@@ -215,6 +225,23 @@ async def lifespan(app: FastAPI):
         history_saver_task = None # Убедимся, что None при ошибке
     # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
+    # --- НОВОЕ: Запуск супервизора token_usage_saver ---
+    logger.info("Attempting to start Token Usage Saver Supervisor...")
+    try:
+        token_usage_saver_shutdown_event = asyncio.Event()
+        token_usage_saver_task = asyncio.create_task(
+            supervise_token_usage_saver(
+                redis_url=TOKEN_SAVER_REDIS_URL, # Используем URL из token_usage_saver
+                db_session_factory=SessionLocal, # Та же фабрика сессий
+                shutdown_event=token_usage_saver_shutdown_event
+            )
+        )
+        logger.info(f"Token Usage Saver Supervisor task created successfully (ID: {id(token_usage_saver_task)}).")
+    except Exception as e:
+        logger.error(f"Failed to create Token Usage Saver Supervisor task: {e}", exc_info=True)
+        token_usage_saver_task = None
+    # --- КОНЕЦ НОВОГО ---
+
     yield
     # Shutdown
     logger.info("Agent Manager Service shutting down...")
@@ -233,6 +260,21 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Error during History Saver Supervisor shutdown: {e}", exc_info=True)
     # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
+    # --- НОВОЕ: Остановка супервизора token_usage_saver ---
+    if token_usage_saver_shutdown_event:
+        logger.info("Signaling shutdown to Token Usage Saver Supervisor...")
+        token_usage_saver_shutdown_event.set()
+    if token_usage_saver_task and not token_usage_saver_task.done():
+        logger.info("Attempting to cancel Token Usage Saver Supervisor task...")
+        token_usage_saver_task.cancel()
+        try:
+            await token_usage_saver_task
+        except asyncio.CancelledError:
+            logger.info("Token Usage Saver Supervisor task successfully cancelled.")
+        except Exception as e:
+            logger.error(f"Error during Token Usage Saver Supervisor shutdown: {e}", exc_info=True)
+    # --- КОНЕЦ НОВОГО ---
 
     # Cancel the inactivity check task
     if inactivity_check_task and not inactivity_check_task.done(): # Проверяем, что задача существует и не завершена

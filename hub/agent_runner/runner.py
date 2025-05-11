@@ -5,6 +5,7 @@ import json
 import argparse
 import signal
 import sys
+import uuid # --- НОВОЕ: Импорт uuid ---
 # --- ИЗМЕНЕНИЕ: Добавляем импорты SQLAlchemy ---
 from typing import Dict, Optional, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker # Добавляем импорты
@@ -18,6 +19,7 @@ import time
 
 # Import from sibling modules
 from .graph_factory import create_agent_app # Импортируем фабрику графа
+from .models import AgentState, TokenUsageData # --- НОВОЕ: Импортируем TokenUsageData ---
 # from .models import AgentState # AgentState используется внутри graph_factory
 # --- ИЗМЕНЕНИЕ: Импорты для работы с БД ---
 from .db import get_db_session_factory, close_db_engine # Импортируем фабрику и функцию закрытия
@@ -40,23 +42,27 @@ except ImportError:
 
 # --- Configuration & Setup ---
 REDIS_HISTORY_QUEUE_NAME = "chat_history_queue" # Имя очереди по умолчанию
+REDIS_TOKEN_USAGE_QUEUE_NAME = "token_usage_queue" # --- НОВОЕ: Имя очереди для токенов ---
 # AGENT_HISTORY_LIMIT = 20 # Удалено, будет браться из конфига
 
 def load_environment():
     """Loads environment variables from .env file."""
-    global REDIS_HISTORY_QUEUE_NAME # AGENT_HISTORY_LIMIT удален из globals
+    global REDIS_HISTORY_QUEUE_NAME, REDIS_TOKEN_USAGE_QUEUE_NAME # Добавляем новую переменную
     dotenv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
-    if os.path.exists(dotenv_path):
+    if (os.path.exists(dotenv_path)):
         load_dotenv(dotenv_path=dotenv_path)
         print(f"Agent Runner: Loaded environment variables from {dotenv_path}")
         REDIS_HISTORY_QUEUE_NAME = os.getenv("REDIS_HISTORY_QUEUE_NAME", REDIS_HISTORY_QUEUE_NAME)
+        REDIS_TOKEN_USAGE_QUEUE_NAME = os.getenv("REDIS_TOKEN_USAGE_QUEUE_NAME", REDIS_TOKEN_USAGE_QUEUE_NAME) # --- НОВОЕ ---
         # Загрузка AGENT_HISTORY_LIMIT удалена
         print(f"Agent Runner: Using Redis history queue: {REDIS_HISTORY_QUEUE_NAME}")
+        print(f"Agent Runner: Using Redis token usage queue: {REDIS_TOKEN_USAGE_QUEUE_NAME}") # --- НОВОЕ ---
         # print(f"Agent Runner: History limit for context recovery: {AGENT_HISTORY_LIMIT}") # Удалено
         return True
     else:
         print(f"Agent Runner: Warning! .env file not found at {dotenv_path}")
         print(f"Agent Runner: Using default Redis history queue: {REDIS_HISTORY_QUEUE_NAME}")
+        print(f"Agent Runner: Using default Redis token usage queue: {REDIS_TOKEN_USAGE_QUEUE_NAME}") # --- НОВОЕ ---
         # print(f"Agent Runner: Using default history limit: {AGENT_HISTORY_LIMIT}") # Удалено
         return False
 
@@ -268,6 +274,7 @@ async def redis_listener(
     output_channel = f"agent:{agent_id}:output"
     status_key = f"agent_status:{agent_id}"
     history_queue = REDIS_HISTORY_QUEUE_NAME
+    token_usage_queue = REDIS_TOKEN_USAGE_QUEUE_NAME # --- НОВОЕ ---
     loaded_threads_key = f"agent_loaded_threads:{agent_id}"
 
     pubsub = None
@@ -293,7 +300,13 @@ async def redis_listener(
         pid_to_set = os.getpid() if running else None
         await update_redis_status(redis_client, status_key, status, pid_to_set, error_detail, log_adapter)
 
-    async def queue_message_for_history(sender_type: str, thread_id: str, content: str, channel: Optional[str]):
+    async def queue_message_for_history(
+        sender_type: str,
+        thread_id: str,
+        content: str,
+        channel: Optional[str],
+        interaction_id: Optional[str] # --- НОВОЕ: Добавляем interaction_id ---
+    ):
         """Helper function to push message details to the history queue."""
         try:
             history_payload = {
@@ -302,10 +315,11 @@ async def redis_listener(
                 "sender_type": sender_type,
                 "content": content,
                 "channel": channel,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "interaction_id": interaction_id # --- НОВОЕ ---
             }
             await redis_client.lpush(history_queue, json.dumps(history_payload))
-            log_adapter.debug(f"Queued {sender_type} message for history (Thread: {thread_id})")
+            log_adapter.debug(f"Queued {sender_type} message for history (Thread: {thread_id}, InteractionID: {interaction_id})")
         except redis.RedisError as e:
             log_adapter.error(f"Failed to queue message for history (Thread: {thread_id}): {e}")
         except Exception as e:
@@ -356,11 +370,17 @@ async def redis_listener(
                              log_adapter.error("Missing 'message' or 'thread_id' in Redis payload.")
                              continue
 
+                        # --- НОВОЕ: Генерируем interaction_id ---
+                        current_interaction_id = str(uuid.uuid4())
+                        log_adapter.info(f"Generated InteractionID: {current_interaction_id} for Thread: {thread_id}")
+                        # --- КОНЕЦ НОВОГО ---
+
                         await queue_message_for_history(
                             sender_type="user",
                             thread_id=thread_id,
                             content=user_message_content,
-                            channel=channel
+                            channel=channel,
+                            interaction_id=current_interaction_id # Передаем user-сообщению тот же interaction_id
                         )
 
                         loaded_messages: List[BaseMessage] = []
@@ -411,6 +431,10 @@ async def redis_listener(
                             "question": user_message_content,
                             "rewrite_count": 0,
                             "documents": [],
+                            # --- НОВОЕ: Передаем interaction_id и инициализируем token_usage_events ---
+                            "current_interaction_id": current_interaction_id,
+                            "token_usage_events": [], # Инициализируем пустым списком
+                            # --- КОНЕЦ НОВОГО ---
                             **static_state_config
                         }
                         config = {"configurable": {"thread_id": str(thread_id), "agent_id": agent_id}}
@@ -441,8 +465,54 @@ async def redis_listener(
                             sender_type="agent",
                             thread_id=thread_id,
                             content=final_response_content,
-                            channel=channel
+                            channel=channel,
+                            interaction_id=current_interaction_id # Передаем agent-сообщению тот же interaction_id
                         )
+
+                        # --- НОВОЕ: Получение финального состояния графа ---
+                        retrieved_final_state: Optional[Dict[str, Any]] = None
+                        try:
+                            # --- ИЗМЕНЕНИЕ: Убираем await ---
+                            final_graph_state_snapshot = app.get_state(config)
+                            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+                            if final_graph_state_snapshot:
+                                retrieved_final_state = final_graph_state_snapshot.values
+                                log_adapter.debug(f"Retrieved final graph state snapshot for InteractionID {current_interaction_id}")
+                            else:
+                                log_adapter.warning(f"app.get_state(config) returned None for InteractionID {current_interaction_id}")
+                        except Exception as e_get_state:
+                            log_adapter.error(f"Error calling app.get_state(config) for InteractionID {current_interaction_id}: {e_get_state}", exc_info=True)
+                        # --- КОНЕЦ НОВОГО ---
+
+                        # --- ИЗМЕНЕНИЕ: Используем retrieved_final_state ---
+                        if retrieved_final_state and "token_usage_events" in retrieved_final_state:
+                            token_events: List[TokenUsageData] = retrieved_final_state["token_usage_events"]
+                            if token_events:
+                                log_adapter.info(f"Found {len(token_events)} token usage events for InteractionID: {current_interaction_id}.")
+                                for token_data in token_events:
+                                    try:
+                                        token_payload = {
+                                            "interaction_id": current_interaction_id,
+                                            "agent_id": agent_id,
+                                            "thread_id": thread_id,
+                                            "call_type": token_data.call_type,
+                                            "model_id": token_data.model_id,
+                                            "prompt_tokens": token_data.prompt_tokens,
+                                            "completion_tokens": token_data.completion_tokens,
+                                            "total_tokens": token_data.total_tokens,
+                                            "timestamp": token_data.timestamp
+                                        }
+                                        await redis_client.lpush(token_usage_queue, json.dumps(token_payload))
+                                        log_adapter.debug(f"Queued token usage data to '{token_usage_queue}': {token_payload}")
+                                    except redis.RedisError as e:
+                                        log_adapter.error(f"Failed to queue token usage data for InteractionID {current_interaction_id}: {e}")
+                                    except Exception as e_gen:
+                                        log_adapter.error(f"Unexpected error queuing token usage data for InteractionID {current_interaction_id}: {e_gen}", exc_info=True)
+                            else:
+                                log_adapter.info(f"No token usage events recorded in retrieved final state for InteractionID: {current_interaction_id}.")
+                        else:
+                            log_adapter.warning(f"Could not retrieve token_usage_events from final graph state for InteractionID: {current_interaction_id}. State: {retrieved_final_state is not None}")
+                        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
                         response_payload_dict = {
                             "thread_id": thread_id,

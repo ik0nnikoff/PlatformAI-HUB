@@ -1,7 +1,16 @@
-from typing import Annotated, Sequence, TypedDict, List, Dict, Any, Set
+from typing import Annotated, Sequence, TypedDict, List, Dict, Any, Set, Optional
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 from langchain_core.tools import BaseTool
+from pydantic import BaseModel, Field
+
+class TokenUsageData(BaseModel):
+    call_type: str # e.g., "agent_llm", "grading_llm", "rewrite_llm", "generation_llm"
+    model_id: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    timestamp: str # ISO format datetime string
 
 class AgentState(TypedDict):
     """
@@ -47,3 +56,7 @@ class AgentState(TypedDict):
     provider: str
     enableContextMemory: bool
     contextMemoryDepth: int
+
+    # New fields for token usage tracking
+    current_interaction_id: Optional[str] = None # Unique ID for the current question-answer session
+    token_usage_events: List[TokenUsageData] = Field(default_factory=list) # List of token usage events

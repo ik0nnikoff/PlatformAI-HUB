@@ -200,6 +200,9 @@ class ChatMessageDB(Base):
     channel = Column(String, nullable=True) # Канал, из которого пришло сообщение (websocket, telegram, etc.)
     # Добавляем timestamp
     timestamp = Column(DateTime(timezone=True), nullable=False, index=True, server_default=func.now()) # Добавляем server_default для удобства
+    # --- НОВОЕ: Поле для связи с использованием токенов ---
+    interaction_id = Column(String, nullable=True, index=True) # Уникальный ID для группы вызовов LLM, приведших к этому сообщению
+    # --- КОНЕЦ НОВОГО ---
 
     # Связь с конфигом агента
     agent_config = relationship("AgentConfigDB", back_populates="chat_messages")
@@ -247,4 +250,40 @@ class AgentUserAuthorizationDB(Base):
     __table_args__ = (
         UniqueConstraint('agent_id', 'user_id', name='uq_agent_user_authorization'),
     )
+# --- КОНЕЦ НОВОГО ---
+
+# --- НОВОЕ: Модели для логирования использования токенов ---
+class TokenUsageLogDB(Base):
+    __tablename__ = "token_usage_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(String, ForeignKey("agent_configs.id", ondelete="CASCADE"), nullable=False, index=True)
+    # message_id связан с сообщением агента, к которому относится это использование токенов
+    message_id = Column(Integer, ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=True, index=True) # Nullable, если связь не всегда есть
+    interaction_id = Column(String, nullable=False, index=True) # ID из agent_runner
+
+    call_type = Column(String, nullable=False) # e.g., "agent_llm", "grading_llm", "tool_input_llm"
+    model_id = Column(String, nullable=False)
+    prompt_tokens = Column(Integer, nullable=False)
+    completion_tokens = Column(Integer, nullable=False)
+    total_tokens = Column(Integer, nullable=False)
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True) # Время события использования токенов
+
+    # Связи (опционально, если нужны обратные ссылки)
+    # agent_config = relationship("AgentConfigDB") # Можно добавить, если нужна прямая связь
+    # chat_message = relationship("ChatMessageDB") # Можно добавить, если нужна прямая связь
+
+class TokenUsageLogOutput(BaseModel):
+    id: int
+    agent_id: str
+    message_id: Optional[int] = None
+    interaction_id: str
+    call_type: str
+    model_id: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    timestamp: datetime
+
+    model_config = ConfigDict(from_attributes=True)
 # --- КОНЕЦ НОВОГО ---

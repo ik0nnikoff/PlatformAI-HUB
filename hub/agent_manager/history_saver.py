@@ -56,6 +56,9 @@ async def run_history_saver_worker(
                     content = data.get("content")
                     channel = data.get("channel")
                     timestamp_iso = data.get("timestamp")
+                    # --- НОВОЕ: Извлекаем interaction_id ---
+                    interaction_id = data.get("interaction_id") # Может быть None для старых сообщений или если не передан
+                    # --- КОНЕЦ НОВОГО ---
 
                     if not all([agent_id, thread_id, sender_type_str, content, timestamp_iso]):
                         logger.error(f"Invalid message format received (missing fields): {data}")
@@ -89,10 +92,11 @@ async def run_history_saver_worker(
                                 sender_type=sender_type,
                                 content=content,
                                 channel=channel,
-                                timestamp=timestamp
+                                timestamp=timestamp,
+                                interaction_id=interaction_id # --- НОВОЕ ---
                             )
                             # Коммит происходит внутри db_add_chat_message
-                            logger.debug(f"Successfully saved message for Agent={agent_id}, Thread={thread_id}")
+                            logger.debug(f"Successfully saved message for Agent={agent_id}, Thread={thread_id}, InteractionID={interaction_id}")
                     except Exception as db_err:
                         # Ошибка уже логируется внутри db_add_chat_message
                         logger.error(f"Database error saving message for Agent={agent_id}, Thread={thread_id}: {db_err}")

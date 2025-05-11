@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import redis.asyncio as redis
 from pydantic import BaseModel, Field
 # --- ДОБАВЛЕНО: Импорт datetime ---
-from datetime import datetime
+from datetime import datetime, timezone # Добавляем timezone
 # --- КОНЕЦ ДОБАВЛЕНИЯ ---
 from typing import Any, Dict, Literal, Optional, Tuple
 from langchain_openai import ChatOpenAI
@@ -16,7 +16,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 
 # Import from sibling modules
-from .models import AgentState
+from .models import AgentState, TokenUsageData # Добавляем TokenUsageData
 from .tools import configure_tools, BaseTool # Import BaseTool
 
 # --- Load Environment Variables ---
@@ -49,6 +49,13 @@ def _get_llm(
     Creates and returns an LLM client based on the provider.
     """
     log_adapter.info(f"Attempting to create LLM client for provider: {provider}, model: {model_name}")
+    model_kwargs = {}
+    if streaming:
+        # --- НОВОЕ: Добавляем stream_options для OpenAI и OpenRouter при стриминге ---
+        if provider.lower() in ["openai", "openrouter"]:
+            model_kwargs["stream_options"] = {"include_usage": True}
+        # --- КОНЕЦ НОВОГО ---
+
     if provider.lower() == "openai":
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
@@ -58,7 +65,8 @@ def _get_llm(
             model=model_name,
             temperature=temperature,
             streaming=streaming,
-            openai_api_key=api_key
+            openai_api_key=api_key,
+            model_kwargs=model_kwargs # Передаем model_kwargs
         )
     elif provider.lower() == "openrouter":
         api_key = os.getenv("OPENROUTER_API_KEY")
@@ -70,7 +78,8 @@ def _get_llm(
             temperature=temperature,
             streaming=streaming,
             openai_api_key=api_key, # OpenRouter API Key
-            base_url="https://openrouter.ai/api/v1" # OpenRouter API Base
+            base_url="https://openrouter.ai/api/v1", # OpenRouter API Base
+            model_kwargs=model_kwargs # Передаем model_kwargs
         )
     else:
         log_adapter.error(f"Unsupported LLM provider: {provider}")
@@ -196,7 +205,7 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
         prompt = ChatPromptTemplate.from_messages([
             ("system", node_system_prompt),
             MessagesPlaceholder(variable_name="messages")
-        ]).partial(current_time=datetime.now().isoformat()) # Вставляем текущее время
+        ]).partial(current_time=datetime.now(timezone.utc).isoformat()) # Вставляем текущее время и используем UTC
         # --- КОНЕЦ ДОБАВЛЕНИЯ ---
 
         model = _get_llm(
@@ -224,6 +233,58 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
         chain = prompt | model
         try:
             response = await chain.ainvoke({"messages": messages}, config=config)
+            
+            node_log_adapter.info(f"Agent node response type: {type(response)}")
+            node_log_adapter.info(f"Agent node response content preview: {response.content[:100] if hasattr(response, 'content') else 'N/A'}")
+            if hasattr(response, 'response_metadata'):
+                node_log_adapter.info(f"Agent node response_metadata: {response.response_metadata}")
+            else:
+                node_log_adapter.warning("Agent node response has no attribute 'response_metadata'")
+            # --- НОВОЕ: Логирование usage_metadata ---
+            if hasattr(response, 'usage_metadata'):
+                node_log_adapter.info(f"Agent node usage_metadata: {response.usage_metadata}")
+            else:
+                node_log_adapter.warning("Agent node response has no attribute 'usage_metadata'")
+            # --- КОНЕЦ НОВОГО ---
+
+            # --- ИЗМЕНЕНИЕ: Обновленный сбор данных об использовании токенов ---
+            token_event_data = None
+            prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
+            model_name_from_meta = node_model_id
+
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                usage_meta = response.usage_metadata
+                # --- ИЗМЕНЕНИЕ: Доступ к словарю по ключам ---
+                prompt_tokens = usage_meta.get('prompt_tokens', 0) if usage_meta.get('prompt_tokens') is not None else usage_meta.get('input_tokens', 0)
+                completion_tokens = usage_meta.get('completion_tokens', 0) if usage_meta.get('completion_tokens') is not None else usage_meta.get('output_tokens', 0)
+                total_tokens = usage_meta.get('total_tokens', 0)
+                # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+                node_log_adapter.info(f"Token usage from usage_metadata: P:{prompt_tokens} C:{completion_tokens} T:{total_tokens}")
+                if hasattr(response, 'response_metadata') and response.response_metadata and response.response_metadata.get('model_name'):
+                    model_name_from_meta = response.response_metadata['model_name']
+            elif hasattr(response, 'response_metadata') and response.response_metadata and 'token_usage' in response.response_metadata:
+                usage = response.response_metadata['token_usage']
+                prompt_tokens = usage.get('prompt_tokens', 0)
+                completion_tokens = usage.get('completion_tokens', 0)
+                total_tokens = usage.get('total_tokens', 0)
+                node_log_adapter.info(f"Token usage from response_metadata['token_usage']: P:{prompt_tokens} C:{completion_tokens} T:{total_tokens}")
+                if response.response_metadata.get('model_name'):
+                    model_name_from_meta = response.response_metadata['model_name']
+            else:
+                node_log_adapter.warning("Token usage data not found in usage_metadata or response_metadata for agent_node.")
+
+            if total_tokens > 0 or prompt_tokens > 0 or completion_tokens > 0:
+                token_event_data = TokenUsageData(
+                    call_type="agent_llm",
+                    model_id=model_name_from_meta,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    timestamp=datetime.now(timezone.utc).isoformat()
+                )
+                state["token_usage_events"].append(token_event_data)
+                node_log_adapter.info(f"Token usage for agent_llm: {token_event_data.total_tokens} tokens recorded.")
+            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
             # --- ИСПРАВЛЕНИЕ: Попытка восстановить tool_calls из invalid_tool_calls ---
             if hasattr(response, 'invalid_tool_calls') and response.invalid_tool_calls and \
@@ -288,6 +349,9 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
             return {"messages": [response]}
         except Exception as e:
             node_log_adapter.error(f"Error invoking agent model: {e}", exc_info=True)
+            # --- НОВОЕ: Добавляем пустой список токенов в состояние при ошибке, если нужно ---
+            # state["token_usage_events"] = state.get("token_usage_events", []) # Убедимся, что поле существует
+            # --- КОНЕЦ НОВОГО ---
             error_message = AIMessage(content=f"Sorry, an error occurred: {e}")
             return {"messages": [error_message]}
 
@@ -340,26 +404,95 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
         )
         if not model:
             node_log_adapter.error(f"Could not initialize LLM for grading (provider: {node_provider}). Returning no documents.")
+            # --- НОВОЕ: Добавляем пустой список токенов в состояние при ошибке, если нужно ---
+            # state["token_usage_events"] = state.get("token_usage_events", [])
+            # --- КОНЕЦ НОВОГО ---
             return {"documents": [], "question": current_question}
             
-        llm_with_tool = model.with_structured_output(grade)
+        # --- ИЗМЕНЕНИЕ: Используем include_raw=True ---
+        llm_with_tool = model.with_structured_output(grade, include_raw=True)
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
         async def process_doc(doc):
             chain = prompt | llm_with_tool
+            token_event_for_doc = None
             try:
-                scored_result = await chain.ainvoke({"question": current_question, "context": doc})
-                node_log_adapter.debug(f"Doc: '{doc[:50]}...' Score: {scored_result.binary_score}")
-                return doc, scored_result.binary_score
+                invocation_result = await chain.ainvoke({"question": current_question, "context": doc})
+                
+                # --- ИЗМЕНЕНИЕ: Результат теперь словарь с "parsed" и "raw" ---
+                parsed_grade = invocation_result.get("parsed")
+                raw_ai_message = invocation_result.get("raw")
+                
+                binary_score = "no"
+                if parsed_grade:
+                    binary_score = parsed_grade.binary_score
+                else:
+                    node_log_adapter.warning(f"Grading failed to parse output for doc: {doc[:100]}")
+
+                if raw_ai_message:
+                    node_log_adapter.debug(f"Grading raw AIMessage metadata: {raw_ai_message.response_metadata if hasattr(raw_ai_message, 'response_metadata') else 'N/A'}")
+                    node_log_adapter.debug(f"Grading raw AIMessage usage_metadata: {raw_ai_message.usage_metadata if hasattr(raw_ai_message, 'usage_metadata') else 'N/A'}")
+
+                    prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
+                    model_name_from_meta = node_model_id
+
+                    if hasattr(raw_ai_message, 'usage_metadata') and raw_ai_message.usage_metadata:
+                        usage_meta = raw_ai_message.usage_metadata
+                        # --- ИЗМЕНЕНИЕ: Доступ к словарю по ключам ---
+                        prompt_tokens = usage_meta.get('prompt_tokens', 0) if usage_meta.get('prompt_tokens') is not None else usage_meta.get('input_tokens', 0)
+                        completion_tokens = usage_meta.get('completion_tokens', 0) if usage_meta.get('completion_tokens') is not None else usage_meta.get('output_tokens', 0)
+                        total_tokens = usage_meta.get('total_tokens', 0)
+                        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+                        if hasattr(raw_ai_message, 'response_metadata') and raw_ai_message.response_metadata and raw_ai_message.response_metadata.get('model_name'):
+                            model_name_from_meta = raw_ai_message.response_metadata['model_name']
+                    elif hasattr(raw_ai_message, 'response_metadata') and raw_ai_message.response_metadata and 'token_usage' in raw_ai_message.response_metadata:
+                        usage = raw_ai_message.response_metadata['token_usage']
+                        prompt_tokens = usage.get('prompt_tokens', 0)
+                        completion_tokens = usage.get('completion_tokens', 0)
+                        total_tokens = usage.get('total_tokens', 0)
+                        if raw_ai_message.response_metadata.get('model_name'):
+                            model_name_from_meta = raw_ai_message.response_metadata['model_name']
+                    
+                    if total_tokens > 0 or prompt_tokens > 0 or completion_tokens > 0:
+                        token_event_for_doc = TokenUsageData(
+                            call_type="grading_llm",
+                            model_id=model_name_from_meta,
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            total_tokens=total_tokens,
+                            timestamp=datetime.now(timezone.utc).isoformat()
+                        )
+                else:
+                    node_log_adapter.warning("Grading raw AIMessage not found in invocation_result.")
+                
+                return doc, binary_score, token_event_for_doc
+                # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
             except Exception as e:
                 node_log_adapter.error(f"Error processing document for grading: {e}", exc_info=True)
-                return doc, "no"
+                return doc, "no", None
 
         filtered_docs = []
         tasks = [process_doc(d) for d in docs if d]
         results = await asyncio.gather(*tasks)
-        filtered_docs = [doc for doc, score in results if score == "yes"]
-        node_log_adapter.info(f"Found {len(filtered_docs)} relevant documents out of {len(docs)}.")
+        
+        current_token_events = [] # Собираем здесь, чтобы избежать проблем с конкурентным доступом к state
+        for doc_content, score, token_event_data in results:
+            if score == "yes":
+                filtered_docs.append(doc_content)
+            if token_event_data:
+                current_token_events.append(token_event_data)
+        
+        if current_token_events:
+            state.get("token_usage_events", []).extend(current_token_events) # Используем get для безопасности
+            total_grading_tokens = sum(evt.total_tokens for evt in current_token_events)
+            node_log_adapter.info(f"Total token usage for grading_llm batch: {total_grading_tokens} tokens.")
 
+
+        node_log_adapter.info(f"Found {len(filtered_docs)} relevant documents out of {len(docs)}.")
+        # --- НОВОЕ: Убедимся, что token_usage_events существует в state ---
+        # state["token_usage_events"] = state.get("token_usage_events", []) # Уже сделано выше через get().extend()
+        # --- КОНЕЦ НОВОГО ---
         return {"documents": filtered_docs, "question": current_question}
 
     async def rewrite_node(state: AgentState, config: dict):
@@ -411,6 +544,46 @@ Rephrased Question:"""
                     rewritten_question = response.content.strip()
                     node_log_adapter.info(f"Rewritten question: {rewritten_question}")
 
+                    # --- ИЗМЕНЕНИЕ: Обновленный сбор данных об использовании токенов ---
+                    token_event_data = None
+                    prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
+                    model_name_from_meta = node_model_id
+
+                    node_log_adapter.debug(f"Rewrite node response_metadata: {response.response_metadata if hasattr(response, 'response_metadata') else 'N/A'}")
+                    node_log_adapter.debug(f"Rewrite node usage_metadata: {response.usage_metadata if hasattr(response, 'usage_metadata') else 'N/A'}")
+
+                    if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                        usage_meta = response.usage_metadata
+                        # --- ИЗМЕНЕНИЕ: Доступ к словарю по ключам ---
+                        prompt_tokens = usage_meta.get('prompt_tokens', 0) if usage_meta.get('prompt_tokens') is not None else usage_meta.get('input_tokens', 0)
+                        completion_tokens = usage_meta.get('completion_tokens', 0) if usage_meta.get('completion_tokens') is not None else usage_meta.get('output_tokens', 0)
+                        total_tokens = usage_meta.get('total_tokens', 0)
+                        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+                        if hasattr(response, 'response_metadata') and response.response_metadata and response.response_metadata.get('model_name'):
+                            model_name_from_meta = response.response_metadata['model_name']
+                    elif hasattr(response, 'response_metadata') and response.response_metadata and 'token_usage' in response.response_metadata:
+                        usage = response.response_metadata['token_usage']
+                        prompt_tokens = usage.get('prompt_tokens', 0)
+                        completion_tokens = usage.get('completion_tokens', 0)
+                        total_tokens = usage.get('total_tokens', 0)
+                        if response.response_metadata.get('model_name'):
+                            model_name_from_meta = response.response_metadata['model_name']
+                    else:
+                        node_log_adapter.warning("Token usage data not found for rewrite_node.")
+                    
+                    if total_tokens > 0 or prompt_tokens > 0 or completion_tokens > 0:
+                        token_event_data = TokenUsageData(
+                            call_type="rewrite_llm",
+                            model_id=model_name_from_meta,
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            total_tokens=total_tokens,
+                            timestamp=datetime.now(timezone.utc).isoformat()
+                        )
+                        state.get("token_usage_events", []).append(token_event_data)
+                        node_log_adapter.info(f"Token usage for rewrite_llm: {token_event_data.total_tokens} tokens recorded.")
+                    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
                     if not rewritten_question or rewritten_question.lower() == original_question.lower():
                          node_log_adapter.warning("Rewriting resulted in empty or identical question. Stopping rewrite.")
                          # Fall through to "no answer" case below
@@ -429,6 +602,9 @@ Rephrased Question:"""
         # If rewrite limit reached or rewrite failed/was empty
         node_log_adapter.warning(f"Max rewrites ({node_max_rewrites}) reached or rewrite failed for original question: {original_question}")
         no_answer_message = AIMessage(content="К сожалению, я не смог найти релевантную информацию по вашему запросу даже после его уточнения. Попробуйте задать вопрос по-другому.")
+        # --- НОВОЕ: Убедимся, что token_usage_events существует в state ---
+        # state["token_usage_events"] = state.get("token_usage_events", []) # Уже сделано выше через get().append()
+        # --- КОНЕЦ НОВОГО ---
         return {
             "messages": [no_answer_message],
             "rewrite_count": 0 # Reset count for next turn if needed, though this branch ends
@@ -483,16 +659,63 @@ Rephrased Question:"""
             log_adapter=node_log_adapter
         )
         if not llm:
+            # --- НОВОЕ: Убедимся, что token_usage_events существует в state ---
+            # state["token_usage_events"] = state.get("token_usage_events", [])
+            # --- КОНЕЦ НОВОГО ---
             return {"messages": [AIMessage(content=f"An error occurred: Could not initialize LLM for provider {node_provider}.")]}
 
         rag_chain = prompt | llm
         try:
             response = await rag_chain.ainvoke({"context": documents_str, "question": current_question})
+
+            # --- ИЗМЕНЕНИЕ: Обновленный сбор данных об использовании токенов ---
+            token_event_data = None
+            prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
+            model_name_from_meta = node_model_id
+
+            node_log_adapter.debug(f"Generate node response_metadata: {response.response_metadata if hasattr(response, 'response_metadata') else 'N/A'}")
+            node_log_adapter.debug(f"Generate node usage_metadata: {response.usage_metadata if hasattr(response, 'usage_metadata') else 'N/A'}")
+
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                usage_meta = response.usage_metadata
+                # --- ИЗМЕНЕНИЕ: Доступ к словарю по ключам ---
+                prompt_tokens = usage_meta.get('prompt_tokens', 0) if usage_meta.get('prompt_tokens') is not None else usage_meta.get('input_tokens', 0)
+                completion_tokens = usage_meta.get('completion_tokens', 0) if usage_meta.get('completion_tokens') is not None else usage_meta.get('output_tokens', 0)
+                total_tokens = usage_meta.get('total_tokens', 0)
+                # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+                if hasattr(response, 'response_metadata') and response.response_metadata and response.response_metadata.get('model_name'):
+                    model_name_from_meta = response.response_metadata['model_name']
+            elif hasattr(response, 'response_metadata') and response.response_metadata and 'token_usage' in response.response_metadata:
+                usage = response.response_metadata['token_usage']
+                prompt_tokens = usage.get('prompt_tokens', 0)
+                completion_tokens = usage.get('completion_tokens', 0)
+                total_tokens = usage.get('total_tokens', 0)
+                if response.response_metadata.get('model_name'):
+                    model_name_from_meta = response.response_metadata['model_name']
+            else:
+                node_log_adapter.warning("Token usage data not found for generate_node.")
+
+            if total_tokens > 0 or prompt_tokens > 0 or completion_tokens > 0:
+                token_event_data = TokenUsageData(
+                    call_type="generation_llm",
+                    model_id=model_name_from_meta,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    timestamp=datetime.now(timezone.utc).isoformat()
+                )
+                state.get("token_usage_events", []).append(token_event_data)
+                node_log_adapter.info(f"Token usage for generation_llm: {token_event_data.total_tokens} tokens recorded.")
+            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
             if not isinstance(response, BaseMessage):
                  response = AIMessage(content=str(response))
             return {"messages": [response]}
         except Exception as e:
             node_log_adapter.error(f"Error during generation: {e}", exc_info=True)
+            # --- НОВОЕ: Убедимся, что token_usage_events существует в state ---
+            # state["token_usage_events"] = state.get("token_usage_events", [])
+            # --- КОНЕЦ НОВОГО ---
             return {"messages": [AIMessage(content="An error occurred while generating the response.")]}
 
     # --- Edges Definition (Now INSIDE create_agent_app) ---

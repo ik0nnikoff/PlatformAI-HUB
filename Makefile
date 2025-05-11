@@ -1,6 +1,26 @@
 run:
 	uv run uvicorn hub.agent_manager.main:app --reload --port 8001 --host 0.0.0.0
 
+# Команда для применения миграций Alembic
+migrate:
+	alembic upgrade head
+
+# Команда для создания новой ревизии Alembic (автогенерация)
+makemigrations:
+	alembic revision --autogenerate -m "$(m)" # Пример: make makemigrations m="Add new field"
+
+# Команда для отката последней миграции
+downgrade:
+	alembic downgrade -1
+
+# Команда для просмотра истории миграций
+history:
+	alembic history --verbose
+
+# Команда для просмотра текущей ревизии
+current:
+	alembic current
+
 # Example of running a specific agent runner manually (for testing)
 # Usage: make run_agent AGENT_ID=my_agent_abc
 run_agent:
