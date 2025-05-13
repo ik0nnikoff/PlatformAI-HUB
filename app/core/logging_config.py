@@ -9,7 +9,8 @@ def setup_logging():
     """Настраивает базовую конфигурацию логирования."""
     logging.basicConfig(
         level=LOG_LEVEL,
-        format="%(asctime)s - %(levelname)s - %(name)s - %(module)s - %(funcName)s - %(lineno)d - %(message)s",
+        # format="%(asctime)s - %(levelname)s - %(name)s - %(module)s - %(funcName)s - %(lineno)d - %(message)s",
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         handlers=[
             logging.StreamHandler(sys.stdout)  # Вывод в stdout
             # Можно добавить другие обработчики, например, для записи в файл:

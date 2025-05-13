@@ -16,6 +16,7 @@ from redis import exceptions as redis_exceptions
 from contextlib import asynccontextmanager
 from aiogram.exceptions import TelegramBadRequest
 
+from app.core.logging_config import setup_logging
 from app.core.config import settings
 from app.db.session import get_async_session_factory
 from app.db.crud import user_crud
@@ -215,7 +216,7 @@ async def redis_output_listener(agent_id: str):
             if not await redis_client.ping():
                 logger.warning(f"Redis ping failed in listener for {output_channel}. Attempting to re-establish pubsub.")
                 if pubsub:
-                    try: await pubsub.close()
+                    try: await pubsub.aclose()
                     except: pass
                 pubsub = None
                 await asyncio.sleep(5)
@@ -328,7 +329,7 @@ async def redis_output_listener(agent_id: str):
         except redis_exceptions.ConnectionError as e:
             logger.error(f"Redis connection error in listener for {output_channel}: {e}. Attempting to reconnect pubsub.")
             if pubsub:
-                try: await pubsub.close()
+                try: await pubsub.aclose()
                 except Exception: pass
                 pubsub = None
             await asyncio.sleep(settings.REDIS_RECONNECT_INTERVAL if hasattr(settings, 'REDIS_RECONNECT_INTERVAL') else 5)
@@ -338,7 +339,7 @@ async def redis_output_listener(agent_id: str):
         except Exception as e:
             logger.error(f"Unexpected error in Redis listener for {output_channel}: {e}", exc_info=True)
             if pubsub:
-                try: await pubsub.close()
+                try: await pubsub.aclose()
                 except Exception: pass
                 pubsub = None
             await asyncio.sleep(5)
@@ -346,7 +347,7 @@ async def redis_output_listener(agent_id: str):
     if pubsub:
         try:
             await pubsub.unsubscribe(output_channel)
-            await pubsub.close()
+            await pubsub.aclose()
             logger.info(f"Unsubscribed and closed pubsub for {output_channel}")
         except Exception as clean_e:
             logger.error(f"Error cleaning up pubsub for {output_channel}: {clean_e}", exc_info=True)
@@ -675,13 +676,13 @@ async def lifespan(dp_obj: Dispatcher, agent_id: str, bot_token: str, redis_url:
                 logger.error(f"Failed to update final status to 'stopped' using temporary Redis client for agent {agent_id}: {e_temp_redis}")
             finally:
                 if temp_redis_client_for_final_status:
-                    await temp_redis_client_for_final_status.close()
+                    await temp_redis_client_for_final_status.aclose()
         else:
             logger.warning(f"redis_url_global not set, cannot reliably update final status to 'stopped' for agent {agent_id}")
 
         if redis_client:
             logger.info(f"Closing main Redis client connection for agent {agent_id}...")
-            await redis_client.close()
+            await redis_client.aclose()
             logger.info(f"Main Redis client for agent {agent_id} closed.")
         
         if bot and bot.session:
@@ -768,14 +769,16 @@ async def main_bot_runner(agent_id_param: str, bot_token_param: str, redis_url_p
         runner_logger.info(f"Main bot runner for agent {agent_id_param} is exiting.")
 
 if __name__ == "__main__":
-    log_level_name = os.getenv("LOG_LEVEL", "INFO").upper()
-    log_level = getattr(logging, log_level_name, logging.INFO)
+    # log_level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+    # log_level = getattr(logging, log_level_name, logging.INFO)
 
-    logging.basicConfig(
-        level=log_level,
-        format='%(asctime)s - %(levelname)s - %(name)s - %(module)s:%(lineno)d - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+    # logging.basicConfig(
+    #     level=log_level,
+    #     format='%(asctime)s - %(levelname)s - %(name)s - %(module)s:%(lineno)d - %(message)s',
+    #     datefmt='%Y-%m-%d %H:%M:%S'
+    # )
+    setup_logging()
+    
 
     parser = argparse.ArgumentParser(description="Telegram Bot Integration for Configurable Agent")
     parser.add_argument("--agent-id", required=True, help="Unique ID of the agent this bot interacts with")
@@ -784,7 +787,8 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    logger.info(f"Raw arguments received: agent_id='{args.agent_id}', redis_url='{args.redis_url}', integration_settings='{args.integration_settings}'")
+    logger = logging.getLogger(f"telegram_bot_main:{args.agent_id}")
+    # logger.info(f"Raw arguments received: agent_id='{args.agent_id}', redis_url='{args.redis_url}', integration_settings='{args.integration_settings}'")
 
     integration_settings_data: Optional[Dict[str, Any]] = None
     bot_token_to_use: Optional[str] = None

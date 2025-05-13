@@ -753,7 +753,7 @@ if __name__ == "__main__":
     # Initial, basic logger for messages before agent-specific adapter is ready
     # app.core.logging_config should have set up basicConfig.
     # If not, this will use Python's default basicConfig on first logging call.
-    initial_logger = logging.getLogger(__name__) 
+    initial_logger = logging.getLogger("runner_main") 
     initial_logger.info(f"Preparing to start agent runner process for ID: {args.agent_id} (PID: {os.getpid()})")
 
     # Setup signal handlers for graceful shutdown

@@ -6,14 +6,14 @@ from pydantic import SecretStr # Import SecretStr
 dotenv_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
 if os.path.exists(dotenv_path):
     load_dotenv(dotenv_path=dotenv_path)
-    print(f"App Config: Loaded environment variables from {dotenv_path}")
+    # print(f"App Config: Loaded environment variables from {dotenv_path}")
 else:
     print(f"App Config: Warning! .env file not found at {dotenv_path}")
 
 class Settings:
     PROJECT_NAME: str = os.getenv("PROJECT_NAME", "PlatformAI Hub")
     PROJECT_VERSION: str = os.getenv("PROJECT_VERSION", "0.1.0")
-    API_V1_STR: str = os.getenv("API_V1_STR", "/api/v1") # Added API_V1_STR
+    API_V1_STR: str = os.getenv("API_V1_STR", "/api/v1")
 
     # Redis Configuration
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -55,11 +55,11 @@ class Settings:
 
     # Docker settings for agent runner
     RUN_AGENTS_WITH_DOCKER: bool = os.getenv("RUN_AGENTS_WITH_DOCKER", "false").lower() == "true"
-    AGENT_DOCKER_IMAGE: str = os.getenv("AGENT_DOCKER_IMAGE", "agent_runner_image") # Имя Docker образа
+    AGENT_DOCKER_IMAGE: str = os.getenv("AGENT_DOCKER_IMAGE", "agent_runner_image")
 
     # Service Configuration
     MANAGER_HOST: str = os.getenv("MANAGER_HOST", "localhost")
-    MANAGER_PORT: int = int(os.getenv("MANAGER_PORT", "8001")) # Согласовано с Makefile
+    MANAGER_PORT: int = int(os.getenv("MANAGER_PORT", "8001"))
 
     # Logging Configuration
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -90,7 +90,7 @@ elif settings.RUN_AGENTS_WITH_DOCKER:
         print(f"App Config: Agent runners will be launched using Docker image: {settings.AGENT_DOCKER_IMAGE}")
 
 # For debugging purposes, print out a few key settings
-print(f"App Config: MANAGER_PORT set to {settings.MANAGER_PORT}")
-print(f"App Config: REDIS_URL set to {settings.REDIS_URL}")
-print(f"App Config: DATABASE_URL set to {settings.DATABASE_URL}")
-print(f"App Config: RUN_AGENTS_WITH_DOCKER set to {settings.RUN_AGENTS_WITH_DOCKER}")
+# print(f"App Config: MANAGER_PORT set to {settings.MANAGER_PORT}")
+# print(f"App Config: REDIS_URL set to {settings.REDIS_URL}")
+# print(f"App Config: DATABASE_URL set to {settings.DATABASE_URL}")
+# print(f"App Config: RUN_AGENTS_WITH_DOCKER set to {settings.RUN_AGENTS_WITH_DOCKER}")
