@@ -1,10 +1,7 @@
-import os
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Literal, Optional, Tuple
-
-import redis.asyncio as redis
 from pydantic import BaseModel, Field
 
 from langchain_openai import ChatOpenAI
@@ -12,17 +9,12 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMe
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import END, StateGraph, START
 from langgraph.prebuilt import ToolNode, tools_condition
-from langgraph.checkpoint.memory import MemorySaver # <--- РАСКОММЕНТИРОВАНО
+from langgraph.checkpoint.memory import MemorySaver
 
 from app.agent_runner.langgraph_models import AgentState, TokenUsageData
 from app.agent_runner.langgraph_tools import configure_tools # BaseTool is not directly used here, but by configure_tools
-from app.core.config import settings # Import global settings
+from app.core.config import settings
 
-# Standard logging setup, agent_id will be added by adapter
-# logging.basicConfig(
-#     level=logging.INFO,
-#     format="%(asctime)s - %(levelname)s - %(agent_id)s - %(message)s",
-# )
 logger = logging.getLogger(__name__) # Use standard logger
 
 # Global flag for graceful shutdown (if needed by runner_main that uses this factory)

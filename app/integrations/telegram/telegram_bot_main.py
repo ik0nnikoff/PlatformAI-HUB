@@ -769,17 +769,8 @@ async def main_bot_runner(agent_id_param: str, bot_token_param: str, redis_url_p
         runner_logger.info(f"Main bot runner for agent {agent_id_param} is exiting.")
 
 if __name__ == "__main__":
-    # log_level_name = os.getenv("LOG_LEVEL", "INFO").upper()
-    # log_level = getattr(logging, log_level_name, logging.INFO)
-
-    # logging.basicConfig(
-    #     level=log_level,
-    #     format='%(asctime)s - %(levelname)s - %(name)s - %(module)s:%(lineno)d - %(message)s',
-    #     datefmt='%Y-%m-%d %H:%M:%S'
-    # )
     setup_logging()
     
-
     parser = argparse.ArgumentParser(description="Telegram Bot Integration for Configurable Agent")
     parser.add_argument("--agent-id", required=True, help="Unique ID of the agent this bot interacts with")
     parser.add_argument("--redis-url", required=True, help="URL for Redis connection")

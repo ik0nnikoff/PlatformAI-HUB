@@ -1,6 +1,4 @@
 from enum import Enum
-from typing import Optional # Добавлено
-from pydantic import BaseModel # Добавлено
 
 class IntegrationType(str, Enum):
     TELEGRAM = "telegram"

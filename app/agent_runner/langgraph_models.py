@@ -1,8 +1,7 @@
-# filepath: app/agent_runner/langgraph_models.py
 from typing import Annotated, Sequence, TypedDict, List, Dict, Any, Set, Optional
 
 from langchain_core.messages import BaseMessage
-from langchain_core.tools import BaseTool # Assuming BaseTool will be used by AgentState or other models here
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 from langgraph.graph.message import add_messages
 
@@ -55,7 +54,7 @@ class AgentState(TypedDict):
     model_id: str
     temperature: float
     system_prompt: str
-    configured_tools: List[BaseTool] # Requires BaseTool import
+    configured_tools: List[BaseTool]
     safe_tool_names: Set[str]
     datastore_tool_names: Set[str]
     max_rewrites: int

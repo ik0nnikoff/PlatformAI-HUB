@@ -3,13 +3,11 @@ import json
 import logging
 import os
 import signal
-import subprocess # Keep for Popen if still used for integrations, or remove if all async
-import sys # Remove if sys.executable is no longer used
+import subprocess
 import time
 from typing import Optional, Dict, Any
 
 import redis.asyncio as redis
-from fastapi import HTTPException
 
 from app.api.schemas.agent_schemas import AgentStatus, IntegrationStatus
 from app.api.schemas.common_schemas import IntegrationType
