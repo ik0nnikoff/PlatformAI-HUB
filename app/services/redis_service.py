@@ -58,7 +58,7 @@ async def get_redis_client() -> redis.Redis: # Changed redis.asyncio.Redis to re
     FastAPI dependency that provides a Redis client instance configured with the global pool.
     The pool (redis_pool) must be initialized beforehand (e.g., during app startup).
     """
-    pool = await get_redis_pool() # This will raise RuntimeError if pool is not initialized
+    pool = get_redis_pool() # ИЗМЕНЕНО: убран await, так как get_redis_pool() синхронная
     # Create a new client instance using the connection pool.
     # Connections are managed by the client/pool automatically.
     return redis.Redis(connection_pool=pool)

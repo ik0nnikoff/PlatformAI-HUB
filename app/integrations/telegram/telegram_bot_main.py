@@ -787,7 +787,7 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    logger = logging.getLogger(f"telegram_bot_main:{args.agent_id}")
+    logger = logging.getLogger(f"telegram:{args.agent_id}")
     # logger.info(f"Raw arguments received: agent_id='{args.agent_id}', redis_url='{args.redis_url}', integration_settings='{args.integration_settings}'")
 
     integration_settings_data: Optional[Dict[str, Any]] = None

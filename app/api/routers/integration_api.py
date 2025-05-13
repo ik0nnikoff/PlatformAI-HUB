@@ -7,7 +7,7 @@ from app.core.dependencies import get_db, get_redis_client
 from app.db.crud import agent_crud
 from app.services import process_manager_service
 from app.api.schemas.common_schemas import IntegrationType
-from app.api.schemas.agent_schemas import IntegrationStatus # Предполагается, что IntegrationStatus здесь
+from app.api.schemas.agent_schemas import IntegrationStatus
 
 logger = logging.getLogger(__name__)
 router = APIRouter(

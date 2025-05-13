@@ -748,6 +748,8 @@ if __name__ == "__main__":
     parser.add_argument("--agent-id", type=str, required=True, help="Unique ID for this agent instance.")
     parser.add_argument("--config-url", type=str, required=True, help="URL to fetch agent configuration")
     parser.add_argument("--redis-url", type=str, required=True, help="URL for Redis connection")
+    parser.add_argument("--manager-host", required=False, help="Hostname of the manager API (optional).")
+    parser.add_argument("--manager-port", required=False, type=int, help="Port of the manager API (optional).")
     args = parser.parse_args()
 
     # Initial, basic logger for messages before agent-specific adapter is ready

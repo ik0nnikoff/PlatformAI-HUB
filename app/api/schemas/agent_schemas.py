@@ -78,15 +78,16 @@ class AgentListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 class AgentStatus(BaseModel):
-    agent_id: str
-    status: str # e.g., "running", "stopped", "error", "starting"
+    agent_id: str # ID агента, для которого этот статус
+    status: str  # Например, "running", "stopped", "initializing", "restarting", "error_config", "error_redis", etc.
     pid: Optional[int] = None
-    last_active: Optional[float] = None # Timestamp последнего активного действия
     error_detail: Optional[str] = None
+    last_active: Optional[float] = None # Timestamp последней активности
 
 class IntegrationStatus(BaseModel):
-    integration_type: IntegrationType
-    status: str
+    type: IntegrationType # Тип интеграции, например, "telegram"
+    status: str # Например, "running", "stopped", "error", "starting", "stopping", "not_found"
     pid: Optional[int] = None
-    last_active: Optional[float] = None
+    agent_id: str # ID агента, к которому относится интеграция
     error_detail: Optional[str] = None
+    last_active: Optional[float] = None # Timestamp последней активности, если применимо

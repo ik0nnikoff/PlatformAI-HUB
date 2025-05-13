@@ -11,8 +11,8 @@ from typing import Optional, Dict, Any
 import redis.asyncio as redis
 from fastapi import HTTPException
 
-from app.api.schemas.agent_schemas import AgentStatus
-from app.api.schemas.common_schemas import IntegrationStatus, IntegrationType
+from app.api.schemas.agent_schemas import AgentStatus, IntegrationStatus
+from app.api.schemas.common_schemas import IntegrationType
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -194,7 +194,9 @@ async def start_agent_process(agent_id: str, r: redis.Redis) -> bool:
                 "-m", module_path,
                 "--agent-id", agent_id,
                 "--config-url", config_url,
-                "--redis-url", REDIS_URL
+                "--redis-url", REDIS_URL,
+                "--manager-host", MANAGER_HOST, # Добавлено
+                "--manager-port", str(MANAGER_PORT) # Добавлено
             ]
             
             logger.debug(f"Executing local agent command: {' '.join(cmd)} in cwd: {PROJECT_ROOT} with PYTHONPATH: {process_env.get('PYTHONPATH')}")
@@ -362,10 +364,17 @@ def _get_integration_status_key(agent_id: str, integration_type: IntegrationType
 async def get_integration_status(agent_id: str, integration_type: IntegrationType, r: redis.Redis) -> IntegrationStatus:
     """Retrieves the status of a specific integration process from Redis."""
     status_key = _get_integration_status_key(agent_id, integration_type)
-    status_data = await r.hgetall(status_key) # Changed: r.hgetall with decode_responses=True returns Dict[str, str]
+    status_data = await r.hgetall(status_key)
 
     if not status_data:
-        return IntegrationStatus(agent_id=agent_id, integration_type=integration_type, status="stopped", pid=None, last_active=None)
+        return IntegrationStatus(
+            agent_id=agent_id,
+            type=integration_type, # Изменено с integration_type
+            status="not_found",    # Установлен статус not_found
+            pid=None,
+            error_detail=None,     # Добавлено error_detail
+            last_active=None
+        )
 
     current_status = status_data.get("status", "unknown")
     pid_val = status_data.get("pid")
@@ -376,17 +385,18 @@ async def get_integration_status(agent_id: str, integration_type: IntegrationTyp
     except (ValueError, TypeError):
         last_active = None
     
-    # runtime = status_data.get("runtime", "local") # Assuming integrations are always local for now
+    error_detail_val = status_data.get("error_detail") # Получаем error_detail
 
-    if pid and current_status in ["running", "starting"]: # Check PID for local integrations
+    if pid and current_status in ["running", "starting"]:
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             logger.warning(f"Integration {integration_type.value} for agent {agent_id} status is '{current_status}' in Redis, but PID {pid} not found. Updating status to 'error_process_lost'.")
             current_status = "error_process_lost"
+            error_detail_val = "ProcessLookupError: PID not found during status check."
             pid = None
             async with r.pipeline(transaction=True) as pipe:
-                pipe.hset(status_key, "status", current_status)
+                pipe.hset(status_key, mapping={"status": current_status, "error_detail": error_detail_val})
                 pipe.hdel(status_key, "pid")
                 await pipe.execute()
         except OSError as e:
@@ -394,9 +404,10 @@ async def get_integration_status(agent_id: str, integration_type: IntegrationTyp
 
     return IntegrationStatus(
         agent_id=agent_id,
-        integration_type=integration_type,
+        type=integration_type,
         status=current_status,
         pid=pid,
+        error_detail=error_detail_val,
         last_active=last_active,
     )
 
@@ -434,13 +445,15 @@ async def start_integration_process(
 
     if not module_path or not script_file_path:
         logger.error(f"Integration type {integration_name} is not configured.")
-        await r.hset(status_key, "status", "error_config_missing")
-        raise ValueError(f"Integration type {integration_name} not configured.")
+        error_msg = f"Integration type {integration_name} not configured in INTEGRATION_MODULE_PATHS or INTEGRATION_FILE_PATHS."
+        await r.hset(status_key, mapping={"status": "error_config_missing", "error_detail": error_msg})
+        raise ValueError(error_msg)
 
     if not os.path.exists(script_file_path):
         logger.error(f"Integration script for {integration_name} not found at: {script_file_path}")
-        await r.hset(status_key, "status", "error_script_not_found")
-        raise FileNotFoundError(f"Integration script for {integration_name} not found: {script_file_path}")
+        error_msg = f"Integration script for {integration_name} not found: {script_file_path}"
+        await r.hset(status_key, mapping={"status": "error_script_not_found", "error_detail": error_msg})
+        raise FileNotFoundError(error_msg)
 
     try:
         python_executable = settings.PYTHON_EXECUTABLE
@@ -470,11 +483,11 @@ async def start_integration_process(
         return True
     except FileNotFoundError as fnf_e:
         logger.error(f"Failed to start integration {integration_name} for {agent_id} (FileNotFound): {fnf_e}", exc_info=True)
-        await r.hset(status_key, "status", "error_script_not_found")
+        await r.hset(status_key, mapping={"status": "error_script_not_found", "error_detail": str(fnf_e)})
         raise
     except Exception as e:
         logger.error(f"Failed to start integration process {integration_name} for agent {agent_id}: {e}", exc_info=True)
-        await r.hset(status_key, "status", "error_start_failed")
+        await r.hset(status_key, mapping={"status": "error_start_failed", "error_detail": str(e)})
         raise RuntimeError(f"Failed to launch integration process {integration_name} for agent {agent_id}: {e}")
 
 async def stop_integration_process(
@@ -486,8 +499,9 @@ async def stop_integration_process(
     """Stops a specific integration subprocess (assumed local)."""
     status_key = _get_integration_status_key(agent_id, integration_type)
     integration_name = integration_type.value
+    original_error_detail = None # Для сохранения предыдущей ошибки, если она была
     try:
-        status_data = await r.hgetall(status_key) # Changed: r.hgetall with decode_responses=True returns Dict[str, str]
+        status_data = await r.hgetall(status_key)
         if not status_data:
             logger.info(f"Integration {integration_name} for agent {agent_id} not found in Redis. Assuming stopped.")
             return True
@@ -495,65 +509,102 @@ async def stop_integration_process(
         current_status = status_data.get("status", "unknown")
         pid_to_stop_val = status_data.get("pid")
         pid_to_stop = int(pid_to_stop_val) if pid_to_stop_val and pid_to_stop_val.isdigit() else None
-        # runtime = status_data.get("runtime", "local") # Assume local
+        original_error_detail = status_data.get("error_detail")
 
         if current_status == "stopped":
             logger.info(f"Integration {integration_name} for agent {agent_id} is already stopped.")
-            await r.hdel(status_key, "pid", "runtime", "last_active") # Cleanup
+            await r.hdel(status_key, "pid", "runtime", "last_active", "error_detail") # Cleanup error_detail too
             return True
 
-        if not pid_to_stop: # No PID to stop
-            logger.warning(f"Attempted to stop integration {integration_name} for agent {agent_id}, but no PID found. Marking as stopped.")
-            await r.hset(status_key, "status", "stopped")
+        if not pid_to_stop:
+            logger.warning(f"Attempted to stop integration {integration_name} for agent {agent_id}, but no PID found. Current status: {current_status}. Marking as stopped.")
+            await r.hset(status_key, mapping={"status": "stopped", "error_detail": "No PID found to stop, marked as stopped."})
             await r.hdel(status_key, "pid", "runtime", "last_active")
             return True
 
         await r.hset(status_key, "status", "stopping")
         stopped_successfully = False
         logger.info(f"Stopping local integration process {integration_name} for agent {agent_id} (PID: {pid_to_stop}). Force: {force}")
+        
+        process_exists_before_stop = True
         try:
-            os.kill(pid_to_stop, signal.SIGTERM)
-            logger.info(f"SIGTERM sent to integration {integration_name} (PID: {pid_to_stop})")
-            wait_time = 5
-            try:
-                async def check_pid_terminated():
-                    while True:
-                        try: os.kill(pid_to_stop, 0); await asyncio.sleep(0.1)
-                        except ProcessLookupError: return
-                await asyncio.wait_for(check_pid_terminated(), timeout=wait_time)
-                logger.info(f"Integration {integration_name} (PID: {pid_to_stop}) terminated gracefully.")
-                stopped_successfully = True
-            except asyncio.TimeoutError:
-                logger.warning(f"Integration {integration_name} (PID: {pid_to_stop}) did not terminate after SIGTERM.")
-                if force:
-                    logger.warning(f"Forcing stop with SIGKILL for integration {integration_name} (PID: {pid_to_stop}).")
-                    try: os.kill(pid_to_stop, signal.SIGKILL); logger.info(f"SIGKILL sent."); stopped_successfully = True
-                    except ProcessLookupError: logger.info(f"PID {pid_to_stop} already gone before SIGKILL."); stopped_successfully = True
-                    except Exception as kill_e: logger.error(f"Error sending SIGKILL to integration: {kill_e}")
+            os.kill(pid_to_stop, 0) # Check if process exists before attempting to kill
         except ProcessLookupError:
-            logger.warning(f"Local integration process {integration_name} (PID: {pid_to_stop}) not found (already stopped?).")
-            stopped_successfully = True
-        except Exception as e:
-            logger.error(f"Error stopping local integration {integration_name} (PID: {pid_to_stop}): {e}", exc_info=True)
+            process_exists_before_stop = False
+            logger.warning(f"Process PID {pid_to_stop} for integration {integration_name} not found before sending SIGTERM. Assuming already stopped.")
+            stopped_successfully = True # Already gone
+        except Exception as e_check:
+             logger.error(f"Error checking PID {pid_to_stop} before stop for integration {integration_name}: {e_check}")
+             # Continue to attempt stop, but log this issue.
+
+        if process_exists_before_stop:
+            try:
+                os.kill(pid_to_stop, signal.SIGTERM)
+                logger.info(f"SIGTERM sent to integration {integration_name} (PID: {pid_to_stop})")
+                wait_time = settings.PROCESS_GRACEFUL_SHUTDOWN_TIMEOUT
+                try:
+                    async def check_pid_terminated_integration():
+                        while True:
+                            try:
+                                os.kill(pid_to_stop, 0)
+                                await asyncio.sleep(0.1)
+                            except ProcessLookupError:
+                                return
+                    await asyncio.wait_for(check_pid_terminated_integration(), timeout=wait_time)
+                    logger.info(f"Integration {integration_name} (PID: {pid_to_stop}) terminated gracefully.")
+                    stopped_successfully = True
+                except asyncio.TimeoutError:
+                    logger.warning(f"Integration {integration_name} (PID: {pid_to_stop}) did not terminate after SIGTERM (timeout: {wait_time}s).")
+                    if force:
+                        logger.warning(f"Forcing stop with SIGKILL for integration {integration_name} (PID: {pid_to_stop}).")
+                        try:
+                            os.kill(pid_to_stop, signal.SIGKILL)
+                            logger.info(f"SIGKILL sent to integration {integration_name} (PID: {pid_to_stop}).")
+                            # Verify it's gone after SIGKILL
+                            try:
+                                await asyncio.wait_for(check_pid_terminated_integration(), timeout=2) # Short wait after SIGKILL
+                                logger.info(f"Integration {integration_name} (PID: {pid_to_stop}) confirmed terminated after SIGKILL.")
+                            except asyncio.TimeoutError:
+                                logger.error(f"Integration {integration_name} (PID: {pid_to_stop}) STILL RUNNING after SIGKILL and wait. This is unexpected.")
+                                # Status will remain "stopping" or be updated to error_stop_failed by finally block
+                            stopped_successfully = True # Assume SIGKILL worked if no immediate error
+                        except ProcessLookupError:
+                            logger.info(f"PID {pid_to_stop} (integration {integration_name}) already gone before SIGKILL.")
+                            stopped_successfully = True
+                        except Exception as kill_e:
+                            logger.error(f"Error sending SIGKILL to integration {integration_name} (PID: {pid_to_stop}): {kill_e}")
+                            await r.hset(status_key, mapping={"status": "error_stop_failed", "error_detail": f"SIGKILL failed: {str(kill_e)}"})
+                            return False # Explicitly return False on SIGKILL error
+                    else: # Not forcing, and timed out
+                         await r.hset(status_key, mapping={"status": "error_stop_timeout", "error_detail": f"SIGTERM timeout, not forced. Original status: {current_status}"})
+                         return False # Did not stop and was not forced
+            except ProcessLookupError: # Should be caught by pre-check, but as a safeguard
+                logger.warning(f"Local integration process {integration_name} (PID: {pid_to_stop}) not found during stop attempt (was {current_status}).")
+                stopped_successfully = True
+            except Exception as e: # Other errors during kill signals
+                logger.error(f"Error stopping local integration {integration_name} (PID: {pid_to_stop}): {e}", exc_info=True)
+                await r.hset(status_key, mapping={"status": "error_stop_failed", "error_detail": str(e)})
+                return False
 
         if stopped_successfully:
             await r.hset(status_key, "status", "stopped")
-            await r.hdel(status_key, "pid", "runtime", "last_active")
-            logger.info(f"Integration {integration_name} for agent {agent_id} marked as stopped.")
+            await r.hdel(status_key, "pid", "runtime", "last_active", "error_detail") # Clear error_detail on successful stop
+            logger.info(f"Integration {integration_name} for agent {agent_id} marked as stopped in Redis.")
             return True
         else:
-            logger.warning(f"Failed to stop integration {integration_name} for agent {agent_id}. Reverting status.")
-            await r.hset(status_key, "status", current_status)
+            # If not stopped successfully and not already handled by specific error status updates above
+            if await r.hget(status_key, "status") == "stopping": # Check if status is still "stopping"
+                 logger.warning(f"Failed to stop integration {integration_name} for agent {agent_id}. Reverting status from 'stopping' to '{current_status}' or error.")
+                 await r.hset(status_key, mapping={"status": "error_stop_failed", "error_detail": original_error_detail or "Unknown stop failure."})
             return False
             
-    except Exception as e:
+    except Exception as e: # Catch-all for the whole function
         logger.error(f"Overall error in stop_integration_process for {agent_id}/{integration_name}: {e}", exc_info=True)
-        if 'status_key' in locals() and 'current_status' in locals():
-             try: await r.hset(status_key, "status", current_status if current_status != "stopping" else "error_stop_failed")
-             except: pass
-        elif 'status_key' in locals():
-             try: await r.hset(status_key, "status", "error_stop_failed")
-             except: pass
+        # Attempt to set a generic error status if something unexpected happened
+        try:
+            await r.hset(status_key, mapping={"status": "error_stop_failed", "error_detail": f"Outer exception: {str(e)}"})
+        except Exception as redis_e:
+            logger.error(f"Failed to update Redis status during outer exception handling in stop_integration_process: {redis_e}")
         return False
 
 async def restart_integration_process(

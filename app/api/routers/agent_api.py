@@ -9,7 +9,7 @@ import asyncio
 import json
 
 from app.core.dependencies import get_db, get_redis_client
-from app.api.schemas.agent_schemas import AgentConfigInput, AgentConfigOutput, AgentStatus, AgentListItem, AgentConfigStructure # IntegrationStatus убран
+from app.api.schemas.agent_schemas import AgentConfigInput, AgentConfigOutput, AgentStatus, AgentListItem, AgentConfigStructure
 from app.db.crud import agent_crud, user_crud # user_crud может понадобиться для ownerId
 from app.services import process_manager_service # Будет создан позже
 # IntegrationType и эндпоинты интеграций удалены
