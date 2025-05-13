@@ -111,20 +111,18 @@ async def send_typing_periodically(chat_id: int):
     while True:
         try:
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
-            logger.debug(f"Sent typing action to chat {chat_id}")
-            await asyncio.sleep(3)
+            await asyncio.sleep(3) # Send typing status every 3 seconds
         except asyncio.CancelledError:
-            logger.debug(f"Typing task for chat {chat_id} cancelled.")
+            logger.debug(f"Typing task cancelled for chat {chat_id}.")
             break
         except TelegramBadRequest as e:
-            logger.warning(f"Telegram API error sending typing action for chat {chat_id}: {e.message}")
-            if "chat not found" in e.message.lower():
-                logger.error(f"Chat {chat_id} not found. Stopping typing task for this chat.")
-                break
-            await asyncio.sleep(10)
+            logger.warning(f"Could not send typing action to chat {chat_id}: {e}. User might have blocked the bot or chat not found.")
+            break # Stop trying if there's a fundamental issue with the chat
         except Exception as e:
-            logger.error(f"Unexpected error sending typing action for chat {chat_id}: {e}", exc_info=True)
-            await asyncio.sleep(10)
+            logger.error(f"Error in typing task for chat {chat_id}: {e}", exc_info=True)
+            # Decide if to break or continue. For now, let's break to avoid spamming logs on persistent errors.
+            # If transient network issues are expected, a retry mechanism or longer sleep might be better.
+            break
 
 async def publish_to_agent(agent_id: str, chat_id: int, platform_user_id: str, message_text: str, user_data: dict):
     global redis_client
@@ -266,7 +264,7 @@ async def redis_output_listener(agent_id: str):
                         modified_response = response_payload_content.replace(AUTH_TRIGGER, "").strip()
                         
                         # Отправляем модифицированный ответ, если он не пустой
-                        if modified_response:
+                        if (modified_response):
                             try:
                                 await bot.send_message(chat_id_from_payload, modified_response, parse_mode=ParseMode.MARKDOWN)
                                 logger.info(f"Sent modified response (without AUTH_TRIGGER) to chat {chat_id_from_payload}: {modified_response[:100]}...")
@@ -384,149 +382,187 @@ async def login_command(message: Message):
 
 @dp.message(F.contact)
 async def handle_contact(message: Message):
-    global agent_id_global
-    contact = message.contact
-    telegram_user_id = str(message.from_user.id)
-    contact_platform_user_id = str(contact.user_id)
-    phone_number = contact.phone_number
-
-    logger.info(f"Received contact from Telegram UserID {telegram_user_id} (ChatID: {message.chat.id}). Contact details: Phone {phone_number}, ContactPlatformUserID {contact_platform_user_id}. For agent {agent_id_global or 'Unknown'}")
-
-    if not agent_id_global:
-        logger.error("agent_id_global not set. Cannot process contact.")
-        await message.answer("❌ Ошибка конфигурации агента. Невозможно обработать контакт.", reply_markup=ReplyKeyboardRemove())
+    global agent_id_global, SessionLocal, bot
+    if not bot:
+        logger.error("Bot not initialized, cannot handle contact.")
+        await message.answer("Бот не инициализирован. Пожалуйста, попробуйте позже.")
         return
 
-    if telegram_user_id != contact_platform_user_id:
-        logger.warning(
-            f"Telegram UserID {telegram_user_id} shared contact for a different ContactPlatformUserID {contact_platform_user_id}. "
-            f"Authorization will be processed for ContactPlatformUserID {contact_platform_user_id}."
-        )
-
     if not SessionLocal:
-        logger.error("SessionLocal not configured. Cannot process contact for authorization.")
-        await message.answer("❌ Ошибка: Сервис базы данных временно недоступен. Попробуйте позже.", reply_markup=ReplyKeyboardRemove())
+        logger.error("Database session not configured. Cannot process contact.")
+        await message.answer("❌ Ошибка: База данных не настроена. Невозможно обработать контакт.")
+        return
+
+    if not agent_id_global:
+        logger.error("Agent ID not set globally. Cannot process contact for authorization.")
+        await message.answer("❌ Ошибка: Не удалось определить агента для авторизации.")
+        return
+    
+    contact_platform_user_id = str(message.contact.user_id) if message.contact.user_id else None
+    phone_number = message.contact.phone_number
+    first_name = message.contact.first_name
+    last_name = message.contact.last_name
+    
+    # Убедимся, что platform_user_id из контакта совпадает с telegram_id пользователя, отправившего контакт
+    telegram_user_id_from_message = str(message.from_user.id)
+
+    logger.info(
+        f"Received contact from Telegram UserID {telegram_user_id_from_message} (ChatID: {message.chat.id}). "
+        f"Contact details: Phone {phone_number}, ContactPlatformUserID {contact_platform_user_id}. For agent {agent_id_global}"
+    )
+
+    if not contact_platform_user_id or contact_platform_user_id != telegram_user_id_from_message:
+        logger.warning(
+            f"Contact's platform_user_id ({contact_platform_user_id}) does not match "
+            f"sender's Telegram ID ({telegram_user_id_from_message}). Ignoring contact for security reasons."
+        )
+        await message.answer(
+            "Похоже, вы пытаетесь поделиться чужим контактом. Пожалуйста, поделитесь своим собственным контактом.",
+            reply_markup=ReplyKeyboardRemove()
+        )
         return
 
     async with SessionLocal() as session:
         try:
-            db_user = await user_crud.get_user_by_platform_id(session, platform_id=contact_platform_user_id, platform_type="telegram")
-            if not db_user:
-                logger.info(f"User with platform_id {contact_platform_user_id} (telegram) not found. Creating new user.")
-                user_in_data = {
-                    "platform_id": contact_platform_user_id,
-                    "platform_type": "telegram",
-                    "phone_number": phone_number,
-                    "username": message.from_user.username or f"tg_user_{contact_platform_user_id}",
-                    "first_name": contact.first_name,
-                    "last_name": contact.last_name
-                }
-                db_user = await user_crud.create_user(session, user_data=user_in_data)
-                logger.info(f"Created new user: DBID {db_user.id}, PlatformID {db_user.platform_id}")
-            else:
-                logger.info(f"Found existing user: DBID {db_user.id}, PlatformID {db_user.platform_id}. Updating phone if necessary.")
-                if db_user.phone_number != phone_number or \
-                   db_user.first_name != contact.first_name or \
-                   db_user.last_name != contact.last_name:
-                    update_data = {"phone_number": phone_number, "first_name": contact.first_name, "last_name": contact.last_name}
-                    if message.from_user.username:
-                        update_data["username"] = message.from_user.username
-                    db_user = await user_crud.update_user(session, user_id=db_user.id, user_update_data=update_data)
-                    logger.info(f"User {db_user.id} data updated.")
+            # Исправляем имена аргументов
+            db_user = await user_crud.get_user_by_platform_id(session, platform="telegram", platform_user_id=contact_platform_user_id)
+            
+            user_details_for_update: Dict[str, Any] = {
+                "phone_number": phone_number,
+                "first_name": first_name,
+                "last_name": last_name,
+                "username": message.from_user.username # Используем username из from_user
+            }
+            
+            # Удаляем None значения из user_details, чтобы они не перезаписывали существующие данные в БД на None
+            user_details_for_update = {k: v for k, v in user_details_for_update.items() if v is not None}
 
-            auth_entry = await user_crud.get_agent_user_authorization(
+            created_or_updated_user = await user_crud.create_or_update_user(
                 session,
-                agent_id=agent_id_global,
+                platform="telegram",
                 platform_user_id=contact_platform_user_id,
-                integration_type="telegram"
+                user_details=user_details_for_update
             )
 
-            if auth_entry:
-                if not auth_entry.is_authorized:
-                    logger.info(f"Found existing authorization for user {contact_platform_user_id}, agent {agent_id_global}, but it's not active. Activating now.")
-                    auth_entry = await user_crud.update_agent_user_authorization(
-                        session,
-                        auth_id=auth_entry.id,
-                        auth_update_data={"is_authorized": True, "authorization_time": datetime.utcnow()}
-                    )
-                else:
-                    logger.info(f"User {contact_platform_user_id} is already authorized for agent {agent_id_global}.")
-            else:
-                logger.info(f"No authorization entry found for user {contact_platform_user_id}, agent {agent_id_global}. Creating new authorized entry.")
-                auth_data = {
-                    "agent_id": agent_id_global,
-                    "user_id": db_user.id,
-                    "platform_user_id": contact_platform_user_id,
-                    "integration_type": "telegram",
-                    "is_authorized": True,
-                    "authorization_time": datetime.utcnow()
-                }
-                auth_entry = await user_crud.create_agent_user_authorization(session, authorization_data=auth_data)
-            
-            await session.commit()
+            if not created_or_updated_user:
+                await message.answer("❌ Не удалось сохранить информацию о пользователе. Попробуйте еще раз.", reply_markup=ReplyKeyboardRemove())
+                return
 
-            if auth_entry and auth_entry.is_authorized:
-                await message.answer(f"✅ Вы успешно авторизованы для агента! Теперь вы можете отправлять сообщения.", reply_markup=ReplyKeyboardRemove())
-                logger.info(f"User {contact_platform_user_id} (Phone: {phone_number}) successfully authorized for agent {agent_id_global}.")
-                cache_key = f"{USER_CACHE_PREFIX}telegram:{contact_platform_user_id}:agent:{agent_id_global}"
-                await redis_client.set(cache_key, "true", ex=REDIS_USER_CACHE_TTL)
+            # Теперь обновляем или создаем запись об авторизации
+            auth_record = await user_crud.update_agent_user_authorization(
+                session,
+                agent_id=agent_id_global,
+                user_id=created_or_updated_user.id,
+                is_authorized=True
+            )
+
+            if auth_record and auth_record.is_authorized:
+                logger.info(f"User {created_or_updated_user.id} (TG: {contact_platform_user_id}) successfully authorized for agent {agent_id_global}")
+                
+                # Очищаем кеш авторизации для этого пользователя и агента
+                if redis_client:
+                    cache_key = f"{USER_CACHE_PREFIX}telegram:{contact_platform_user_id}:agent:{agent_id_global}"
+                    try:
+                        await redis_client.delete(cache_key)
+                        logger.info(f"Authorization cache cleared for {cache_key}")
+                    except redis.RedisError as e:
+                        logger.error(f"Redis error clearing auth cache for {cache_key}: {e}")
+                
+                await message.answer(
+                    "✅ Спасибо! Ваш контакт получен, и вы успешно авторизованы. Теперь вы можете продолжить работу с агентом.",
+                    reply_markup=ReplyKeyboardRemove()
+                )
+                # Можно отправить "приветственное" сообщение от агента или инструкцию
+                # await publish_to_agent(agent_id_global, message.chat.id, contact_platform_user_id, "/start_after_auth", {"is_authenticated": True})
+
             else:
-                await message.answer("⚠️ Не удалось завершить авторизацию. Пожалуйста, попробуйте еще раз или свяжитесь с поддержкой.", reply_markup=ReplyKeyboardRemove())
-                logger.error(f"Failed to authorize user {contact_platform_user_id} for agent {agent_id_global} after contact share. Auth entry: {auth_entry}")
+                logger.error(f"Failed to update authorization status for user {created_or_updated_user.id}, agent {agent_id_global}")
+                await message.answer("❌ Произошла ошибка при обновлении статуса авторизации. Пожалуйста, попробуйте еще раз.", reply_markup=ReplyKeyboardRemove())
 
         except Exception as e:
-            await session.rollback()
             logger.error(f"Error processing contact for user {contact_platform_user_id}, agent {agent_id_global}: {e}", exc_info=True)
-            await message.answer("❌ Произошла ошибка при обработке вашего запроса на авторизацию.", reply_markup=ReplyKeyboardRemove())
+            await message.answer("❌ Произошла внутренняя ошибка при обработке вашего контакта. Пожалуйста, попробуйте позже.", reply_markup=ReplyKeyboardRemove())
 
 @dp.message(F.text) 
 async def handle_text_message(message: Message):
-    global agent_id_global, redis_client, bot
-    platform_user_id = str(message.from_user.id)
-    chat_id = message.chat.id
-    message_text = message.text
-
-    logger.info(f"Received text message from user {platform_user_id} (ChatID: {chat_id}) for agent {agent_id_global or 'Unknown'}: '{message_text}'")
+    global agent_id_global, SessionLocal, bot
+    if not bot:
+        logger.error("Bot not initialized, cannot handle text message.")
+        # Consider sending a message to the user, though it might also fail if bot is broken.
+        return
 
     if not agent_id_global:
-        logger.error("agent_id_global not set. Cannot process text message.")
-        await message.answer("❌ Ошибка конфигурации агента. Невозможно обработать сообщение.")
+        logger.error("Agent ID not set globally. Cannot process message.")
+        await message.answer("❌ Ошибка: Не удалось определить агента для обработки вашего сообщения.")
         return
 
-    if not redis_client or not bot:
-        logger.error("Redis client or Bot not initialized. Cannot process message.")
-        await message.answer("❌ Внутренняя ошибка сервера. Пожалуйста, попробуйте позже.")
+    chat_id = message.chat.id
+    user_message_text = message.text # Используем .text для простого текста, .md_text для Markdown
+    platform_user_id = str(message.from_user.id)
+
+    if not user_message_text:
+        logger.debug(f"Received empty text message from {platform_user_id} in chat {chat_id}. Ignoring.")
         return
 
-    is_authorized = await check_user_authorization(agent_id_global, platform_user_id)
-    logger.info(f"User {platform_user_id} authorization status for agent {agent_id_global}: {is_authorized}")
+    logger.info(f"Received text message from {platform_user_id} in chat {chat_id} for agent {agent_id_global}: '{user_message_text[:50]}...'")
 
-    user_data_for_agent = {
-        "telegram_user_id": message.from_user.id,
-        "telegram_chat_id": chat_id,
-        "first_name": message.from_user.first_name,
-        "last_name": message.from_user.last_name,
-        "username": message.from_user.username,
-        "is_authorized": is_authorized
-    }
+    typing_task = asyncio.create_task(send_typing_periodically(chat_id))
 
-    input_channel = f"agent:{agent_id_global}:input"
-    payload = {
-        "message": message_text,
-        "thread_id": str(chat_id),
-        "platform_user_id": platform_user_id,
-        "user_data": user_data_for_agent,
-        "channel": "telegram"
-    }
     try:
-        await redis_client.publish(input_channel, json.dumps(payload))
-        logger.info(f"Published message to {input_channel} for chat {chat_id} with payload: {payload}")
-    except redis.RedisError as e:
-        logger.error(f"Redis error publishing message to {input_channel}: {e}")
-        await bot.send_message(chat_id, "❌ Ошибка: Не удалось отправить сообщение агенту.")
+        is_authorized_for_agent = await check_user_authorization(agent_id_global, platform_user_id)
+        logger.debug(f"Authorization status for agent {agent_id_global}, user {platform_user_id}: {is_authorized_for_agent}")
+
+        user_data_for_agent: Dict[str, Any] = {
+            "is_authenticated": is_authorized_for_agent,
+            "user_id": platform_user_id # Всегда отправляем platform_user_id
+        }
+
+        if is_authorized_for_agent:
+            if SessionLocal:
+                async with SessionLocal() as session:
+                    logger.debug(f"User {platform_user_id} is authorized. Attempting to get user details from DB.")
+                    db_user = await user_crud.get_user_by_platform_id(session, platform="telegram", platform_user_id=platform_user_id)
+                    if db_user:
+                        logger.debug(f"User details found for {platform_user_id} (DB ID: {db_user.id}). Adding to payload.")
+                        user_data_for_agent.update({
+                            "phone_number": db_user.phone_number,
+                            "first_name": db_user.first_name,
+                            "last_name": db_user.last_name,
+                            "username": db_user.username # Берем username из БД, т.к. он может быть обновлен
+                        })
+                    else:
+                        # Эта ситуация может возникнуть, если запись об авторизации есть, а самого пользователя удалили
+                        # или произошла ошибка при его создании/обновлении, но авторизация как-то записалась.
+                        logger.warning(f"User {platform_user_id} is marked as authorized for agent {agent_id_global}, but user details not found in DB. Sending minimal data.")
+            else:
+                logger.warning(f"DB SessionLocal not configured. Cannot fetch full user details for authorized user {platform_user_id}. Sending minimal data.")
+        else:
+            logger.debug(f"User {platform_user_id} is not authorized for agent {agent_id_global}. Sending minimal data.")
+
+        await publish_to_agent(
+            agent_id=agent_id_global,
+            chat_id=chat_id,
+            platform_user_id=platform_user_id,
+            message_text=user_message_text, # Передаем обычный текст
+            user_data=user_data_for_agent
+        )
+        logger.info(f"Message from {platform_user_id} published to agent {agent_id_global}. User data sent: {user_data_for_agent}")
+
     except Exception as e:
-        logger.error(f"Unexpected error publishing message to {input_channel}: {e}", exc_info=True)
-        await bot.send_message(chat_id, "❌ Произошла внутренняя ошибка при отправке сообщения.")
+        logger.error(f"Error handling text message from chat {chat_id} for agent {agent_id_global}: {e}", exc_info=True)
+        try:
+            await message.answer("⚠️ Произошла ошибка при обработке вашего запроса. Пожалуйста, попробуйте еще раз позже.")
+        except Exception as e_reply:
+            logger.error(f"Failed to send error reply to chat {chat_id}: {e_reply}")
+    finally:
+        # Даем агенту немного времени на ответ перед тем, как убирать "печатает"
+        # Это значение можно настроить
+        await asyncio.sleep(1) 
+        typing_task.cancel()
+        try:
+            await typing_task # Дожидаемся завершения задачи тайпинга
+        except asyncio.CancelledError:
+            logger.debug(f"Typing task successfully cancelled for chat {chat_id} after processing message.")
 
 @asynccontextmanager
 async def lifespan(dp_obj: Dispatcher, agent_id: str, bot_token: str, redis_url: str):
