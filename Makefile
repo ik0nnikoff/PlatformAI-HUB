@@ -1,5 +1,7 @@
+MANAGER_PORT ?= 8001
+
 run:
-	uv run uvicorn hub.agent_manager.main:app --reload --port 8001 --host 0.0.0.0
+	uv run uvicorn app.main:app --reload --port $(MANAGER_PORT) --host 0.0.0.0
 
 # Команда для применения миграций Alembic
 migrate:
@@ -27,10 +29,12 @@ run_agent:
 ifndef AGENT_ID
 	$(error AGENT_ID is not set. Usage: make run_agent AGENT_ID=<your_agent_id>)
 endif
-	uv run hub.agent_runner.runner \
+	uv run app.agent_runner.runner_main \
 		--agent-id $(AGENT_ID) \
-		--config-url http://localhost:8001/agents/$(AGENT_ID)/config \
+		--manager-url http://localhost:$(MANAGER_PORT) \
 		--redis-url ${REDIS_URL:-redis://localhost:6379}
+		# Add --database-url if runner_main ever needs direct DB access for init
+		# --database-url ${DATABASE_URL:-postgresql+asyncpg://admin:password@localhost:5432/platformAI}
 
 # Stop a specific agent runner via the manager API
 # Usage: make stop_agent AGENT_ID=my_agent_abc [FORCE=true]
@@ -42,14 +46,14 @@ endif
 	if [ "$(FORCE)" = "true" ]; then \
 		FORCE_PARAM="?force=true"; \
 	fi; \
-	echo "Attempting to stop agent $(AGENT_ID) via API (Force=$(FORCE))..."; \
-	curl -X POST "http://localhost:8000/agents/$(AGENT_ID)/stop$${FORCE_PARAM}" -H "accept: application/json" || echo "Failed to send stop request to manager API."
+	echo "Attempting to stop agent $(AGENT_ID) via API (Port: $(MANAGER_PORT), Force=$(FORCE))..."; \
+	curl -X POST "http://localhost:$(MANAGER_PORT)/agents/$(AGENT_ID)/stop$${FORCE_PARAM}" -H "accept: application/json" || echo "Failed to send stop request to manager API."
 
 # Stop all agent runners by querying the manager API and stopping each one
 # Requires curl and jq
 stop_all_runners:
-	@echo "Stopping all running agents via manager API..."
-	@AGENT_IDS=$$(curl -s -X GET "http://localhost:8000/agents" -H "accept: application/json" | jq -r '.[] | select(.status=="running" or .status=="starting" or .status=="initializing") | .agent_id'); \
+	@echo "Stopping all running agents via manager API (Port: $(MANAGER_PORT))..."
+	@AGENT_IDS=$$(curl -s -X GET "http://localhost:$(MANAGER_PORT)/agents" -H "accept: application/json" | jq -r '.[] | select(.status=="running" or .status=="starting" or .status=="initializing") | .agent_id'); \
 	if [ -z "$$AGENT_IDS" ]; then \
 		echo "No running agents found according to manager API."; \
 	else \
@@ -63,9 +67,15 @@ stop_all_runners:
 	# pkill -f "agent_runner/runner.py" || true
 
 # Target to run the Telegram bot integration
-# Usage: make run_telegram_bot AGENT_ID=my_agent_abc
+# Usage: make run_telegram_bot AGENT_ID=my_agent_abc BOT_TOKEN=your_telegram_bot_token
 run_telegram_bot:
 ifndef AGENT_ID
-	$(error AGENT_ID is not set. Usage: make run_telegram_bot AGENT_ID=<your_agent_id>)
+	$(error AGENT_ID is not set. Usage: make run_telegram_bot AGENT_ID=<your_agent_id> BOT_TOKEN=<your_token>)
 endif
-	uv run hub/integrations/telegram_bot.py --agent-id $(AGENT_ID)
+ifndef BOT_TOKEN
+	$(error BOT_TOKEN is not set. Usage: make run_telegram_bot AGENT_ID=<your_agent_id> BOT_TOKEN=<your_token>)
+endif
+	uv run app.integrations.telegram.telegram_bot_main \
+		--agent-id $(AGENT_ID) \
+		--redis-url ${REDIS_URL:-redis://localhost:6379} \
+		--integration-settings \'{"botToken": "$(BOT_TOKEN)"}\'
