@@ -1,182 +1,145 @@
 import asyncio
-import json
 import logging
-import signal
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Callable, Optional # Added Optional
+from sqlalchemy.ext.asyncio import AsyncSession # Added AsyncSession
+# Removed signal, json, redis.asyncio, RedisConnectionError as they are handled by base or not directly used by the class logic
 
-import redis.asyncio as redis
-from redis.exceptions import ConnectionError as RedisConnectionError # Added
 from pydantic import ValidationError
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.session import get_async_session_factory
-# Assuming the following paths and names, adjust if necessary:
-from app.db.crud.chat_crud import db_add_chat_message # Исправленный путь
-from app.api.schemas.chat_schemas import ChatMessageCreate, SenderType 
-# TokenUsageLogDB is implicitly handled by db_add_token_usage_log if data matches schema
+from app.db.crud.chat_crud import db_add_chat_message
+from app.api.schemas.chat_schemas import ChatMessageCreate, SenderType
+from app.workers.base_worker import QueueWorker
 
-# Configure logging
-logging.basicConfig(
-    level=settings.LOG_LEVEL,
-    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Configure logging - This might be handled by a central logging config now.
+# If app.core.logging_config.setup_logging() is called at entry, this basicConfig might be redundant or even conflict.
+# For worker-specific logger, it's better to get it via logging.getLogger(__name__)
+# and rely on root configuration.
+# logging.basicConfig(
+# level=settings.LOG_LEVEL,
+# format='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+# )
+# logger = logging.getLogger(__name__) # Logger is now part of BaseWorker/RunnableComponent
 
-# Graceful shutdown handling
-shutdown_requested = False
-
-def signal_handler(signum, frame):
-    global shutdown_requested
-    logger.info(f"Signal {signum} received, initiating graceful shutdown for history_saver_worker.")
-    shutdown_requested = True
-
-async def save_chat_message_to_db_async(async_session_factory: callable, data: Dict[str, Any]):
+class HistorySaverWorker(QueueWorker):
     """
-    Validates chat message data and saves it to the database.
+    Worker to save chat history messages from a Redis queue to the database.
     """
-    try:
-        # Convert timestamp string to datetime object if necessary
-        if 'timestamp' in data and isinstance(data['timestamp'], str):
+    def __init__(self):
+        super().__init__(
+            component_id="history_saver_worker", # Unique ID for this worker instance
+            queue_names=[settings.REDIS_HISTORY_QUEUE_NAME],
+            status_key_prefix="worker_status:history_saver:" # Specific status key prefix
+        )
+        # self.async_session_factory will be initialized in setup
+        self.async_session_factory: Optional[Callable[[], AsyncSession]] = None # Added Optional and type hint
+
+    async def setup(self):
+        """
+        Initializes the database session factory.
+        """
+        await super().setup()
+        self.async_session_factory = get_async_session_factory()
+        self.logger.info(f"[{self._component_id}] Database session factory initialized.")
+
+    async def process_message(self, message_data: Dict[str, Any]) -> None:
+        """
+        Validates chat message data and saves it to the database.
+        This method is called by the parent QueueWorker for each message from the queue.
+        """
+        self.logger.debug(f"[{self._component_id}] Received chat history data: {message_data}")
+
+        if not self.async_session_factory:
+            self.logger.error(f"[{self._component_id}] Async session factory not initialized. Cannot process message.")
+            # Optionally, re-raise or handle as a permanent failure for this message.
+            return
+
+        try:
+            # Convert timestamp string to datetime object if necessary
+            if 'timestamp' in message_data and isinstance(message_data['timestamp'], str):
+                try:
+                    dt = datetime.fromisoformat(message_data['timestamp'])
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc) # Assume UTC if naive
+                    message_data['timestamp'] = dt
+                except ValueError:
+                    self.logger.warning(f"[{self._component_id}] Could not parse timestamp string: {message_data['timestamp']}. Using current UTC time.")
+                    message_data['timestamp'] = datetime.now(timezone.utc)
+            elif 'timestamp' not in message_data:
+                 message_data['timestamp'] = datetime.now(timezone.utc)
+
+            # Validate sender_type if present
+            if 'sender_type' in message_data and not isinstance(message_data['sender_type'], SenderType):
+                try:
+                    message_data['sender_type'] = SenderType(message_data['sender_type'])
+                except ValueError:
+                    self.logger.warning(f"[{self._component_id}] Invalid sender_type value: {message_data['sender_type']}. Setting to 'user'.")
+                    message_data['sender_type'] = SenderType.USER
+
+            message_create_schema = ChatMessageCreate(**message_data)
+
+        except ValidationError as e:
+            self.logger.error(f"[{self._component_id}] Validation error for chat message data: {message_data}, errors: {e.errors()}", exc_info=True)
+            return # Message cannot be processed
+        except Exception as e:
+            self.logger.error(f"[{self._component_id}] Error preparing chat message data {message_data}: {e}", exc_info=True)
+            return # Message cannot be processed
+
+        async with self.async_session_factory() as db: # type: ignore
             try:
-                # Attempt to parse ISO format, add timezone if naive
-                dt = datetime.fromisoformat(data['timestamp'])
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc) # Assume UTC if naive
-                data['timestamp'] = dt
-            except ValueError:
-                logger.warning(f"Could not parse timestamp string: {data['timestamp']}. Using current UTC time.")
-                data['timestamp'] = datetime.now(timezone.utc)
-        elif 'timestamp' not in data:
-             data['timestamp'] = datetime.now(timezone.utc)
+                saved_message = await db_add_chat_message(
+                    db=db, # type: ignore
+                    agent_id=message_create_schema.agent_id,
+                    thread_id=message_create_schema.thread_id,
+                    sender_type=message_create_schema.sender_type,
+                    content=message_create_schema.content,
+                    channel=message_create_schema.channel,
+                    timestamp=message_create_schema.timestamp,
+                    interaction_id=message_create_schema.interaction_id
+                )
+                if saved_message:
+                    self.logger.info(f"[{self._component_id}] Successfully saved chat message for agent_id: {message_create_schema.agent_id}, interaction_id: {message_create_schema.interaction_id}, db_id: {saved_message.id}")
+                else:
+                    self.logger.error(f"[{self._component_id}] Failed to save chat message to DB (db_add_chat_message returned None) for agent_id: {message_create_schema.agent_id}, interaction_id: {message_create_schema.interaction_id}")
+            except Exception as e:
+                self.logger.error(f"[{self._component_id}] Exception during save_chat_message_to_db for interaction_id {message_create_schema.interaction_id}: {e}", exc_info=True)
+                # Depending on the error, you might want to implement a retry mechanism
+                # or move the message to a dead-letter queue. For now, just logging.
 
-
-        # Validate sender_type if present
-        if 'sender_type' in data and not isinstance(data['sender_type'], SenderType):
-            try:
-                data['sender_type'] = SenderType(data['sender_type'])
-            except ValueError:
-                logger.warning(f"Invalid sender_type value: {data['sender_type']}. Setting to 'user'.")
-                data['sender_type'] = SenderType.USER # Default or handle as error
-
-        # Validate with Pydantic schema
-        message_create_schema = ChatMessageCreate(**data)
-
-    except ValidationError as e:
-        logger.error(f"Validation error for chat message data: {data}, errors: {e.errors()}", exc_info=True)
-        return
-    except Exception as e:
-        logger.error(f"Error preparing chat message data {data}: {e}", exc_info=True)
-        return
-
-    async with async_session_factory() as db:
-        try:
-            # Извлекаем данные из Pydantic модели для передачи в db_add_chat_message
-            saved_message = await db_add_chat_message(
-                db,
-                agent_id=message_create_schema.agent_id,
-                thread_id=message_create_schema.thread_id,
-                sender_type=message_create_schema.sender_type,
-                content=message_create_schema.content,
-                channel=message_create_schema.channel,
-                timestamp=message_create_schema.timestamp,
-                interaction_id=message_create_schema.interaction_id
-            )
-            if saved_message:
-                logger.info(f"Successfully saved chat message for agent_id: {message_create_schema.agent_id}, interaction_id: {message_create_schema.interaction_id}, db_id: {saved_message.id}")
-            else:
-                logger.error(f"Failed to save chat message to DB (db_add_chat_message returned None) for agent_id: {message_create_schema.agent_id}, interaction_id: {message_create_schema.interaction_id}")
-        except Exception as e:
-            logger.error(f"Exception during save_chat_message_to_db_async for interaction_id {message_create_schema.interaction_id}: {e}", exc_info=True)
-
-
-async def main_loop():
-    global shutdown_requested # Added global declaration here
-    logger.info("Starting chat history saver worker.")
-
-    redis_url = settings.REDIS_URL
-    if not redis_url:
-        logger.critical("REDIS_URL not configured in settings. History saver worker cannot start.")
-        return
-
-    redis_client = None
-    try:
-        redis_client = await redis.from_url(redis_url, decode_responses=True)
-        await redis_client.ping()
-        logger.info(f"Successfully connected to Redis at {redis_url}")
-    except Exception as e:
-        logger.critical(f"Could not connect to Redis: {e}", exc_info=True)
-        return
-
-    history_queue_name = settings.REDIS_HISTORY_QUEUE_NAME
-    logger.info(f"Listening to Redis queue: {history_queue_name}")
-
-    async_session_factory = get_async_session_factory()
-
-    while not shutdown_requested:
-        try:
-            item = await redis_client.blpop(history_queue_name, timeout=1)
-            if item:
-                _, task_json = item
-                try:
-                    task_data = json.loads(task_json)
-                    logger.debug(f"Received chat history data: {task_data}")
-                    await save_chat_message_to_db_async(async_session_factory, task_data)
-                except json.JSONDecodeError:
-                    logger.error(f"Failed to decode JSON from queue: {task_json}")
-                except Exception as e:
-                    logger.error(f"Error processing task: {task_json}, Error: {e}", exc_info=True)
-            
-            if not item: # Yield control briefly if no item, to make shutdown responsive
-                await asyncio.sleep(0.01)
-
-        except RedisConnectionError as e: # Changed redis.exceptions.ConnectionError
-            logger.error(f"Redis connection error: {e}. Attempting to reconnect...")
-            if redis_client:
-                try:
-                    await redis_client.close()
-                except Exception as close_exc:
-                    logger.error(f"Error closing old Redis connection: {close_exc}")
-            
-            reconnected = False
-            for i in range(settings.REDIS_RECONNECT_ATTEMPTS):
-                await asyncio.sleep(settings.REDIS_RECONNECT_DELAY * (i + 1))
-                try:
-                    redis_client = await redis.from_url(redis_url, decode_responses=True)
-                    await redis_client.ping()
-                    logger.info("Successfully reconnected to Redis.")
-                    reconnected = True
-                    break
-                except Exception as recon_e:
-                    logger.error(f"Redis reconnection attempt {i+1} failed: {recon_e}")
-            
-            if not reconnected:
-                logger.critical("Failed to reconnect to Redis after multiple attempts. Worker will exit.")
-                shutdown_requested = True # Trigger shutdown
-                
-        except Exception as e:
-            logger.error(f"An unexpected error occurred in the main loop: {e}", exc_info=True)
-            await asyncio.sleep(1) # Avoid busy-looping
-
-    if redis_client:
-        try:
-            await redis_client.close()
-            logger.info("Redis client closed.")
-        except Exception as e:
-            logger.error(f"Error closing Redis client during shutdown: {e}")
-            
-    logger.info("Chat history saver worker has shut down.")
+# Removed old signal_handler, save_chat_message_to_db_async, and main_loop functions.
+# Graceful shutdown is handled by RunnableComponent.
+# Redis connection and message polling are handled by QueueWorker.
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    # It's good practice to ensure logging is configured before anything else.
+    # If you have a central logging setup (e.g., app.core.logging_config.setup_logging()),
+    # ensure it's called here or in an even earlier entry point.
+    # For simplicity, if not centrally configured, basicConfig can be set here.
+    # However, RunnableComponent and BaseWorker already get a logger.
+    # This basicConfig would apply to the root logger if no handlers are configured.
+    logging.basicConfig(
+        level=settings.LOG_LEVEL,
+        format='%(asctime)s - %(levelname)s - %(name)s - [%(component_id)s] - %(message)s'
+    )
+    
+    # Create a preliminary logger for the __main__ context
+    main_logger = logging.getLogger("history_saver_worker_main")
+    # Add a filter to make component_id available for the format string if needed,
+    # or ensure the worker's logger is used for worker-specific messages.
+    # For this main_logger, component_id might not be directly applicable unless set.
+
+    main_logger.info("Initializing HistorySaverWorker...")
+    
+    worker = HistorySaverWorker()
 
     try:
-        asyncio.run(main_loop())
+        asyncio.run(worker.run())
     except KeyboardInterrupt:
-        logger.info("History saver worker interrupted by user (KeyboardInterrupt).")
+        main_logger.info("HistorySaverWorker interrupted by user (KeyboardInterrupt).")
+        # The worker.run() method's finally block (from RunnableComponent) should handle cleanup.
     except Exception as e:
-        logger.critical(f"History saver worker failed to start or run: {e}", exc_info=True)
+        main_logger.critical(f"HistorySaverWorker failed to start or run: {e}", exc_info=True)
     finally:
-        logger.info("History saver worker application finished.")
+        main_logger.info("HistorySaverWorker application finished.")

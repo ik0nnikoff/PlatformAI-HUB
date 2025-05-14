@@ -5,19 +5,22 @@ from fastapi import FastAPI
 
 from app.core.logging_config import setup_logging
 from app.db.session import close_db_engine
-from app.services.redis_service import init_redis_pool, close_redis_pool
+from app.services.redis_service import init_redis_pool, close_redis_pool # get_redis_client removed as PM handles its own
 from app.core.config import settings
 
 # Импорты для воркеров
-from app.workers.history_saver_worker import main_loop as history_saver_main_loop
-from app.workers.token_usage_worker import main_loop as token_usage_main_loop
-from app.workers.inactivity_monitor_worker import main_loop as inactivity_monitor_main_loop
+# from app.workers.history_saver_worker import main_loop as history_saver_main_loop # REMOVED
+# from app.workers.token_usage_worker import main_loop as token_usage_main_loop # REMOVED
+# from app.workers.inactivity_monitor_worker import main_loop as inactivity_monitor_main_loop # REMOVED
+from app.workers.history_saver_worker import HistorySaverWorker
+from app.workers.token_usage_worker import TokenUsageWorker
+from app.workers.inactivity_monitor_worker import InactivityMonitorWorker
 
-from app.api.schemas.common_schemas import IntegrationType # Добавлено для start_existing_agents_and_integrations
-from app.db.crud import agent_crud # Добавлено для получения агентов
-from app.services import process_manager_service # Добавлено для запуска агентов/интеграций
-from app.db.session import get_async_session_factory # Для получения сессии БД
-from app.services.redis_service import get_redis_client
+from app.api.schemas.common_schemas import IntegrationType
+from app.db.crud import agent_crud
+from app.services.process_manager import ProcessManager # MODIFIED: Import ProcessManager
+from app.db.session import get_async_session_factory
+# from app.services.redis_service import get_redis_client # REMOVED: No longer needed here
 
 logger = logging.getLogger(__name__)
 
@@ -30,38 +33,37 @@ async def start_existing_agents_and_integrations():
     """
     logger.info("Attempting to start existing agents and their integrations...")
     db_session_factory = get_async_session_factory()
-    redis_client = None # Инициализируем redis_client
+    pm = ProcessManager() # ADDED: Instantiate ProcessManager
 
     if not db_session_factory:
         logger.error("Database session factory not available. Cannot start agents.")
         return
 
     try:
-        redis_client = await get_redis_client() # ИЗМЕНЕНО: Добавлен await
-        if not redis_client:
-            logger.error("Redis client not available. Cannot start agents.")
-            return
+        await pm.setup_manager() # ADDED: Setup ProcessManager
+        logger.info("ProcessManager setup complete for startup.")
 
         async with db_session_factory() as session:
             try:
-                agents = await agent_crud.db_get_all_agents(session, limit=1000) # Получаем всех агентов
+                agents = await agent_crud.db_get_all_agents(session, limit=1000)
                 logger.info(f"Found {len(agents)} agents to potentially start.")
                 for agent_db in agents:
-                    agent_id = agent_db.id
+                    agent_id = str(agent_db.id) # Ensure agent_id is string
                     logger.info(f"Attempting to start agent: {agent_id}")
                     try:
-                        # Проверяем, не запущен ли уже агент (на случай перезапуска менеджера)
-                        current_status = await process_manager_service.get_agent_status(agent_id, redis_client) # ИЗМЕНЕНО: передаем async redis_client
-                        if current_status.status == "running":
-                            logger.info(f"Agent {agent_id} is already running.")
+                        current_status_dict = await pm.get_agent_status(agent_id)
+                        if current_status_dict and current_status_dict.get("status") in ["running", "running_pending_agent_confirm", "starting"]:
+                            logger.info(f"Agent {agent_id} is already {current_status_dict.get('status')}.")
                         else:
-                            started = await process_manager_service.start_agent_process(agent_id, redis_client) # ИЗМЕНЕНО: передаем async redis_client
-                            if started:
-                                logger.info(f"Successfully initiated start for agent: {agent_id}")
+                            # Attempt to start the agent process
+                            # The start_agent_process method now returns a boolean
+                            started_successfully = await pm.start_agent_process(agent_id)
+                            if started_successfully:
+                                logger.info(f"Successfully initiated start for agent: {agent_id}. Process manager will update status.")
                             else:
-                                logger.warning(f"Failed to initiate start for agent: {agent_id}")
+                                logger.warning(f"Failed to initiate start for agent: {agent_id}. Check ProcessManager logs for details.")
                     except Exception as e_agent_start:
-                        logger.error(f"Error starting agent {agent_id}: {e_agent_start}", exc_info=True)
+                        logger.error(f"Error managing agent {agent_id} during startup: {e_agent_start}", exc_info=True)
 
                     # Запуск интеграций для агента
                     if isinstance(agent_db.config_json, dict):
@@ -75,71 +77,63 @@ async def start_existing_agents_and_integrations():
                                     for integration_item in integrations_list:
                                         if isinstance(integration_item, dict) and integration_item.get("enabled"):
                                             integration_type_str = integration_item.get("type")
-                                            integration_actual_settings = integration_item.get("settings") # Это должен быть словарь
+                                            integration_actual_settings = integration_item.get("settings")
 
                                             if not integration_type_str:
                                                 logger.warning(f"Integration item for agent {agent_id} is missing 'type'. Skipping.")
                                                 continue
                                             
-                                            # integration_actual_settings может быть None, если ключ "settings" отсутствует,
-                                            # или это должен быть словарь. start_integration_process принимает Optional[Dict].
                                             if integration_actual_settings is not None and not isinstance(integration_actual_settings, dict):
                                                 logger.warning(f"Integration item '{integration_type_str}' for agent {agent_id} has 'settings' but it's not a dictionary. Found type: {type(integration_actual_settings)}. Skipping.")
                                                 continue
 
                                             try:
-                                                integration_type_enum = IntegrationType(integration_type_str)
-                                                logger.info(f"Attempting to start {integration_type_enum.value} integration for agent: {agent_id} (settings provided: {integration_actual_settings is not None})")
+                                                integration_type_enum_val = IntegrationType(integration_type_str).value # Get the string value
+                                                logger.info(f"Attempting to start {integration_type_enum_val} integration for agent: {agent_id} (settings provided: {integration_actual_settings is not None})")
                                                 
-                                                current_integration_status = await process_manager_service.get_integration_status(
-                                                    agent_id, integration_type_enum, redis_client
+                                                current_integration_status_dict = await pm.get_integration_status(
+                                                    agent_id, integration_type_enum_val
                                                 )
-                                                if current_integration_status.status == "running":
-                                                    logger.info(f"{integration_type_enum.value} integration for agent {agent_id} is already running.")
+                                                if current_integration_status_dict and current_integration_status_dict.get("status") in ["running", "running_pending_agent_confirm", "starting"]:
+                                                    logger.info(f"{integration_type_enum_val} integration for agent {agent_id} is already {current_integration_status_dict.get('status')}.")
                                                 else:
-                                                    integration_started = await process_manager_service.start_integration_process(
+                                                    integration_started_successfully = await pm.start_integration_process(
                                                         agent_id, 
-                                                        integration_type_enum, 
-                                                        redis_client,
-                                                        integration_actual_settings # Передаем извлеченные настройки
+                                                        integration_type_enum_val,
+                                                        integration_actual_settings
                                                     )
-                                                    if integration_started:
-                                                        logger.info(f"Successfully initiated start for {integration_type_enum.value} integration for agent: {agent_id}")
+                                                    if integration_started_successfully:
+                                                        logger.info(f"Successfully initiated start for {integration_type_enum_val} integration for agent: {agent_id}. Process manager will update status.")
                                                     else:
-                                                        logger.warning(f"Failed to initiate start for {integration_type_enum.value} integration for agent: {agent_id}")
-                                            except ValueError: # Ошибка преобразования строки в IntegrationType Enum
+                                                        logger.warning(f"Failed to initiate start for {integration_type_enum_val} integration for agent: {agent_id}. Check ProcessManager logs.")
+                                            except ValueError:
                                                 logger.error(f"Invalid integration type string '{integration_type_str}' in config for agent {agent_id}. Skipping.")
-                                            except AttributeError as e_attr:
-                                                logger.error(f"Missing function (e.g., start_integration_process or get_integration_status) in process_manager_service: {e_attr}")
                                             except Exception as e_integration_start:
-                                                logger.error(f"Error starting {integration_type_str} integration for agent {agent_id}: {e_integration_start}", exc_info=True)
+                                                logger.error(f"Error managing {integration_type_str} integration for agent {agent_id}: {e_integration_start}", exc_info=True)
                                         elif isinstance(integration_item, dict) and not integration_item.get("enabled"):
                                             logger.info(f"Integration '{integration_item.get('type', 'Unknown type')}' for agent {agent_id} is disabled. Skipping.")
                                         else:
                                             logger.warning(f"Skipping invalid integration item for agent {agent_id}: {integration_item}")
-                                else: # integrations_list не является списком
-                                    if integrations_list is not None: # Ключ есть, но значение не список
+                                else:
+                                    if integrations_list is not None:
                                         logger.warning(f"'integrations' field in agent {agent_id} config (simple.settings.integrations) is not a list. Found: {type(integrations_list)}. Skipping integrations.")
-                                    # Если integrations_list is None, значит ключ "integrations" отсутствует - это нормально, нет интеграций.
-                            else: # settings_config не словарь или None
+                            else:
                                 if settings_config is not None:
                                      logger.warning(f"'settings' field in agent {agent_id} config (simple.settings) is not a dictionary. Found: {type(settings_config)}. Skipping integrations.")
-                        else: # simple_config не словарь или None
+                        else:
                             if simple_config is not None:
                                 logger.warning(f"'simple' field in agent {agent_id} config is not a dictionary. Found: {type(simple_config)}. Skipping integrations.")
                     elif agent_db.config_json is None:
                         logger.info(f"Agent {agent_id} has no config_json. Skipping integrations.")
-                    else: # agent_db.config_json не словарь
+                    else:
                         logger.warning(f"agent_db.config_json for agent {agent_id} is not a dictionary. Found: {type(agent_db.config_json)}. Skipping integrations.")
             except Exception as e:
                 logger.error(f"Failed to fetch or process agents for startup: {e}", exc_info=True)
-    except Exception as e_redis: # Обработка ошибки получения redis_client
-        logger.error(f"Failed to get Redis client: {e_redis}", exc_info=True)
+    except Exception as e_pm_setup: # Catch errors from pm.setup_manager()
+        logger.error(f"Failed to setup ProcessManager or connect to Redis: {e_pm_setup}", exc_info=True)
     finally:
-        if redis_client:
-            await redis_client.close() # ИЗМЕНЕНО: Добавлен await
-            logger.info("Redis client closed in start_existing_agents_and_integrations.")
-
+        await pm.cleanup_manager() # ADDED: Cleanup ProcessManager
+        logger.info("ProcessManager cleanup complete for startup function.")
 
 async def start_background_tasks(app: FastAPI):
     """Запускает все необходимые фоновые задачи."""
@@ -147,8 +141,9 @@ async def start_background_tasks(app: FastAPI):
 
     # History Saver Worker
     try:
+        history_worker = HistorySaverWorker()
         history_task = asyncio.create_task(
-            history_saver_main_loop(), 
+            history_worker.run(), 
             name="HistorySaverWorker"
         )
         background_tasks.append(history_task)
@@ -158,8 +153,9 @@ async def start_background_tasks(app: FastAPI):
 
     # Token Usage Worker
     try:
+        token_worker = TokenUsageWorker()
         token_task = asyncio.create_task(
-            token_usage_main_loop(),
+            token_worker.run(),
             name="TokenUsageWorker"
         )
         background_tasks.append(token_task)
@@ -169,8 +165,9 @@ async def start_background_tasks(app: FastAPI):
 
     # Inactivity Monitor Worker
     try:
+        inactivity_worker = InactivityMonitorWorker()
         inactivity_task = asyncio.create_task(
-            inactivity_monitor_main_loop(),
+            inactivity_worker.run(),
             name="InactivityMonitorWorker"
         )
         background_tasks.append(inactivity_task)

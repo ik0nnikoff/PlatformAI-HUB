@@ -1,322 +1,388 @@
 import asyncio
 import logging
-import signal
-import time
-import os
-import json # Added
-
-import redis.asyncio as redis
-from redis.exceptions import ConnectionError as RedisConnectionError # Added
-from sqlalchemy.ext.asyncio import AsyncSession # Keep for potential future use with DB
+import time # Keep for time.time()
+from datetime import datetime, timezone # Added for datetime.now(timezone.utc)
+import redis.exceptions # Added for RedisError
+import os # Added import os
+# Removed signal, os, json, redis.asyncio, RedisConnectionError as they are handled by base or ProcessManager
 
 from app.core.config import settings
-from app.api.schemas.common_schemas import IntegrationType # Added
-from app.services import process_manager_service as pms # Added
-# from app.db.session import get_async_session_factory # If direct DB access needed in future
-# from app.db.crud.agent_crud import db_get_agent_config_by_id # Example if needed
-# from app.services.process_manager_service import stop_agent_process_via_api # If we call an API endpoint
+from app.api.schemas.common_schemas import IntegrationType # Keep for type checking
+from app.services.process_manager import ProcessManager
+from app.workers.base_worker import ScheduledTaskWorker
+import time # Ensure time is imported
+import redis.exceptions # Ensure redis.exceptions is imported
+import logging # Ensure logging is imported
+import asyncio # Ensure asyncio is imported
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.db import crud # This should give access to submodules like agent_crud
+from app.db.crud import agent_crud # Explicit import for agent_crud
+from app.db.session import SessionLocal
 
-logger = logging.getLogger(__name__)
+# logger is inherited from BaseWorker/ScheduledTaskWorker
 
-# Graceful shutdown handling
-shutdown_requested = False
-
-def signal_handler(signum, frame):
-    global shutdown_requested
-    logger.info(f"Signal {signum} received, initiating graceful shutdown for inactivity_monitor_worker.")
-    shutdown_requested = True
-
-async def stop_agent_process_directly(agent_id: str, pid: int, redis_client: redis.Redis):
+class InactivityMonitorWorker(ScheduledTaskWorker):
     """
-    Attempts to stop an agent process directly using os.kill.
-    This is a simplified version for the worker, assuming it has PID.
-    Updates Redis status upon stopping.
+    Monitors agent and integration processes for inactivity and crashes,
+    and attempts to manage them (stop inactive, restart crashed).
     """
-    status_key = f"agent_status:{agent_id}"
-    logger.info(f"Attempting to stop inactive agent {agent_id} (PID: {pid}) directly.")
-    try:
-        os.kill(pid, signal.SIGTERM) # Send SIGTERM
-        logger.info(f"SIGTERM sent to agent {agent_id} (PID: {pid}).")
-        # Basic wait, more robust checking might be needed if SIGTERM is ignored
-        await asyncio.sleep(5) 
-        try:
-            os.kill(pid, 0) # Check if process still exists
-            logger.warning(f"Agent {agent_id} (PID: {pid}) did not terminate after SIGTERM. Sending SIGKILL.")
-            os.kill(pid, signal.SIGKILL)
-            logger.info(f"SIGKILL sent to agent {agent_id} (PID: {pid}).")
-            await asyncio.sleep(1) # Give time for SIGKILL to take effect
-        except ProcessLookupError:
-            logger.info(f"Agent {agent_id} (PID: {pid}) terminated successfully after SIGTERM/SIGKILL.")
-        except OSError as e:
-            logger.error(f"Error during SIGKILL for agent {agent_id} (PID: {pid}): {e}")
+    def __init__(self):
+        super().__init__(
+            component_id="inactivity_monitor_worker", # Unique ID for this worker instance
+            interval_seconds=settings.AGENT_INACTIVITY_CHECK_INTERVAL,
+            status_key_prefix="worker_status:inactivity_monitor:" # Specific status key prefix
+        )
+        self.process_manager = ProcessManager()
+        self.logger.info(f"[{self._component_id}] Initialized with check interval: {self.interval_seconds}s.")
 
-    except ProcessLookupError:
-        logger.warning(f"Agent {agent_id} (PID: {pid}) process not found when trying to stop (already stopped?).")
-    except Exception as e:
-        logger.error(f"Error stopping agent process {agent_id} (PID: {pid}): {e}", exc_info=True)
-    finally:
-        # Update Redis status to 'stopped'
+    async def setup(self):
+        """
+        Initializes the ProcessManager and performs an initial check for crashed processes.
+        """
+        await super().setup() # Sets up StatusUpdater, Redis client for worker status
+        if not self._running:
+            self.logger.info(f"[{self._component_id}] Shutdown initiated during setup. Aborting further setup.")
+            return
         try:
-            await redis_client.hset(status_key, mapping={
-                "status": "stopped_inactive", # Specific status for inactive shutdown
-                "pid": "", # Clear PID
-                "last_active": "" # Clear last_active
-            })
-            logger.info(f"Updated Redis status for agent {agent_id} to 'stopped_inactive'.")
+            await self.process_manager.setup_manager() # Ensure PM is setup
+            self.logger.info(f"[{self._component_id}] ProcessManager initialized for InactivityMonitor.")
         except Exception as e:
-            logger.error(f"Failed to update Redis status for agent {agent_id} after stop attempt: {e}")
+            self.logger.error(f"[{self._component_id}] Failed to initialize ProcessManager: {e}", exc_info=True)
+            self.initiate_shutdown() # Stop the worker if PM setup fails
+            return
 
-async def check_and_restart_crashed_agents(r: redis.Redis):
-    logger.debug("Checking for crashed or stopped agents to restart...")
-    try:
-        async for config_key_b in r.scan_iter("agent_config:*"):
-            if shutdown_requested: break
-            config_key = config_key_b.decode('utf-8')
-            agent_id_from_key = ""
+        # Initial check for crashed/stopped processes shortly after startup
+        if self._running: # Check _running before performing tasks
+            self.logger.info(f"[{self._component_id}] Delaying initial check for 10 seconds to allow lifespan to complete agent setups...")
+            await asyncio.sleep(10) # Added delay
+            self.logger.info(f"[{self._component_id}] Performing initial check for crashed/stopped processes...")
+            await self._check_and_restart_crashed_processes()
+            self.logger.info(f"[{self._component_id}] Initial check for crashed/stopped processes completed.")
+
+    async def perform_task(self) -> None:
+        """
+        Periodically checks for inactive agents and crashed processes.
+        This method is called by ScheduledTaskWorker's run_loop.
+        """
+        if not self._running:
+            self.logger.info(f"[{self._component_id}] Shutdown in progress. Skipping periodic checks.")
+            return
+
+        if not await self.process_manager.is_redis_client_available():
+            self.logger.warning(f"[{self._component_id}] ProcessManager Redis client not available. Skipping checks.")
             try:
-                agent_id_from_key = config_key.split(":")[1]
-            except IndexError:
-                logger.warning(f"Malformed agent_config key found: {config_key}")
-                continue
+                await self.process_manager.setup_redis_client() # Attempt to re-establish
+                if not await self.process_manager.is_redis_client_available():
+                    self.logger.error(f"[{self._component_id}] Failed to re-establish ProcessManager Redis client. Checks will be skipped.")
+                    return
+                self.logger.info(f"[{self._component_id}] ProcessManager Redis client re-established.")
+            except Exception as e_redis_setup:
+                self.logger.error(f"[{self._component_id}] Error re-establishing ProcessManager Redis client: {e_redis_setup}. Checks skipped.")
+                return
 
-            current_status = await pms.get_agent_status(agent_id_from_key, r)
+        self.logger.debug(f"[{self._component_id}] Running periodic checks (inactivity, crashes)...")
+        try:
+            if self._running: # Check _running again before potentially long operations
+                await self._check_inactive_agents()
             
-            # Define statuses that warrant a restart
-            # Excludes "stopped" to avoid restarting explicitly stopped agents.
-            # "error_process_lost" covers cases where agent was running but PID/container disappeared.
-            # "not_found" covers cases where config exists but status record is missing.
-            restart_worthy_statuses = [
-                "error_process_lost", "error_start_failed", 
-                "error_script_not_found", "error_config_missing", 
-                "not_found", "unknown",
-                "error_restart_failed", # Added from integration logic, seems relevant
-                "error_restart_stop_failed", # Added from integration logic
-                "error_restart_start_failed" # Added from integration logic
-            ]
+            if self._running: # Check _running again before potentially starting new processes
+                await self._check_and_restart_crashed_processes()
+        except Exception as e:
+            self.logger.error(f"[{self._component_id}] Error during perform_task: {e}", exc_info=True)
+
+    async def _check_inactive_agents(self):
+        if not self._running:
+            self.logger.info(f"[{self._component_id}] Shutdown in progress. Skipping inactivity check.")
+            return
+
+        self.logger.debug(f"[{self._component_id}] Running inactivity check for agents...")
+        current_time = time.time()
+        agent_inactivity_timeout = settings.AGENT_INACTIVITY_TIMEOUT
+        
+        pm_redis_client = await self.process_manager.redis_client # Get actual client
+        if not pm_redis_client:
+            self.logger.warning(f"[{self._component_id}] ProcessManager Redis client not available for inactivity check.")
+            return
+
+        try:
+            agent_keys = await pm_redis_client.keys("agent_status:*")
+            for key_bytes in agent_keys:
+                if not self._running: # Check frequently during loops
+                    self.logger.info(f"[{self._component_id}] Shutdown in progress during agent scan. Aborting.")
+                    break
+                key = key_bytes.decode('utf-8')
+                agent_id = key.split(":", 1)[1]
+                status = await pm_redis_client.hgetall(key)
+                
+                # Decode status values
+                status = {k.decode('utf-8'): v.decode('utf-8') for k, v in status.items()}
+
+                last_active_str = status.get("last_active_time") # Assuming this key from StatusUpdater
+                current_status = status.get("status")
+
+                if current_status == "running" and last_active_str:
+                    try:
+                        last_active = float(last_active_str)
+                        if (current_time - last_active) > agent_inactivity_timeout:
+                            self.logger.warning(f"[{self._component_id}] Agent {agent_id} is inactive (last active {last_active:.0f}, current {current_time:.0f}, timeout {agent_inactivity_timeout}s). Attempting to stop.")
+                            if self._running: # Check before stopping
+                                await self.process_manager.stop_agent_process(agent_id, force=False) # Attempt graceful stop
+                        else:
+                            self.logger.debug(f"[{self._component_id}] Agent {agent_id} is active (last active {last_active:.0f}).")
+                    except ValueError:
+                        self.logger.error(f"[{self._component_id}] Could not parse last_active_time '{last_active_str}' for agent {agent_id}.")
+                elif current_status != "running" and current_status != "stopped" and current_status != "error" and current_status != "initializing":
+                     self.logger.debug(f"[{self._component_id}] Agent {agent_id} has status '{current_status}', not checking for inactivity timeout.")
+
+
+        except redis.exceptions.RedisError as e_redis:
+            self.logger.error(f"[{self._component_id}] Redis error during agent inactivity check: {e_redis}", exc_info=True)
+        except Exception as e:
+            self.logger.error(f"[{self._component_id}] Unexpected error during agent inactivity check: {e}", exc_info=True)
+
+
+    async def _check_and_restart_crashed_processes(self):
+        if not self._running:
+            self.logger.info(f"[{self._component_id}] Shutdown in progress. Skipping crash check and restarts.")
+            return
+
+        self.logger.debug(f"[{self._component_id}] Checking for crashed or stopped agents and integrations to restart...")
+
+        pm_redis_client = await self.process_manager.redis_client # Get actual client
+        if not pm_redis_client:
+            self.logger.warning(f"[{self._component_id}] ProcessManager Redis client not available for crash check.")
+            return
             
-            if current_status.status in restart_worthy_statuses:
-                logger.info(f"Agent {agent_id_from_key} needs restart (current status: {current_status.status}). Attempting restart.")
-                try:
-                    success = await pms.restart_agent_process(agent_id_from_key, r)
-                    if success:
-                        logger.info(f"Successfully initiated restart for agent {agent_id_from_key}.")
+        # Check Agents
+        try:
+            agent_keys = await pm_redis_client.keys("agent_status:*")
+            for key_bytes in agent_keys:
+                if not self._running:
+                    self.logger.info(f"[{self._component_id}] Shutdown in progress during agent crash check. Aborting.")
+                    break
+                key = key_bytes.decode('utf-8')
+                agent_id = key.split(":", 1)[1]
+                status_data = await pm_redis_client.hgetall(key)
+                status = {k.decode('utf-8'): v.decode('utf-8') for k, v in status_data.items()}
+                
+                current_status = status.get("status")
+                pid_str = status.get("pid")
+                process_should_be_running = status.get("process_should_be_running", "false").lower() == "true"
+
+                # Check if process is actually running using os.kill(pid, 0) if PID exists
+                process_alive = False
+                if pid_str:
+                    try:
+                        pid = int(pid_str)
+                        os.kill(pid, 0) # Check if process exists
+                        process_alive = True
+                    except (ProcessLookupError, ValueError): # PID not found or invalid
+                        process_alive = False
+                    except OSError as ose: # Other OS errors, e.g. permission denied
+                        self.logger.warning(f"[{self._component_id}] OSError checking PID {pid_str} for agent {agent_id}: {ose}. Assuming not alive for safety.")
+                        process_alive = False
+
+                # Condition for restart:
+                # 1. Status is 'running' or 'initializing', but process is not alive (crash).
+                # 2. OR, status is 'stopped' or 'error', but 'process_should_be_running' is true (e.g. was manually stopped but should be auto-restarted)
+                #    AND the process is not alive.
+                
+                needs_restart = False
+                if current_status in ["running", "initializing"] and pid_str and not process_alive:
+                    self.logger.warning(f"[{self._component_id}] Agent {agent_id} has status '{current_status}' with PID {pid_str} but process is not alive. Flagging for restart.")
+                    needs_restart = True
+                elif process_should_be_running and not process_alive : # Covers cases where it was stopped/errored but should be running
+                    self.logger.warning(f"[{self._component_id}] Agent {agent_id} is marked as 'should_be_running' but process (PID: {pid_str or 'N/A'}) is not alive. Status: '{current_status}'. Flagging for restart.")
+                    needs_restart = True
+
+                if needs_restart and self._running:
+                    self.logger.info(f"[{self._component_id}] Attempting to restart agent {agent_id}...")
+                    await self.process_manager.restart_agent_process(agent_id)
+                elif current_status in ["stopped", "error"] and not process_should_be_running:
+                     self.logger.debug(f"[{self._component_id}] Agent {agent_id} is in status '{current_status}' and not marked 'process_should_be_running'. No restart action.")
+
+        except redis.exceptions.RedisError as e_redis_agent:
+            self.logger.error(f"[{self._component_id}] Redis error during agent crash check: {e_redis_agent}", exc_info=True)
+        except Exception as e_agent_scan:
+            self.logger.error(f"[{self._component_id}] Error scanning agent statuses for crash check: {e_agent_scan}", exc_info=True)
+
+        if not self._running: 
+            self.logger.info(f"[{self._component_id}] Shutdown in progress after agent checks. Skipping integration checks.")
+            return
+
+        # Check Integrations
+        try:
+            integration_keys = await pm_redis_client.keys("integration_status:*")
+            valid_integration_type_values = [it.value for it in IntegrationType] # Get all valid enum values
+
+            for key_bytes in integration_keys:
+                if not self._running:
+                    self.logger.info(f"[{self._component_id}] Shutdown in progress during integration crash check. Aborting.")
+                    break
+                key = key_bytes.decode('utf-8') # e.g., integration_status:agent_id:telegram
+                parts = key.split(":")
+                
+                agent_id = None
+                integration_type_str = None
+
+                # New parsing logic:
+                # Expected new format: "integration_status:<agent_id>:<integration_type_value>"
+                if len(parts) == 3 and parts[0] == "integration_status":
+                    potential_agent_id = parts[1]
+                    potential_integration_type = parts[2].lower() # Convert to lowercase for case-insensitive comparison
+                    if potential_integration_type in valid_integration_type_values: # valid_integration_type_values are already lowercase
+                        agent_id = potential_agent_id
+                        integration_type_str = potential_integration_type
+                        self.logger.debug(f"[{self._component_id}] Parsed new format key: {key} -> agent_id={agent_id}, type={integration_type_str}")
                     else:
-                        logger.warning(f"Restart attempt failed for agent {agent_id_from_key} (restart_agent_process returned False).")
-                except Exception as e_restart:
-                    logger.error(f"Error during restart attempt for agent {agent_id_from_key}: {e_restart}", exc_info=True)
-            await asyncio.sleep(0.01) # Yield control during long scans
-    except RedisConnectionError: # Restored
-        logger.error("Redis connection error during agent restart check.")
-        # Reconnection is handled in the main_loop
-    except Exception as e: # Restored
-        logger.error(f"Unexpected error in check_and_restart_crashed_agents: {e}", exc_info=True)
-
-async def check_and_restart_crashed_integrations(r: redis.Redis):
-    logger.debug("Checking for crashed or stopped integrations to restart...")
-    try:
-        async for config_key_b in r.scan_iter("integration_config:*:*"):
-            if shutdown_requested: break
-            config_key = config_key_b.decode('utf-8')
-            agent_id_from_key = ""
-            integration_type_str = ""
-            try:
-                parts = config_key.split(":")
-                if len(parts) != 3:
-                    logger.warning(f"Malformed integration config key found: {config_key}")
+                        # Could be old format: "integration_status:<integration_type_value>:<agent_id>"
+                        # where parts[1] is the type and parts[2] is the agent_id
+                        # Ensure parts[1] is also lowercased if it's a type for comparison
+                        if parts[1].lower() in valid_integration_type_values: # Check if parts[1] is a type
+                             self.logger.warning(f"[{self._component_id}] Detected potentially old integration status key format: {key}. Skipping restart for this key during transition.")
+                             continue # Skip old format for now
+                        else:
+                            self.logger.warning(f"[{self._component_id}] Malformed integration status key (3 parts, but type '{parts[2]}' not recognized or parts[1] not a type if old format): {key}")
+                            continue
+                elif len(parts) == 4 and parts[0] == "integration_status" and parts[1] == "telegram_bot": # Specific old format
+                    self.logger.warning(f"[{self._component_id}] Detected old specific integration status key format (telegram_bot): {key}. Skipping.")
                     continue
-                _, agent_id_from_key, integration_type_str = parts
-                integration_type = IntegrationType(integration_type_str)
-            except ValueError:
-                logger.warning(f"Unknown integration type '{integration_type_str}' in key {config_key}. Skipping.")
-                continue
-            except IndexError:
-                 logger.warning(f"Malformed integration_config key (IndexError): {config_key}")
-                 continue
+                else:
+                    self.logger.warning(f"[{self._component_id}] Malformed integration status key (unexpected number of parts or prefix): {key}. Parts: {parts}")
+                    continue
 
+                if not agent_id or not integration_type_str:
+                    # This should ideally not be reached if continue statements work, but as a safeguard:
+                    self.logger.error(f"[{self._component_id}] Failed to extract agent_id or integration_type_str from key {key} after parsing. Skipping.")
+                    continue
+                
+                # ... (rest of the logic for status_data, process_alive, needs_restart is the same as before) ...
+                # Ensure this part uses the correctly parsed agent_id and integration_type_str
+                status_data = await pm_redis_client.hgetall(key)
+                status = {k.decode('utf-8'): v.decode('utf-8') for k, v in status_data.items()}
+                current_status = status.get("status")
+                pid_str = status.get("pid")
+                process_should_be_running = status.get("process_should_be_running", "false").lower() == "true"
 
-            current_status = await pms.get_integration_status(agent_id_from_key, integration_type, r)
-            
-            # Define statuses that warrant a restart for integrations
-            # Excludes "stopped" to avoid restarting explicitly stopped integrations.
-            restart_worthy_statuses_integration = [
-                "error_process_lost", "error_start_failed",
-                "error_script_not_found", "error_config_missing", 
-                "not_found", "unknown",
-                "error_restart_stop_failed", "error_restart_start_failed", "error_restart_failed"
-            ]
+                process_alive = False
+                if pid_str:
+                    try:
+                        pid = int(pid_str)
+                        os.kill(pid, 0)
+                        process_alive = True
+                    except (ProcessLookupError, ValueError):
+                        process_alive = False
+                    except OSError as ose:
+                        self.logger.warning(f"[{self._component_id}] OSError checking PID {pid_str} for integration {agent_id}/{integration_type_str}: {ose}. Assuming not alive.")
+                        process_alive = False
 
-            if current_status.status in restart_worthy_statuses_integration:
-                logger.info(f"Integration {integration_type.value} for agent {agent_id_from_key} needs restart (current status: {current_status.status}). Attempting restart.")
-                try:
-                    integration_settings_json_b = await r.get(config_key)
-                    if not integration_settings_json_b:
-                        logger.error(f"Integration config data not found for {config_key} despite key existing. Cannot restart.")
-                        continue
+                action_to_take = None # Can be "restart", "start", or None
+                if current_status in ["running", "initializing"] and pid_str and not process_alive:
+                    self.logger.warning(f"[{self._component_id}] Integration {agent_id}/{integration_type_str} has status '{current_status}' with PID {pid_str} but process is not alive. Flagging for restart.")
+                    action_to_take = "restart"
+                elif process_should_be_running and not process_alive: # Covers cases where it was stopped/errored but should be running
+                     self.logger.warning(f"[{self._component_id}] Integration {agent_id}/{integration_type_str} is marked 'process_should_be_running' but process (PID: {pid_str or 'N/A'}) is not alive. Status: '{current_status}'. Flagging for restart.")
+                     action_to_take = "restart"
+                elif not pid_str and status.get("status") not in ["stopped", "not_found", "error_start_failed", "error_script_not_found"] and process_should_be_running:
+                    self.logger.info(f"[{self._component_id}] Integration {agent_id}/{integration_type_str} should be running but has no PID and status is '{status.get('status', 'unknown')}'. Flagging for start.")
+                    action_to_take = "start"
+
+                if action_to_take and self._running:
+                    self.logger.info(f"[{self._component_id}] Action '{action_to_take}' identified for integration {agent_id}/{integration_type_str}.")
                     
-                    integration_settings = json.loads(integration_settings_json_b.decode('utf-8'))
-                    
-                    success = await pms.restart_integration_process(
-                        agent_id_from_key, 
-                        integration_type, 
-                        r, 
-                        integration_settings=integration_settings
-                    )
-                    if success:
-                        logger.info(f"Successfully initiated restart for integration {integration_type.value} of agent {agent_id_from_key}.")
-                    else:
-                        logger.warning(f"Restart attempt failed for integration {integration_type.value} of agent {agent_id_from_key} (restart_integration_process returned False).")
-                except json.JSONDecodeError:
-                    logger.error(f"Failed to parse integration settings from {config_key} (value: {integration_settings_json_b[:100] if integration_settings_json_b else 'None'}). Cannot restart.")
-                except Exception as e_restart_int:
-                    logger.error(f"Error during restart attempt for integration {integration_type.value} of agent {agent_id_from_key}: {e_restart_int}", exc_info=True)
-            await asyncio.sleep(0.01) # Yield control
-    except RedisConnectionError: # Restored
-        logger.error("Redis connection error during integration restart check.")
-    except Exception as e: # Restored
-        logger.error(f"Unexpected error in check_and_restart_crashed_integrations: {e}", exc_info=True)
-
-async def main_loop():
-    global shutdown_requested
-    logger.info("Starting inactivity monitor worker.")
-    
-    redis_url = settings.REDIS_URL
-    if not redis_url:
-        logger.critical("REDIS_URL not configured. Inactivity monitor worker cannot start.")
-        return
-        
-    redis_client = None
-    try:
-        redis_client = await redis.from_url(redis_url, decode_responses=True)
-        await redis_client.ping()
-        logger.info(f"Successfully connected to Redis at {redis_url}")
-    except Exception as e:
-        logger.critical(f"Could not connect to Redis: {e}", exc_info=True)
-        return
-
-    agent_inactivity_timeout = settings.AGENT_INACTIVITY_TIMEOUT
-    agent_inactivity_check_interval = settings.AGENT_INACTIVITY_CHECK_INTERVAL
-
-    logger.info(f"Agent inactivity timeout set to {agent_inactivity_timeout} seconds.")
-    logger.info(f"Agent inactivity check interval set to {agent_inactivity_check_interval} seconds.")
-
-    # async_session_factory = get_async_session_factory() # If DB interaction is needed
-
-    # Initial check for crashed/stopped processes shortly after startup
-    # Wait a bit for the application to stabilize if Redis was just connected
-    if redis_client and not shutdown_requested:
-        logger.info("Performing initial check for crashed/stopped agents and integrations...")
-        await asyncio.sleep(5) # Brief pause before initial aggressive checks
-        await check_and_restart_crashed_agents(redis_client)
-        await check_and_restart_crashed_integrations(redis_client)
-        logger.info("Initial check for crashed/stopped processes completed.")
-
-    while not shutdown_requested:
-        try:
-            await asyncio.sleep(agent_inactivity_check_interval)
-            if shutdown_requested:
-                break
-            
-            logger.debug("Running inactivity check...")
-            current_time = time.time()
-            
-            async for status_key in redis_client.scan_iter("agent_status:*"):
-                if shutdown_requested:
-                    break
-                agent_id = status_key.split(":")[-1] # Get agent_id from key (e.g., agent_status:some_agent_id)
-                try:
-                    status_data = await redis_client.hgetall(status_key)
-                    status = status_data.get("status")
-                    last_active_str = status_data.get("last_active")
-                    pid_str = status_data.get("pid")
-
-                    if status == "running" and last_active_str and pid_str:
+                    retrieved_integration_settings = None
+                    async with SessionLocal() as db_session:
+                        agent_config_db = None
                         try:
-                            last_active = float(last_active_str)
-                            pid = int(pid_str)
-                            if (current_time - last_active) > agent_inactivity_timeout:
-                                logger.info(f"Agent {agent_id} (PID: {pid}) inactive for more than {agent_inactivity_timeout} seconds. Scheduling stop.")
-                                try:
-                                    os.kill(pid, 0) # Check if process exists before attempting to stop
-                                    # Instead of calling an API, we can attempt to stop it directly
-                                    # or signal another service. For simplicity, direct stop here.
-                                    await stop_agent_process_directly(agent_id, pid, redis_client)
-                                except ProcessLookupError:
-                                    logger.warning(f"Agent {agent_id} (PID: {pid}) process not found during inactivity check, but status was 'running'. Cleaning up status.")
-                                    await redis_client.hset(status_key, mapping={"status": "error_process_lost", "pid": "", "last_active": ""})
-                                except Exception as check_err:
-                                    logger.error(f"Error checking PID {pid} for inactive agent {agent_id}: {check_err}. Skipping stop.")
-                        except (ValueError, TypeError) as e:
-                            logger.warning(f"Invalid last_active ('{last_active_str}') or pid ('{pid_str}') for agent {agent_id}: {e}")
-                        except Exception as stop_err:
-                            logger.error(f"Error processing inactive agent {agent_id}: {stop_err}", exc_info=True)
-                except Exception as e:
-                    logger.error(f"Error processing agent status key {status_key} during inactivity check: {e}", exc_info=True)
+                            agent_config_db = await agent_crud.db_get_agent_config(db_session, agent_id=agent_id)
+                            self.logger.debug(f"[{self._component_id}] Fetched agent_config_db for {agent_id} (action: {action_to_take} integration {integration_type_str}): {agent_config_db}")
+                        except Exception as e:
+                            self.logger.error(f"[{self._component_id}] DB error fetching agent config for {agent_id} to {action_to_take} integration {integration_type_str}: {e}", exc_info=True)
+                            continue # Skip to next integration key on DB error
 
-            # Periodically check for crashed/stopped agents and integrations to restart
-            if not shutdown_requested and redis_client: # Ensure client is still valid
-                logger.debug("Running periodic check for crashed/stopped agents and integrations.")
-                await check_and_restart_crashed_agents(redis_client)
-                await check_and_restart_crashed_integrations(redis_client)
+                        if not agent_config_db:
+                            self.logger.info(f"[{self._component_id}] Agent {agent_id} not found in DB. Skipping {action_to_take} of its integration {integration_type_str}.")
+                            continue # Skip to next integration key
 
-        except RedisConnectionError as e: # Changed redis.exceptions.ConnectionError
-            logger.error(f"Redis connection error: {e}. Attempting to reconnect...")
-            if redis_client:
-                try:
-                    await redis_client.close()
-                except Exception as close_exc:
-                    logger.error(f"Error closing old Redis connection: {close_exc}")
-            
-            reconnected = False
-            for i in range(settings.REDIS_RECONNECT_ATTEMPTS):
-                if shutdown_requested: break
-                await asyncio.sleep(settings.REDIS_RECONNECT_DELAY * (i + 1))
-                try:
-                    redis_client = await redis.from_url(redis_url, decode_responses=True)
-                    await redis_client.ping()
-                    logger.info("Successfully reconnected to Redis.")
-                    reconnected = True
-                    break
-                except Exception as recon_e:
-                    logger.error(f"Redis reconnection attempt {i+1} failed: {recon_e}")
-            
-            if not reconnected and not shutdown_requested:
-                logger.critical("Failed to reconnect to Redis after multiple attempts. Worker will exit.")
-                shutdown_requested = True # Trigger shutdown
-        
-        except asyncio.CancelledError:
-            logger.info("Inactivity monitor worker task was cancelled.")
-            break # Exit loop on cancellation
-        except Exception as e:
-            logger.error(f"An unexpected error occurred in the inactivity monitor main loop: {e}", exc_info=True)
-            if not shutdown_requested:
-                await asyncio.sleep(30) # Avoid busy-looping on unexpected errors
+                        # Agent config exists, now check for specific integration settings
+                        if agent_config_db.config_json and agent_config_db.config_json.get("integrations"):
+                            for integ_conf in agent_config_db.config_json["integrations"]:
+                                if integ_conf.get("integration_type", "").upper() == integration_type_str.upper():
+                                    retrieved_integration_settings = integ_conf.get("settings")
+                                    self.logger.info(f"[{self._component_id}] Found settings for {agent_id}/{integration_type_str} for {action_to_take}.")
+                                    break
+                        
+                        if retrieved_integration_settings is None:
+                            self.logger.info(f"[{self._component_id}] Agent {agent_id} found, but integration type {integration_type_str} is not configured or has no settings in DB. Skipping {action_to_take}.")
+                            continue # Skip to next integration key
+                    
+                    # Perform the action if settings were successfully retrieved (retrieved_integration_settings is not None)
+                    if action_to_take == "restart":
+                        self.logger.info(f"[{self._component_id}] Attempting to restart integration {agent_id}/{integration_type_str} with retrieved settings...")
+                        restarted = await self.process_manager.restart_integration_process(agent_id, integration_type_str, integration_settings=retrieved_integration_settings)
+                        if restarted:
+                            self.logger.info(f"[{self._component_id}] Successfully initiated restart for integration {agent_id}/{integration_type_str}.")
+                        else:
+                            self.logger.error(f"[{self._component_id}] Failed to initiate restart for integration {agent_id}/{integration_type_str}.")
+                    elif action_to_take == "start":
+                        self.logger.info(f"[{self._component_id}] Attempting to start integration {agent_id}/{integration_type_str} with retrieved settings...")
+                        # Assuming start_integration_process returns a boolean or similar indication of initiation
+                        started = await self.process_manager.start_integration_process(agent_id, integration_type_str, integration_settings=retrieved_integration_settings)
+                        if started: # Modify this check if start_integration_process has a different return signature
+                            self.logger.info(f"[{self._component_id}] Successfully initiated start for integration {agent_id}/{integration_type_str}.")
+                        else:
+                            self.logger.error(f"[{self._component_id}] Failed to initiate start for integration {agent_id}/{integration_type_str}.")
+                elif self._running: # No action_to_take but still running (e.g. process is alive and status is fine)
+                     self.logger.debug(f"[{self._component_id}] No action needed for integration {agent_id}/{integration_type_str} (Status: '{current_status}', PID: {pid_str or 'N/A'}, Alive: {process_alive}, ShouldRun: {process_should_be_running}).")
 
-    if redis_client:
-        try:
-            await redis_client.close()
-            logger.info("Redis client closed for inactivity monitor.")
-        except Exception as e:
-            logger.error(f"Error closing Redis client during inactivity monitor shutdown: {e}")
-            
-    logger.info("Inactivity monitor worker has shut down.")
+
+        except redis.exceptions.RedisError as e_redis_int:
+            self.logger.error(f"[{self._component_id}] Redis error during integration crash check: {e_redis_int}", exc_info=True)
+        except Exception as e_int_scan:
+            self.logger.error(f"[{self._component_id}] Error scanning integration statuses for crash check: {e_int_scan}", exc_info=True)
+
+    async def cleanup(self):
+        """
+        Cleans up the ProcessManager.
+        """
+        self.logger.info(f"[{self._component_id}] Cleaning up InactivityMonitorWorker...")
+        if self.process_manager:
+            try:
+                await self.process_manager.cleanup_manager()
+                self.logger.info(f"[{self._component_id}] ProcessManager cleaned up.")
+            except Exception as e_pm_cleanup:
+                self.logger.error(f"[{self._component_id}] Error cleaning up ProcessManager: {e_pm_cleanup}", exc_info=True)
+        await super().cleanup() # Cleans up StatusUpdater and Redis client for worker status
+        self.logger.info(f"[{self._component_id}] InactivityMonitorWorker cleanup finished.")
+
+# Removed old signal_handler and main_loop functions.
 
 if __name__ == "__main__":
-    # Basic logging setup for standalone execution
+    # Basic logging setup for direct script execution.
+    # If part of a larger app, central logging config should handle this.
     logging.basicConfig(
         level=settings.LOG_LEVEL,
-        format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
-        handlers=[logging.StreamHandler()]
+        format='%(asctime)s - %(levelname)s - %(name)s - [%(component_id)s] - %(message)s'
     )
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    # Add a simple StreamHandler if no handlers are configured by basicConfig by default (e.g. in some environments)
+    if not logging.getLogger().hasHandlers():
+        logging.getLogger().addHandler(logging.StreamHandler())
+
+    main_logger = logging.getLogger("inactivity_monitor_main")
+     # Add a dummy component_id to the logger's extra, so the format string doesn't break
+    main_logger = logging.LoggerAdapter(main_logger, {"component_id": "main"})
+   
+    main_logger.info("Initializing InactivityMonitorWorker...")
+
+    worker = InactivityMonitorWorker()
 
     try:
-        asyncio.run(main_loop())
+        asyncio.run(worker.run())
     except KeyboardInterrupt:
-        logger.info("Inactivity monitor worker interrupted by user (KeyboardInterrupt).")
+        main_logger.info("InactivityMonitorWorker interrupted by user (KeyboardInterrupt).")
+        # worker.run() handles graceful shutdown via signals.
     except Exception as e:
-        logger.critical(f"Inactivity monitor worker failed to start or run: {e}", exc_info=True)
+        main_logger.critical(f"InactivityMonitorWorker failed to start or run: {e}", exc_info=True)
     finally:
-        logger.info("Inactivity monitor worker application finished.")
+        main_logger.info("InactivityMonitorWorker application finished.")
 

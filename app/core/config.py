@@ -1,4 +1,5 @@
 import os
+from typing import Optional # Added Optional
 from dotenv import load_dotenv
 from pydantic import SecretStr # Import SecretStr
 
@@ -43,6 +44,7 @@ class Settings:
     # Agent Runner Configuration
     AGENT_RUNNER_SCRIPT_NAME: str = "runner_main.py" # Имя файла скрипта
     AGENT_RUNNER_MODULE_PATH: str = "app.agent_runner.runner_main" # Путь для запуска через python -m
+    AGENT_RUNNER_HEARTBEAT_INTERVAL: float = float(os.getenv("AGENT_RUNNER_HEARTBEAT_INTERVAL", "10.0")) # seconds, for AgentRunner status updates
     
     # Полный путь к скрипту, если он нужен (например, для прямого запуска не как модуля)
     # Собирается относительно текущего файла config.py
@@ -73,6 +75,9 @@ class Settings:
     # Inactivity Monitor Worker Configuration (новые настройки)
     AGENT_INACTIVITY_TIMEOUT: int = int(os.getenv("AGENT_INACTIVITY_TIMEOUT", "1800")) # seconds (30 minutes)
     AGENT_INACTIVITY_CHECK_INTERVAL: int = int(os.getenv("AGENT_INACTIVITY_CHECK_INTERVAL", "60")) # seconds (1 minute)
+
+    # Telegram Integration Specific (может быть вынесено в настройки интеграции, но для примера здесь)
+    TELEGRAM_BOT_REDIS_PUBSUB_URL: Optional[str] = os.getenv("TELEGRAM_BOT_REDIS_PUBSUB_URL", None) # Specific Redis for Telegram bot Pub/Sub, if different
 
 settings = Settings()
 
