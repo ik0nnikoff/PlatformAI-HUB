@@ -13,8 +13,21 @@ logger = logging.getLogger(__name__)
 
 class BaseWorker(RunnableComponent, StatusUpdater, ABC):
     """
-    Abstract base class for workers.
-    Combines RunnableComponent lifecycle with StatusUpdater capabilities.
+    Абстрактный базовый класс для воркеров.
+
+    Объединяет жизненный цикл `RunnableComponent` с возможностями `StatusUpdater`.
+    Предоставляет общую структуру для создания воркеров, которые могут выполняться
+    как отдельные компоненты и сообщать о своем статусе в Redis.
+
+    Атрибуты:
+        _component_id (str): Уникальный идентификатор воркера.
+        _status_key_prefix (str): Префикс для ключей статуса в Redis.
+
+    Методы:
+        setup(): Инициализирует `StatusUpdater` и устанавливает начальный статус.
+        cleanup(): Помечает воркер как остановленный и очищает ресурсы `StatusUpdater`.
+        run_loop(): Абстрактный метод для основного цикла работы воркера (должен быть
+                    реализован в дочерних классах).
     """
     def __init__(self, component_id: str, status_key_prefix: str = "worker_status:"): # Added colon for consistency
         RunnableComponent.__init__(self) 
@@ -27,8 +40,10 @@ class BaseWorker(RunnableComponent, StatusUpdater, ABC):
 
     async def setup(self):
         """
-        Concrete implementation of RunnableComponent's setup.
-        Initializes StatusUpdater and sets initial status.
+        Конкретная реализация метода `setup` из `RunnableComponent`.
+
+        Инициализирует `StatusUpdater` для возможности обновления статуса воркера в Redis.
+        Логгирует начало и завершение процесса настройки.
         """
         self.logger.info(f"[{self._component_id}] Worker setup started.")
         # _component_id and _status_key_prefix are already set on the instance.
@@ -38,8 +53,12 @@ class BaseWorker(RunnableComponent, StatusUpdater, ABC):
 
     async def cleanup(self):
         """
-        Concrete implementation of RunnableComponent's cleanup.
-        Marks worker as stopped and cleans up StatusUpdater (and RedisClientManager).
+        Конкретная реализация метода `cleanup` из `RunnableComponent`.
+
+        Помечает воркер как остановленный с причиной "Worker cleanup".
+        Затем вызывает `cleanup_status_updater` для закрытия соединения с Redis
+        и опционального удаления ключа статуса из Redis.
+        Логгирует начало и завершение процесса очистки.
         """
         self.logger.info(f"[self._component_id] Worker cleanup started.")
         await self.mark_as_stopped(reason="Worker cleanup")
@@ -54,7 +73,23 @@ class BaseWorker(RunnableComponent, StatusUpdater, ABC):
 
 class QueueWorker(BaseWorker):
     """
-    A worker that processes tasks from one or more Redis queues.
+    Воркер, который обрабатывает задачи из одной или нескольких очередей Redis.
+
+    Предназначен для использования в таких воркерах, как `history_saver_worker`
+    и `token_usage_worker`, которые должны извлекать и обрабатывать сообщения
+    из списков Redis.
+
+    Атрибуты:
+        queue_names (List[str]): Список имен очередей Redis для прослушивания.
+        queue_names_str (str): Строковое представление `queue_names` для логгирования.
+        process_timeout (float): Максимальное время (в секундах) на обработку одного сообщения.
+        redis_block_timeout (int): Таймаут (в секундах) для блокирующей операции `BLPOP` из Redis.
+
+    Методы:
+        setup(): Выполняет базовую настройку и устанавливает начальный статус "IDLE".
+        run_loop(): Основной цикл, который непрерывно слушает очереди Redis и обрабатывает сообщения.
+        process_message(message_data): Абстрактный метод для обработки одного сообщения (должен
+                                       быть реализован в дочерних классах).
     """
     def __init__(self, 
                  component_id: str, 
@@ -70,13 +105,28 @@ class QueueWorker(BaseWorker):
         self.logger.info(f"QueueWorker [{self._component_id}] initialized for queues: {self.queue_names_str}")
 
     async def setup(self):
+        """
+        Выполняет настройку базового воркера (`super().setup()`), затем логгирует
+        информацию о прослушиваемых очередях и устанавливает начальный статус
+        воркера в "IDLE" с указанием этих очередей.
+        """
         await super().setup()
         self.logger.info(f"[{self._component_id}] Listening to Redis queues: {self.queue_names_str}")
         await self.set_status("IDLE", {"listening_on": self.queue_names_str})
 
     async def run_loop(self):
         """
-        Continuously listens to the Redis queue(s) and processes messages.
+        Основной цикл работы воркера очередей.
+
+        Непрерывно слушает указанные очереди Redis с использованием `BLPOP`.
+        При получении сообщения, декодирует его (предполагается JSON), а затем
+        вызывает `process_message` для его обработки с установленным таймаутом.
+        Обновляет статус воркера ("LISTENING", "PROCESSING", "IDLE", "ERROR")
+        в зависимости от текущей операции и результата обработки.
+        Обрабатывает различные исключения, включая ошибки декодирования JSON,
+        таймауты обработки и другие непредвиденные ошибки.
+        Цикл продолжается до тех пор, пока флаг `self._running` (из `RunnableComponent`)
+        установлен в `True`.
         """
         self.logger.info(f"[{self._component_id}] Starting queue listening loop for {self.queue_names_str}.")
         await self.mark_as_running()
@@ -145,15 +195,33 @@ class QueueWorker(BaseWorker):
     @abstractmethod
     async def process_message(self, message_data: Dict[str, Any]) -> None:
         """
-        Process a single message from the queue.
-        This method must be implemented by subclasses.
+        Абстрактный метод для обработки одного сообщения из очереди.
+
+        Этот метод должен быть реализован в дочерних классах для выполнения
+        специфической логики обработки полученных данных.
+
+        Args:
+            message_data (Dict[str, Any]): Данные сообщения, извлеченные из очереди
+                                           и декодированные из JSON.
         """
         pass
 
 
 class ScheduledTaskWorker(BaseWorker):
     """
-    A worker that executes a task periodically.
+    Воркер, который периодически выполняет определенную задачу.
+
+    Предназначен для таких задач, как `inactivity_monitor_worker`, которые должны
+    выполняться через регулярные промежутки времени.
+
+    Атрибуты:
+        interval_seconds (float): Интервал в секундах между выполнениями задачи.
+
+    Методы:
+        setup(): Выполняет базовую настройку и устанавливает начальный статус "IDLE".
+        run_loop(): Основной цикл, который периодически выполняет `perform_task`.
+        perform_task(): Абстрактный метод для выполнения запланированной задачи (должен
+                        быть реализован в дочерних классах).
     """
     def __init__(self, 
                  component_id: str, 
@@ -166,13 +234,26 @@ class ScheduledTaskWorker(BaseWorker):
         self.logger.info(f"ScheduledTaskWorker [{self._component_id}] initialized with interval: {self.interval_seconds}s")
 
     async def setup(self):
+        """
+        Выполняет настройку базового воркера (`super().setup()`), затем логгирует
+        информацию об интервале выполнения задачи и устанавливает начальный статус
+        воркера в "IDLE" с указанием этого интервала.
+        """
         await super().setup()
         self.logger.info(f"[{self._component_id}] Scheduled task interval: {self.interval_seconds} seconds.")
         await self.set_status("IDLE", {"interval_seconds": self.interval_seconds})
 
     async def run_loop(self):
         """
-        Periodically executes the scheduled task.
+        Основной цикл работы воркера запланированных задач.
+
+        Периодически выполняет метод `perform_task()` с заданным интервалом.
+        Ожидание интервала реализовано таким образом, чтобы быть отзывчивым
+        к запросам на завершение работы (проверяет `self._running` каждую секунду).
+        Обновляет статус воркера ("PENDING_TASK", "RUNNING_TASK", "IDLE", "ERROR")
+        в зависимости от текущей фазы выполнения задачи.
+        Обрабатывает исключения, которые могут возникнуть во время выполнения `perform_task()`.
+        Цикл продолжается до тех пор, пока флаг `self._running` установлен в `True`.
         """
         self.logger.info(f"[{self._component_id}] Starting scheduled task loop with interval {self.interval_seconds}s.")
         await self.mark_as_running()
@@ -212,7 +293,9 @@ class ScheduledTaskWorker(BaseWorker):
     @abstractmethod
     async def perform_task(self) -> None:
         """
-        Perform the scheduled task.
-        This method must be implemented by subclasses.
+        Абстрактный метод для выполнения запланированной задачи.
+
+        Этот метод должен быть реализован в дочерних классах для выполнения
+        специфической логики периодически выполняемой задачи.
         """
         pass

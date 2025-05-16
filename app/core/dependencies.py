@@ -1,11 +1,11 @@
 import logging
 from typing import AsyncGenerator
 
-import redis.asyncio as redis # Используем redis.asyncio для асинхронного клиента
+import redis.asyncio as redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import SessionLocal
-from app.services.redis_service import get_redis_pool # Будет создано в redis_service.py
+from app.services.redis_service import get_redis_pool
 
 logger = logging.getLogger(__name__)
 

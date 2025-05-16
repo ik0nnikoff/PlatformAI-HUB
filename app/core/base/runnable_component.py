@@ -6,8 +6,34 @@ from typing import Optional, Set
 
 class RunnableComponent(ABC):
     """
-    Abstract base class for components that can be run and managed.
-    Shutdown should be initiated by calling initiate_shutdown().
+    Абстрактный базовый класс для компонентов, которыми можно управлять и запускать.
+
+    Этот класс предоставляет стандартизированный жизненный цикл для компонентов,
+    включая этапы настройки (`setup`), основного цикла выполнения (`run_loop`)
+    и очистки (`cleanup`).
+
+    Завершение работы компонента должно инициироваться вызовом метода
+    `initiate_shutdown()`. Этот метод обеспечивает корректное завершение
+    основного цикла и освобождение ресурсов.
+
+    Атрибуты:
+        logger (logging.Logger): Логгер для компонента.
+        _running (bool): Флаг, указывающий, активен ли основной цикл компонента.
+        _main_task (Optional[asyncio.Task]): Задача asyncio для основного цикла.
+        _shutdown_initiated (bool): Флаг, указывающий, был ли инициирован процесс завершения работы.
+
+    Методы:
+        setup(): Абстрактный метод для подготовки ресурсов компонента.
+                 Должен быть реализован в дочерних классах.
+        run_loop(): Абстрактный метод, представляющий основной цикл работы компонента.
+                    Должен быть реализован в дочерних классах.
+        cleanup(): Абстрактный метод для освобождения ресурсов компонента.
+                   Должен быть реализован в дочерних классах.
+        initiate_shutdown(): Инициирует корректное завершение работы компонента.
+                             Устанавливает флаг `_running` в False и отменяет основную задачу.
+                             Безопасен для многократного вызова.
+        run(): Запускает полный жизненный цикл компонента: настройка, выполнение основного цикла и очистка.
+               Управляет состоянием выполнения и обрабатывает исключения.
     """
     def __init__(self, logger: Optional[logging.Logger] = None):
         self.logger = logger if logger else logging.getLogger(self.__class__.__name__)
@@ -17,24 +43,25 @@ class RunnableComponent(ABC):
 
     @abstractmethod
     async def setup(self) -> None:
-        """Prepare resources for the component to run."""
+        """Подготавливает ресурсы, необходимые для работы компонента."""
         pass # pragma: no cover
 
     @abstractmethod
     async def run_loop(self) -> None:
-        """The main operational loop of the component."""
+        """Основной цикл операций компонента."""
         pass # pragma: no cover
 
     @abstractmethod
     async def cleanup(self) -> None:
-        """Clean up resources used by the component."""
+        """Освобождает ресурсы, используемые компонентом."""
         pass # pragma: no cover
 
     def initiate_shutdown(self) -> None:
         """
-        Initiates graceful shutdown of the component.
-        Sets the _running flag to False and cancels the main task.
-        This method is designed to be callable multiple times safely.
+        Инициирует корректное завершение работы компонента.
+
+        Устанавливает флаг `_running` в `False` и отменяет основную задачу (`_main_task`).
+        Этот метод разработан таким образом, чтобы его можно было безопасно вызывать несколько раз.
         """
         if self._shutdown_initiated:
             self.logger.info(f"Shutdown already initiated for {self.__class__.__name__} (instance: {id(self)}).")
@@ -57,6 +84,14 @@ class RunnableComponent(ABC):
             self.logger.info(f"No active main task to cancel for {self.__class__.__name__} (instance: {id(self)}). Component might not have fully started or already stopped.")
 
     async def run(self) -> None:
+        """
+        Запускает полный жизненный цикл компонента.
+
+        Выполняет последовательно `setup()`, `run_loop()` и `cleanup()`.
+        Управляет состоянием выполнения, обрабатывает исключения и управляет флагами `_running` и `_shutdown_initiated`.
+        Если `run()` вызывается для уже запущенного компонента, вызов будет проигнорирован.
+        При возникновении необработанной ошибки во время выполнения, инициирует завершение работы.
+        """
         if self._running: # Basic check if run is called again on an already running instance
             self.logger.warning(f"Component {self.__class__.__name__} (instance: {id(self)}) run() called while already considered running. Ignoring.")
             return

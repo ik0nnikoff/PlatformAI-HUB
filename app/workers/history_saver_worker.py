@@ -1,9 +1,8 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Any, Callable, Optional # Added Optional
-from sqlalchemy.ext.asyncio import AsyncSession # Added AsyncSession
-# Removed signal, json, redis.asyncio, RedisConnectionError as they are handled by base or not directly used by the class logic
+from typing import Dict, Any, Callable, Optional
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from pydantic import ValidationError
 
@@ -13,19 +12,22 @@ from app.db.crud.chat_crud import db_add_chat_message
 from app.api.schemas.chat_schemas import ChatMessageCreate, SenderType
 from app.workers.base_worker import QueueWorker
 
-# Configure logging - This might be handled by a central logging config now.
-# If app.core.logging_config.setup_logging() is called at entry, this basicConfig might be redundant or even conflict.
-# For worker-specific logger, it's better to get it via logging.getLogger(__name__)
-# and rely on root configuration.
-# logging.basicConfig(
-# level=settings.LOG_LEVEL,
-# format='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
-# )
-# logger = logging.getLogger(__name__) # Logger is now part of BaseWorker/RunnableComponent
-
 class HistorySaverWorker(QueueWorker):
     """
-    Worker to save chat history messages from a Redis queue to the database.
+    Воркер для сохранения сообщений истории чата из очереди Redis в базу данных.
+
+    Этот воркер наследуется от `QueueWorker` и предназначен для извлечения сообщений
+    из определенной очереди Redis (заданной в `settings.REDIS_HISTORY_QUEUE_NAME`)
+    и их последующего сохранения в базе данных PostgreSQL с использованием SQLAlchemy.
+
+    Атрибуты:
+        async_session_factory (Optional[Callable[[], AsyncSession]]): Фабрика для создания
+            асинхронных сессий базы данных. Инициализируется в методе `setup`.
+
+    Методы:
+        setup(): Инициализирует фабрику асинхронных сессий базы данных.
+        process_message(message_data): Обрабатывает одно сообщение из очереди. Валидирует
+            данные сообщения чата и сохраняет их в базу данных.
     """
     def __init__(self):
         super().__init__(
@@ -33,12 +35,14 @@ class HistorySaverWorker(QueueWorker):
             queue_names=[settings.REDIS_HISTORY_QUEUE_NAME],
             status_key_prefix="worker_status:history_saver:" # Specific status key prefix
         )
-        # self.async_session_factory will be initialized in setup
-        self.async_session_factory: Optional[Callable[[], AsyncSession]] = None # Added Optional and type hint
+        self.async_session_factory: Optional[Callable[[], AsyncSession]] = None
 
     async def setup(self):
         """
-        Initializes the database session factory.
+        Инициализирует фабрику асинхронных сессий базы данных.
+
+        Вызывает `super().setup()` для выполнения базовой настройки воркера,
+        а затем получает и сохраняет фабрику сессий из `get_async_session_factory()`.
         """
         await super().setup()
         self.async_session_factory = get_async_session_factory()
@@ -46,8 +50,24 @@ class HistorySaverWorker(QueueWorker):
 
     async def process_message(self, message_data: Dict[str, Any]) -> None:
         """
-        Validates chat message data and saves it to the database.
-        This method is called by the parent QueueWorker for each message from the queue.
+        Валидирует данные сообщения чата и сохраняет их в базу данных.
+
+        Этот метод вызывается родительским классом `QueueWorker` для каждого
+        сообщения, полученного из очереди Redis.
+
+        Процесс обработки включает:
+        1. Проверку инициализации фабрики сессий.
+        2. Преобразование временной метки из строки в объект `datetime` (если необходимо),
+           присваивая UTC, если часовой пояс отсутствует, или текущее время UTC при ошибке парсинга.
+        3. Валидацию `sender_type`, приводя его к enum `SenderType` или устанавливая
+           значение по умолчанию `SenderType.USER` при невалидном значении.
+        4. Валидацию данных сообщения с использованием схемы `ChatMessageCreate`.
+        5. Создание сессии базы данных и вызов `db_add_chat_message` для сохранения сообщения.
+        6. Логгирование результатов операции или возникших ошибок.
+
+        Args:
+            message_data (Dict[str, Any]): Словарь с данными сообщения, извлеченный
+                                           из очереди Redis.
         """
         self.logger.debug(f"[{self._component_id}] Received chat history data: {message_data}")
 
@@ -113,22 +133,12 @@ class HistorySaverWorker(QueueWorker):
 # Redis connection and message polling are handled by QueueWorker.
 
 if __name__ == "__main__":
-    # It's good practice to ensure logging is configured before anything else.
-    # If you have a central logging setup (e.g., app.core.logging_config.setup_logging()),
-    # ensure it's called here or in an even earlier entry point.
-    # For simplicity, if not centrally configured, basicConfig can be set here.
-    # However, RunnableComponent and BaseWorker already get a logger.
-    # This basicConfig would apply to the root logger if no handlers are configured.
     logging.basicConfig(
         level=settings.LOG_LEVEL,
         format='%(asctime)s - %(levelname)s - %(name)s - [%(component_id)s] - %(message)s'
     )
     
-    # Create a preliminary logger for the __main__ context
     main_logger = logging.getLogger("history_saver_worker_main")
-    # Add a filter to make component_id available for the format string if needed,
-    # or ensure the worker's logger is used for worker-specific messages.
-    # For this main_logger, component_id might not be directly applicable unless set.
 
     main_logger.info("Initializing HistorySaverWorker...")
     

@@ -71,7 +71,28 @@ def convert_db_history_to_langchain_static(db_messages: List[ChatMessageDB], log
 
 class AgentRunner(RunnableComponent, StatusUpdater):
     """
-    Manages the lifecycle and execution of a single agent instance.
+    Управляет жизненным циклом и выполнением одного экземпляра агента.
+
+    Отвечает за:
+    - Загрузку конфигурации агента.
+    - Создание и запуск приложения LangGraph.
+    - Прослушивание команд через Redis Pub/Sub.
+    - Обработку входящих сообщений и вызов агента.
+    - Сохранение истории чата и данных об использовании токенов.
+    - Публикацию ответов агента.
+    - Обновление статуса агента в Redis.
+    - Корректное завершение работы и очистку ресурсов.
+
+    Атрибуты:
+        agent_id (str): Уникальный идентификатор агента.
+        config_url (str): URL для загрузки конфигурации агента.
+        db_session_factory (Optional[async_sessionmaker[AsyncSession]]): Фабрика для создания асинхронных сессий БД.
+        logger (logging.LoggerAdapter): Адаптер логгера для журналирования.
+        agent_config (Optional[Dict]): Загруженная конфигурация агента.
+        agent_app (Optional[Any]): Экземпляр приложения LangGraph агента.
+        redis_pubsub_client (Optional[redis.Redis]): Клиент Redis для Pub/Sub, используемый для получения команд.
+        pubsub_handler_task (Optional[asyncio.Task]): Задача asyncio, выполняющая прослушивание Pub/Sub.
+        static_state_config (Optional[Dict]): Статическая конфигурация состояния, извлеченная из конфигурации агента.
     """
     def __init__(self, 
                  agent_id: str, 
@@ -99,7 +120,13 @@ class AgentRunner(RunnableComponent, StatusUpdater):
         self.logger.info(f"AgentRunner for {self.agent_id} initialized. Config URL: {self.config_url}. PubSub will use REDIS_URL from settings: {settings.REDIS_URL}")
 
     async def _initialize_pubsub_client(self):
-        """Initializes and pings the Redis Pub/Sub client using settings.REDIS_URL."""
+        """
+        Инициализирует и проверяет соединение с клиентом Redis Pub/Sub.
+
+        Использует `settings.REDIS_URL` для подключения. В случае ошибки
+        соединения или другой неожиданной ошибки, логирует проблему,
+        устанавливает `self.redis_pubsub_client` в `None` и пробрасывает исключение.
+        """
         redis_url_to_use = str(settings.REDIS_URL)
         try:
             self.redis_pubsub_client = redis.from_url(redis_url_to_use)
@@ -116,11 +143,21 @@ class AgentRunner(RunnableComponent, StatusUpdater):
 
     async def setup(self) -> None:
         """
-        Sets up the AgentRunner:
-        - Initializes StatusUpdater and Redis connection for status.
-        - Fetches agent configuration.
-        - Creates the LangGraph agent application.
-        - Initializes Redis Pub/Sub client for command listening.
+        Настраивает AgentRunner перед запуском основного цикла.
+
+        Выполняет следующие шаги:
+        1. Инициализирует `StatusUpdater` для обновления статуса агента в Redis.
+        2. Устанавливает статус агента "инициализация".
+        3. Загружает конфигурацию агента по `config_url`.
+        4. Если конфигурация не загружена, устанавливает статус "ошибка" и вызывает исключение.
+        5. Создает приложение LangGraph агента на основе конфигурации.
+        6. Инициализирует выделенный клиент Redis для прослушивания команд через Pub/Sub.
+        7. Если инициализация Pub/Sub клиента не удалась, пробрасывает исключение.
+        8. Устанавливает статус агента "запущен" с указанием PID процесса.
+
+        В случае любой ошибки во время настройки, логирует ошибку, пытается
+        установить статус "ошибка" в Redis и пробрасывает исключение дальше,
+        чтобы `RunnableComponent` мог корректно обработать его и вызвать `cleanup`.
         """
         self.logger.info(f"[{self.agent_id}] Starting setup...")
         try:
@@ -161,15 +198,34 @@ class AgentRunner(RunnableComponent, StatusUpdater):
             raise
 
     async def _handle_pubsub_message(self, message: Dict[str, Any]):
-        """Handles incoming messages from Redis Pub/Sub."""
-        # ... (Implementation of message handling as in the original runner_main.py's control_listener)
-        # This will involve:
-        # - Parsing the message
-        # - Getting chat history (convert_db_history_to_langchain_static)
-        # - Invoking self.agent_app.ainvoke
-        # - Saving response and token usage to DB
-        # - Publishing response back to Redis
-        # - Updating last_active_time
+        """
+        Обрабатывает входящее сообщение от Redis Pub/Sub.
+
+        Этапы обработки:
+        1. Декодирует данные сообщения (ожидается JSON).
+        2. Извлекает `chat_id`, `text` (пользовательский ввод) и `interaction_id`.
+        3. Если обязательные поля отсутствуют, логирует предупреждение и завершает обработку.
+        4. Определяет глубину истории контекста на основе конфигурации агента.
+        5. Если включена работа с БД, сохраняет сообщение пользователя в БД.
+        6. Формирует входные данные для графа LangGraph, включая пользовательский ввод и статические параметры
+           (system_prompt, temperature, model_id, provider) из `self.static_state_config`.
+        7. Асинхронно вызывает основной поток (stream) агента `self.agent_app.astream`.
+        8. Обрабатывает поток событий от агента:
+            - Извлекает текстовое содержимое ответа агента (AIMessage).
+            - Извлекает данные об использовании токенов (`TokenUsageData`) из метаданных сообщения или напрямую из события.
+        9. Если включена работа с БД и получен ответ от агента, сохраняет сообщение агента в БД.
+        10. Если доступны данные об использовании токенов, формирует полезную нагрузку и отправляет ее
+            в очередь Redis (`settings.REDIS_TOKEN_USAGE_QUEUE_NAME`) для обработки `TokenUsageWorker`.
+        11. Публикует ответ агента в соответствующий канал Redis (`agent:{self.agent_id}:output`).
+        12. Обновляет время последней активности агента.
+
+        В случае ошибок (например, JSONDecodeError или других исключений) логирует ошибку
+        и, если возможно, публикует уведомление об ошибке в канал ответов.
+
+        Args:
+            message (Dict[str, Any]): Сообщение, полученное из Redis Pub/Sub.
+                                      Ожидается, что `message['data']` содержит JSON-строку.
+        """
         self.logger.debug(f"[{self.agent_id}] Received PubSub message: {message}")
         try:
             data_str = message.get('data')
@@ -399,7 +455,21 @@ class AgentRunner(RunnableComponent, StatusUpdater):
 
 
     async def _pubsub_listener_loop(self):
-        """Listens to Redis Pub/Sub for incoming commands."""
+        """
+        Асинхронный цикл для прослушивания сообщений из Redis Pub/Sub.
+
+        Подписывается на канал команд агента (`agent:{self.agent_id}:input`).
+        В бесконечном цикле (пока `self._running` истинно):
+        - Ожидает новое сообщение с таймаутом, чтобы периодически проверять флаг `self._running`.
+        - Если сообщение получено, вызывает `self._handle_pubsub_message` для его обработки.
+        - Использует короткую паузу `asyncio.sleep(0.01)` для предотвращения загрузки CPU в отсутствие сообщений.
+        - Обрабатывает `redis_exceptions.ConnectionError` (логирует и ожидает перед повторной попыткой).
+        - Обрабатывает `asyncio.CancelledError` для корректного завершения цикла.
+        - Логирует другие исключения и продолжает работу после небольшой паузы.
+
+        При завершении цикла (нормальном или из-за исключения) отписывается от канала
+        и закрывает объект `pubsub`.
+        """
         if not self.redis_pubsub_client:
             self.logger.error(f"[{self.agent_id}] PubSub client not initialized. Cannot start listener loop.")
             return
@@ -446,8 +516,27 @@ class AgentRunner(RunnableComponent, StatusUpdater):
 
     async def run_loop(self) -> None:
         """
-        The main operational loop for the AgentRunner.
-        Starts and manages the Pub/Sub listener task.
+        Основной рабочий цикл AgentRunner.
+
+        Этот метод запускается после успешного `setup`.
+        Он выполняет следующие действия:
+        1. Проверяет, инициализирован ли `redis_pubsub_client`. Если нет, останавливает выполнение.
+        2. Создает и запускает задачу `_pubsub_listener_loop` для прослушивания команд из Redis.
+        3. Входит в цикл `while self._running`:
+            - Проверяет, не завершилась ли задача `pubsub_handler_task` (прослушиватель).
+                - Если завершилась, пытается получить результат задачи (`.result()`), чтобы выявить возможные ошибки.
+                - Логирует `asyncio.CancelledError` или другие исключения, если задача была отменена или завершилась с ошибкой.
+                - Устанавливает `self._running = False`, чтобы остановить агент.
+            - Периодически обновляет время последней активности агента (`update_last_active_time`).
+            - Приостанавливает выполнение на `settings.AGENT_RUNNER_HEARTBEAT_INTERVAL`.
+        4. Если основной цикл завершается (например, из-за установки `self._running = False` внешним сигналом):
+            - Если задача `pubsub_handler_task` все еще активна, отменяет ее.
+            - Ожидает завершения задачи `pubsub_handler_task`, обрабатывая возможные `asyncio.CancelledError`
+              или другие исключения при ожидании.
+        5. Обрабатывает `asyncio.CancelledError` для самого `run_loop` (например, если весь компонент останавливается):
+            - Если задача `pubsub_handler_task` активна, отменяет ее.
+            - Ожидает завершения задачи `pubsub_handler_task`, обрабатывая исключения.
+        6. Логирует выход из `run_loop`.
         """
         self.logger.info(f"[{self.agent_id}] Starting run_loop...")
         
@@ -465,12 +554,11 @@ class AgentRunner(RunnableComponent, StatusUpdater):
                     # If the listener task stopped unexpectedly, log it and potentially stop the agent.
                     try:
                         self.pubsub_handler_task.result() # Raise exception if task failed
-                        self.logger.info(f"[{self.agent_id}] PubSub listener task finished gracefully.")
+
                     except asyncio.CancelledError:
-                         self.logger.info(f"[{self.agent_id}] PubSub listener task was cancelled.")
+                        self.logger.info(f"[{self.agent_id}] PubSub listener task was found cancelled unexpectedly in run_loop.") # MODIFIED
                     except Exception as e:
-                        self.logger.error(f"[{self.agent_id}] PubSub listener task failed: {e}", exc_info=True)
-                        await self.mark_as_error(f"PubSub listener failed: {e}")
+                        self.logger.error(f"[{self.agent_id}] PubSub listener task failed unexpectedly in run_loop: {e}", exc_info=True) # MODIFIED
                     
                     self._running = False # Stop the agent if listener stops
                     break 
@@ -483,27 +571,47 @@ class AgentRunner(RunnableComponent, StatusUpdater):
                 self.logger.info(f"[{self.agent_id}] run_loop stopping, cancelling PubSub listener task...")
                 self.pubsub_handler_task.cancel()
                 try:
-                    await self.pubsub_handler_task
+                    await self.pubsub_handler_task # Ensure cancellation is processed
                 except asyncio.CancelledError:
-                    self.logger.info(f"[{self.agent_id}] PubSub listener task successfully cancelled during run_loop stop.")
-                except Exception as e: # Should not happen if cancellation is handled in _pubsub_listener_loop
-                    self.logger.error(f"[{self.agent_id}] Unexpected error waiting for PubSub listener task cancellation: {e}", exc_info=True)
+                    self.logger.info(f"[{self.agent_id}] PubSub listener task successfully cancelled after run_loop stop.") # MODIFIED
+                except Exception as e:                    
+                    self.logger.error(f"[{self.agent_id}] Exception while awaiting PubSub listener task after run_loop stop: {e}", exc_info=True) # MODIFIED
 
         except asyncio.CancelledError:
             self.logger.info(f"[{self.agent_id}] run_loop was cancelled.")
             if self.pubsub_handler_task and not self.pubsub_handler_task.done():
+                self.logger.info(f"[{self.agent_id}] run_loop cancelled, cancelling PubSub listener task...") # ADDED
                 self.pubsub_handler_task.cancel()
                 # Wait for it to actually cancel
                 try:
-                    await self.pubsub_handler_task
+                    await self.pubsub_handler_task # ADDED
                 except asyncio.CancelledError:
-                    self.logger.info(f"[{self.agent_id}] PubSub listener task successfully cancelled during run_loop cancellation.")
+                    self.logger.info(f"[{self.agent_id}] PubSub listener task successfully cancelled after run_loop cancellation.") # MODIFIED
+                except Exception as e: # ADDED
+                    self.logger.error(f"[{self.agent_id}] Exception while awaiting PubSub listener task after run_loop cancellation: {e}", exc_info=True) # ADDED
         finally:
             self.logger.info(f"[{self.agent_id}] Exiting run_loop.")
 
 
     async def cleanup(self) -> None:
-        """Cleans up resources used by the AgentRunner."""
+        """
+        Очищает ресурсы, используемые AgentRunner.
+
+        Выполняется при остановке компонента (штатной или из-за ошибки).
+        Этапы очистки:
+        1. Если задача `pubsub_handler_task` (прослушиватель Pub/Sub) активна, отменяет ее.
+        2. Ожидает завершения `pubsub_handler_task`, обрабатывая `asyncio.CancelledError`
+           или другие исключения, которые могут возникнуть при ожидании.
+        3. Устанавливает `self.pubsub_handler_task = None`.
+        4. Если `self.redis_pubsub_client` (клиент Redis для команд) существует:
+            - Пытается закрыть соединение с клиентом Redis.
+            - Логирует успешное закрытие или ошибку при закрытии.
+            - Устанавливает `self.redis_pubsub_client = None`.
+        5. Устанавливает статус агента "остановлен" в Redis через `StatusUpdater`.
+        6. Вызывает `cleanup_status_updater` для очистки ресурсов, используемых `StatusUpdater`
+           (например, его собственного клиента Redis). По умолчанию статус "остановлен" не удаляется из Redis.
+        7. Логирует завершение очистки.
+        """
         self.logger.info(f"[{self.agent_id}] Starting cleanup...")
         
         # Stop the Pub/Sub listener task if it's running
@@ -511,23 +619,21 @@ class AgentRunner(RunnableComponent, StatusUpdater):
             self.logger.info(f"[{self.agent_id}] Cancelling PubSub listener task during cleanup...")
             self.pubsub_handler_task.cancel()
             try:
-                await self.pubsub_handler_task
+                await self.pubsub_handler_task # Ensure cancellation is processed
             except asyncio.CancelledError:
-                self.logger.info(f"[{self.agent_id}] PubSub listener task successfully cancelled during cleanup.")
+                self.logger.info(f"[{self.agent_id}] PubSub listener task successfully cancelled during cleanup.") # MODIFIED
             except Exception as e:
-                 self.logger.error(f"[{self.agent_id}] Error during PubSub listener task cancellation in cleanup: {e}", exc_info=True)
+                 self.logger.error(f"[{self.agent_id}] Exception while awaiting PubSub listener task during cleanup: {e}", exc_info=True) # MODIFIED
         self.pubsub_handler_task = None
 
         # Close the dedicated Pub/Sub Redis client
         if self.redis_pubsub_client:
-            try:
+            try: # ADDED
                 await self.redis_pubsub_client.close()
-                # await self.redis_pubsub_client.connection_pool.disconnect() # If needed
-                self.logger.info(f"[{self.agent_id}] Redis Pub/Sub client closed.")
-            except Exception as e:
-                self.logger.error(f"[{self.agent_id}] Error closing Redis Pub/Sub client: {e}", exc_info=True)
-            finally:
-                self.redis_pubsub_client = None
+                self.logger.info(f"[{self.agent_id}] Closed dedicated Redis Pub/Sub client.") # ADDED
+            except Exception as e_close_redis: # ADDED
+                self.logger.error(f"[{self.agent_id}] Error closing dedicated Redis Pub/Sub client: {e_close_redis}", exc_info=True) # ADDED
+            self.redis_pubsub_client = None # Ensure it's None after attempting to close
         
         # Mark as stopped in Redis (via StatusUpdater)
         # Decide if status should be cleared from Redis on normal shutdown.

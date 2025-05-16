@@ -13,14 +13,42 @@ module_logger = logging.getLogger(__name__) # Renamed for clarity
 
 class StatusUpdater(RedisClientManager, ABC):
     """
-    Abstract base class/mixin for components that need to update their status in Redis.
-    
-    Subclasses must define:
-    - _status_key_prefix: str (e.g., "agent_status:")
-    - _component_id: str (e.g., agent_id or f"{agent_id}:{integration_type}")
-    
-    And ensure RedisClientManager is properly initialized (e.g., by calling super().__init__()
-    and await self.setup_redis_client()).
+    Абстрактный базовый класс или миксин для компонентов, которым необходимо
+    обновлять свой статус в Redis.
+
+    Этот класс предоставляет общую функциональность для взаимодействия с Redis
+    с целью хранения и обновления информации о состоянии компонента. Он наследуется
+    от `RedisClientManager` для управления соединением с Redis.
+
+    Дочерние классы должны определить:
+    - `_status_key_prefix` (str): Префикс ключа Redis для статусов (например, "agent_status:").
+    - `_component_id` (str): Уникальный идентификатор компонента (например, ID агента
+      или f"{agent_id}:{integration_type}").
+
+    Также необходимо убедиться, что `RedisClientManager` правильно инициализирован
+    (например, вызовом `super().__init__()` и `await self.setup_redis_client()`
+    в методах инициализации и настройки дочернего класса).
+
+    Атрибуты:
+        _status_key_prefix (str): Префикс для ключа статуса в Redis.
+        _component_id (str): Идентификатор компонента.
+
+    Методы:
+        _get_effective_logger: Возвращает подходящий логгер (экземпляра или модуля).
+        _get_status_key: Формирует полный ключ Redis для статуса компонента.
+        update_status_in_redis: Обновляет статус компонента в Redis.
+        set_status: Устанавливает новый статус компонента с дополнительными деталями.
+        get_current_status_from_redis: Получает текущий статус компонента из Redis.
+        update_last_active_time: Обновляет время последней активности компонента.
+        clear_specific_fields_in_redis: Удаляет указанные поля из хеша статуса в Redis.
+        delete_status_key_from_redis: Удаляет весь ключ статуса компонента из Redis.
+        mark_as_initializing: Устанавливает статус "initializing".
+        mark_as_running: Устанавливает статус "running".
+        mark_as_stopped: Устанавливает статус "stopped".
+        mark_as_error: Устанавливает статус "error".
+        mark_as_completed: Устанавливает статус "completed".
+        setup_status_updater: Настраивает `StatusUpdater` (инициализация Redis).
+        cleanup_status_updater: Очищает ресурсы `StatusUpdater` (закрытие Redis, опциональное удаление статуса).
     """
 
     # These will be set by the concrete class, typically in its __init__
@@ -34,15 +62,22 @@ class StatusUpdater(RedisClientManager, ABC):
 
     def _get_effective_logger(self) -> logging.Logger:
         """
-        Returns the instance-specific logger if available and valid, 
-        otherwise falls back to the module-level logger.
+        Возвращает логгер, специфичный для экземпляра, если он доступен и валиден,
+        в противном случае возвращает логгер уровня модуля.
+
+        Это позволяет использовать более специфичный логгер, если он был настроен
+        в классе, использующем этот миксин (например, `RunnableComponent`), или
+        безопасно использовать логгер модуля по умолчанию.
+
+        Returns:
+            logging.Logger: Эффективный логгер для использования.
         """
         if hasattr(self, 'logger') and isinstance(getattr(self, 'logger'), (logging.Logger, logging.LoggerAdapter)):
             return getattr(self, 'logger')
         return module_logger
 
     def _get_status_key(self) -> str:
-        """Constructs the full Redis key for this component's status."""
+        """Формирует и возвращает полный ключ Redis для статуса этого компонента."""
         if not hasattr(self, '_status_key_prefix') or not hasattr(self, '_component_id'):
             raise ValueError("_status_key_prefix and _component_id must be set on the instance.")
         if not self._status_key_prefix or not self._component_id:
@@ -53,9 +88,15 @@ class StatusUpdater(RedisClientManager, ABC):
 
     async def update_status_in_redis(self, status_data: Dict[str, Any]):
         """
-        Updates the component's status in Redis using HSET.
-        Ensures 'last_updated_utc' is always included.
-        Converts all values to strings for Redis storage.
+        Асинхронно обновляет статус компонента в Redis, используя команду HSET.
+
+        Автоматически добавляет поле 'last_updated_utc' с текущим временем в формате ISO.
+        Все значения в `status_data` конвертируются в строки перед сохранением в Redis.
+        Если клиент Redis недоступен или `status_data` (после добавления `last_updated_utc`)
+        пуст, обновление не производится.
+
+        Args:
+            status_data (Dict[str, Any]): Словарь с данными статуса для обновления.
         """
         effective_logger = self._get_effective_logger()
         if not await self.is_redis_client_available():
@@ -80,7 +121,13 @@ class StatusUpdater(RedisClientManager, ABC):
 
     async def set_status(self, status_value: str, details: Optional[Dict[str, Any]] = None):
         """
-        Sets a new status for the component, optionally including other details.
+        Асинхронно устанавливает новый основной статус для компонента и опционально
+        добавляет другие детали в Redis.
+
+        Args:
+            status_value (str): Новое значение статуса (например, "running", "stopped").
+            details (Optional[Dict[str, Any]]): Словарь с дополнительными полями для сохранения
+                                               вместе со статусом.
         """
         effective_logger = self._get_effective_logger()
         update_payload = details.copy() if details else {}
@@ -89,7 +136,7 @@ class StatusUpdater(RedisClientManager, ABC):
         # effective_logger.info(f"Status for {getattr(self, '_component_id', 'UnknownComponent')} set to '{status_value}' with details: {details or {}}")
 
     async def get_current_status_from_redis(self) -> Dict[str, str]:
-        """Fetches all fields for the component's status key from Redis."""
+        """Асинхронно извлекает все поля для ключа статуса компонента из Redis."""
         effective_logger = self._get_effective_logger()
         if not await self.is_redis_client_available():
             effective_logger.error(f"Redis client not available. Cannot get status for {getattr(self, '_component_id', 'UnknownComponent')}.")
@@ -105,14 +152,20 @@ class StatusUpdater(RedisClientManager, ABC):
             return {}
 
     async def update_last_active_time(self, timestamp: Optional[float] = None):
-        """Updates the 'last_active' field in Redis for this component."""
+        """
+        Асинхронно обновляет поле 'last_active' в Redis для этого компонента.
+
+        Args:
+            timestamp (Optional[float]): Временная метка Unix для установки. Если None,
+                                       используется текущее время (`time.time()`).
+        """
         effective_logger = self._get_effective_logger()
         ts = timestamp if timestamp is not None else time.time()
         await self.update_status_in_redis({"last_active": str(ts)})
         effective_logger.debug(f"Updated last_active_time for {getattr(self, '_component_id', 'UnknownComponent')} to {ts}")
 
     async def clear_specific_fields_in_redis(self, fields: List[str]):
-        """Removes specified fields from the component's status hash in Redis."""
+        """Асинхронно удаляет указанные поля из хеша статуса компонента в Redis."""
         effective_logger = self._get_effective_logger()
         component_name = getattr(self, '_component_id', 'UnknownComponent')
         if not await self.is_redis_client_available() or not fields:
@@ -129,7 +182,7 @@ class StatusUpdater(RedisClientManager, ABC):
             effective_logger.error(f"Failed to clear fields in Redis for key {key}: {e}", exc_info=True)
             
     async def delete_status_key_from_redis(self):
-        """Deletes the entire Redis key for this component's status."""
+        """Асинхронно удаляет весь ключ Redis, связанный со статусом этого компонента."""
         effective_logger = self._get_effective_logger()
         component_name = getattr(self, '_component_id', 'UnknownComponent')
         if not await self.is_redis_client_available():
@@ -147,6 +200,15 @@ class StatusUpdater(RedisClientManager, ABC):
     # --- Convenience methods for common status updates ---
 
     async def mark_as_initializing(self, details: Optional[Dict[str, Any]] = None):
+        """
+        Асинхронно устанавливает статус компонента как 'initializing'.
+
+        Добавляет PID процесса и время начала попытки инициализации (`start_attempt_utc`)
+        в детали статуса.
+
+        Args:
+            details (Optional[Dict[str, Any]]): Дополнительные детали для сохранения.
+        """
         payload = details.copy() if details else {} # Ensure we don't modify the original dict
         payload.update({
             "pid": os.getpid() if hasattr(os, 'getpid') else None,
@@ -155,14 +217,30 @@ class StatusUpdater(RedisClientManager, ABC):
         await self.set_status("initializing", payload)
 
     async def mark_as_running(self, pid: Optional[int] = None, details: Optional[Dict[str, Any]] = None):
-        """Marks the component as 'running' with its PID and current time as last_active."""
+        """
+        Асинхронно помечает компонент как 'running'.
+
+        Сохраняет PID процесса и текущее время как 'last_active'.
+
+        Args:
+            pid (Optional[int]): Идентификатор процесса. Если None, используется os.getpid().
+            details (Optional[Dict[str, Any]]): Дополнительные детали для сохранения.
+        """
         payload = details.copy() if details else {}
         payload["pid"] = pid if pid is not None else (os.getpid() if hasattr(os, 'getpid') else None)
         payload["last_active"] = str(time.time())
         await self.set_status("running", payload)
 
     async def mark_as_stopped(self, reason: Optional[str] = None, details: Optional[Dict[str, Any]] = None):
-        """Marks the component as 'stopped', clearing PID and adding a reason if provided."""
+        """
+        Асинхронно помечает компонент как 'stopped'.
+
+        Очищает PID и другие связанные с запуском поля. Добавляет причину остановки, если указана.
+
+        Args:
+            reason (Optional[str]): Причина остановки.
+            details (Optional[Dict[str, Any]]): Дополнительные детали для сохранения.
+        """
         payload = details.copy() if details else {}
         if reason:
             payload["reason"] = reason
@@ -174,21 +252,42 @@ class StatusUpdater(RedisClientManager, ABC):
 
 
     async def mark_as_error(self, error_message: str, details: Optional[Dict[str, Any]] = None):
-        """Marks the component as 'error' with an error message."""
+        """
+        Асинхронно помечает компонент как 'error'.
+
+        Сохраняет сообщение об ошибке в поле 'error_detail'.
+
+        Args:
+            error_message (str): Сообщение об ошибке.
+            details (Optional[Dict[str, Any]]): Дополнительные детали для сохранения.
+        """
         payload = details.copy() if details else {}
         payload["error_detail"] = error_message
         await self.set_status("error", payload)
 
     async def mark_as_completed(self, details: Optional[Dict[str, Any]] = None):
-        """Marks the component as 'completed'."""
+        """
+        Асинхронно помечает компонент как 'completed'.
+
+        Args:
+            details (Optional[Dict[str, Any]]): Дополнительные детали для сохранения.
+        """
         await self.set_status("completed", details)
         
     async def setup_status_updater(self, redis_url: Optional[str] = None):
         """
-        Sets up the StatusUpdater part of the component.
-        This method should be called in the `setup` method of the concrete component.
-        It initializes Redis connection.
-        Assumes _component_id and _status_key_prefix are already set on the instance.
+        Настраивает часть компонента, отвечающую за обновление статуса (StatusUpdater).
+
+        Этот метод должен вызываться в методе `setup` конкретного компонента.
+        Он инициализирует соединение с Redis. Предполагается, что `_component_id`
+        и `_status_key_prefix` уже установлены в экземпляре.
+
+        Args:
+            redis_url (Optional[str]): URL-адрес Redis. Если None, используется значение
+                                       из `settings.REDIS_URL`.
+
+        Raises:
+            ValueError: Если `_component_id` или `_status_key_prefix` не установлены.
         """
         if not hasattr(self, '_component_id') or not self._component_id:
             raise ValueError("'_component_id' must be set on the instance before calling setup_status_updater.")
@@ -202,9 +301,14 @@ class StatusUpdater(RedisClientManager, ABC):
 
     async def cleanup_status_updater(self, clear_status_on_cleanup: bool = False):
         """
-        Cleans up Redis resources for StatusUpdater.
-        Optionally deletes the status key from Redis.
-        Call this in the component's `cleanup` method.
+        Очищает ресурсы Redis для StatusUpdater.
+
+        Опционально удаляет ключ статуса из Redis. Этот метод следует вызывать
+        в методе `cleanup` компонента.
+
+        Args:
+            clear_status_on_cleanup (bool): Если True, ключ статуса будет удален из Redis.
+                                            По умолчанию False.
         """
         effective_logger = self._get_effective_logger()
         component_name = getattr(self, '_component_id', 'UnknownComponent')

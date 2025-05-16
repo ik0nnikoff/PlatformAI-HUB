@@ -14,7 +14,24 @@ from app.workers.base_worker import QueueWorker
 
 class TokenUsageWorker(QueueWorker):
     """
-    Worker to save token usage information from a Redis queue to the database.
+    Воркер для сохранения информации об использовании токенов из очереди Redis в базу данных.
+
+    Этот воркер наследуется от `QueueWorker` и предназначен для извлечения данных
+    об использовании токенов из очереди Redis (заданной в `settings.REDIS_TOKEN_USAGE_QUEUE_NAME`)
+    и их сохранения в соответствующую таблицу базы данных.
+    Он также пытается связать запись об использовании токенов с конкретным сообщением чата,
+    используя `agent_id` и `interaction_id`.
+
+    Атрибуты:
+        async_session_factory (Optional[Callable[[], AsyncSession]]): Фабрика для создания
+            асинхронных сессий базы данных. Инициализируется в методе `setup`.
+
+    Методы:
+        setup(): Инициализирует фабрику асинхронных сессий базы данных и логирует длину очереди.
+        _save_token_usage_to_db(db, data): Вспомогательный метод для сохранения данных
+            об использовании токенов в базу данных.
+        process_message(task_data): Обрабатывает одно сообщение из очереди. Извлекает `message_id`,
+            очищает данные и сохраняет информацию об использовании токенов.
     """
     def __init__(self):
         # Исправлено: используем REDIS_TOKEN_USAGE_QUEUE_NAME, чтобы совпадало с агентом
@@ -29,7 +46,11 @@ class TokenUsageWorker(QueueWorker):
 
     async def setup(self):
         """
-        Initializes the database session factory.
+        Инициализирует фабрику асинхронных сессий базы данных.
+
+        Вызывает `super().setup()` для базовой настройки, инициализирует
+        `async_session_factory` и логирует текущую длину очереди токенов в Redis
+        для диагностических целей.
         """
         await super().setup()
         self.async_session_factory = get_async_session_factory()
@@ -37,7 +58,7 @@ class TokenUsageWorker(QueueWorker):
         # Логируем имя очереди и её длину для диагностики (await redis client)
         try:
             queue_name = self.queue_names[0] if self.queue_names else None
-            if queue_name:
+            if (queue_name):
                 redis_client = await self.redis_client
                 length = await redis_client.llen(queue_name)
                 self.logger.info(f"[{self._component_id}] Redis queue '{queue_name}' length at setup: {length}")
@@ -46,7 +67,15 @@ class TokenUsageWorker(QueueWorker):
 
     async def _save_token_usage_to_db(self, db: AsyncSession, data: Dict[str, Any]):
         """
-        Helper method to save token usage data to the database.
+        Вспомогательный асинхронный метод для сохранения данных об использовании токенов в базу данных.
+
+        Преобразует строковую временную метку в объект `datetime`, если это необходимо.
+        Вызывает `db_add_token_usage_log` для фактического сохранения данных.
+        Логгирует результат операции или возникшие ошибки.
+
+        Args:
+            db (AsyncSession): Активная асинхронная сессия базы данных.
+            data (Dict[str, Any]): Словарь с данными об использовании токенов для сохранения.
         """
         try:
             # Convert timestamp string to datetime object if necessary
@@ -69,7 +98,21 @@ class TokenUsageWorker(QueueWorker):
 
     async def process_message(self, task_data: Dict[str, Any]) -> None:
         """
-        Processes a single token usage message from the queue.
+        Обрабатывает одно сообщение об использовании токенов из очереди Redis.
+
+        Этот метод вызывается родительским классом `QueueWorker`.
+        Основные шаги:
+        1. Проверка инициализации `async_session_factory`.
+        2. Попытка найти соответствующее `message_id` в базе данных на основе
+           `agent_id` и `interaction_id` из `task_data`. Выполняется несколько попыток
+           с задержкой, сначала ищется сообщение от агента, затем от любого отправителя.
+        3. Если `message_id` найдено, оно добавляется в `task_data`.
+        4. Удаляются устаревшие или временные поля (`thread_id`, `chat_message_id`) из `task_data`.
+        5. Вызывается `_save_token_usage_to_db` для сохранения очищенных данных в базу данных.
+
+        Args:
+            task_data (Dict[str, Any]): Словарь с данными об использовании токенов,
+                                         извлеченный из очереди Redis.
         """
         self.logger.info(f"[{self._component_id}] RAW token usage data: {task_data}")
         self.logger.debug(f"[{self._component_id}] Received token usage data: {task_data}")

@@ -1,4 +1,3 @@
-\
 import asyncio
 import json
 import logging
@@ -28,7 +27,63 @@ logger = logging.getLogger(__name__)
 DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT = 10.0
 
 class ProcessManager(RedisClientManager):
+    """
+    Управляет жизненным циклом дочерних процессов для агентов и интеграций.
+
+    Отвечает за запуск, остановку, перезапуск и мониторинг состояния
+    процессов агентов (локально или в Docker) и процессов интеграций (локально).
+    Использует Redis для хранения и обновления информации о состоянии процессов.
+    Наследует от `RedisClientManager` для управления соединением с Redis.
+
+    Атрибуты:
+        logger (logging.Logger): Логгер для журналирования событий.
+        launcher (ProcessLauncher): Экземпляр для запуска дочерних процессов.
+        agent_status_key_template (str): Шаблон ключа Redis для статуса агента.
+        integration_status_key_template (str): Шаблон ключа Redis для статуса интеграции.
+        project_root (str): Абсолютный путь к корневому каталогу проекта.
+        python_executable (str): Путь к исполняемому файлу Python.
+        agent_runner_module_path (str): Путь к модулю запуска агента.
+        agent_runner_script_full_path (str): Полный путь к скрипту запуска агента.
+        integration_module_paths (Dict[IntegrationTypeStr, str]): Словарь путей к модулям интеграций.
+        integration_script_full_paths (Dict[IntegrationTypeStr, str]): Словарь полных путей к скриптам интеграций.
+        process_env (Dict[str, str]): Переменные окружения для дочерних процессов.
+
+    Методы:
+        __init__(): Инициализирует менеджер процессов.
+        setup_manager(): Инициализирует соединение с Redis.
+        cleanup_manager(): Закрывает соединение с Redis.
+        _update_status_in_redis(...): Обновляет статус процесса в Redis.
+        _get_status_from_redis(...): Получает статус процесса из Redis.
+        _delete_fields_from_redis_status(...): Удаляет поля из статуса в Redis.
+        _delete_status_key_from_redis(...): Удаляет ключ статуса из Redis.
+        delete_agent_status_completely(...): Полностью удаляет статус агента из Redis.
+        delete_integration_status_completely(...): Полностью удаляет статус интеграции из Redis.
+        start_agent_process(...): Запускает процесс агента.
+        stop_agent_process(...): Останавливает процесс агента.
+        restart_agent_process(...): Перезапускает процесс агента.
+        get_agent_status(...): Получает статус агента.
+        get_all_agent_statuses(...): Получает статусы всех агентов.
+        start_integration_process(...): Запускает процесс интеграции.
+        stop_integration_process(...): Останавливает процесс интеграции.
+        get_integration_status(...): Получает статус интеграции.
+        get_all_integration_statuses_for_agent(...): Получает статусы всех интеграций для агента.
+        get_all_integration_statuses(...): Получает статусы всех интеграций.
+        _get_docker_container_id(...): Получает ID Docker-контейнера по его имени.
+        _get_docker_container_status(...): Получает статус Docker-контейнера.
+        _validate_agent_process(...): Проверяет существование локального процесса агента.
+        _validate_integration_process(...): Проверяет существование локального процесса интеграции.
+    """
     def __init__(self):
+        """
+        Инициализирует ProcessManager.
+
+        Выполняет следующие действия:
+        - Инициализирует родительский класс `RedisClientManager`.
+        - Инициализирует логгер и `ProcessLauncher`.
+        - Определяет шаблоны ключей Redis для статусов агентов и интеграций.
+        - Определяет корневой каталог проекта и пути к исполняемым файлам и скриптам.
+        - Настраивает переменные окружения для дочерних процессов, включая PYTHONPATH.
+        """
         super().__init__()  # Initialize RedisClientManager
         self.logger = logger # Initialize instance logger
         self.launcher = ProcessLauncher()
@@ -96,17 +151,40 @@ class ProcessManager(RedisClientManager):
         self.process_env["PYTHONUNBUFFERED"] = "1" # Common practice for scripts
 
     async def setup_manager(self):
-        """Initializes the Redis client connection for the ProcessManager."""
+        """
+        Инициализирует соединение с Redis для ProcessManager.
+
+        Вызывает `setup_redis_client` из родительского класса `RedisClientManager`,
+        используя `settings.REDIS_URL`.
+        Логирует успешную инициализацию.
+        """
         await self.setup_redis_client(redis_url=str(settings.REDIS_URL))
         logger.info(f"ProcessManager initialized with Redis connection to {settings.REDIS_URL}")
 
     async def cleanup_manager(self):
-        """Closes the Redis client connection for the ProcessManager."""
+        """
+        Закрывает соединение с Redis, используемое ProcessManager.
+
+        Вызывает `close_redis_resources` из родительского класса `RedisClientManager`.
+        Логирует завершение очистки.
+        """
         await self.close_redis_resources()
         logger.info("ProcessManager cleaned up Redis connection.")
 
     # --- Helper methods for Redis Hash operations (compatible with original service) ---
     async def _update_status_in_redis(self, key: str, status_dict: Dict[str, Any]):
+        """
+        Обновляет или создает запись о статусе в Redis (HSET).
+
+        Автоматически добавляет/обновляет поле `last_updated_utc` текущим временем UTC.
+        Гарантирует наличие поля `last_active`, устанавливая его в текущее время (timestamp),
+        если оно отсутствует. Преобразует все значения словаря в строки.
+        Пустые или None значения не записываются.
+
+        Args:
+            key (str): Ключ Redis, по которому будет сохранена информация (хеш).
+            status_dict (Dict[str, Any]): Словарь с данными статуса для сохранения.
+        """
         status_dict["last_updated_utc"] = datetime.now(timezone.utc).isoformat()
         # last_active is often set specifically at point of activity or start/stop
         # Let's ensure it's present if not already.
@@ -123,6 +201,20 @@ class ProcessManager(RedisClientManager):
         logger.debug(f"Updated status for key {key} with mapping: {mapping}")
 
     async def _get_status_from_redis(self, key: str) -> Dict[str, str]:
+        """
+        Извлекает статус (хеш) из Redis по ключу.
+
+        Если клиент Redis недоступен или ключ не существует, возвращает пустой словарь.
+        Декодирует ключи и значения из байтов в строки UTF-8.
+        В случае ошибок Redis или декодирования логирует проблему и возвращает пустой словарь.
+
+        Args:
+            key (str): Ключ Redis для извлечения хеша.
+
+        Returns:
+            Dict[str, str]: Словарь со статусной информацией, где ключи и значения являются строками.
+                            Возвращает пустой словарь, если ключ не найден или произошла ошибка.
+        """
         if not await self.is_redis_client_available():
             logger.warning(f"Redis client not available when trying to get status for key: {key}")
             return {}
@@ -155,24 +247,57 @@ class ProcessManager(RedisClientManager):
             return {}
 
     async def _delete_fields_from_redis_status(self, key: str, fields: List[str]):
+        """
+        Удаляет указанные поля из хеша статуса в Redis.
+
+        Использует команду HDEL.
+
+        Args:
+            key (str): Ключ Redis, в котором находится хеш.
+            fields (List[str]): Список имен полей для удаления.
+        """
         if not fields: return
         redis_cli = await self.redis_client
         await redis_cli.hdel(key, *fields)
         logger.debug(f"Deleted fields {fields} from key {key}")
     
     async def _delete_status_key_from_redis(self, key: str):
+        """
+        Полностью удаляет ключ статуса из Redis.
+
+        Использует команду DEL.
+
+        Args:
+            key (str): Ключ Redis для удаления.
+        """
         redis_cli = await self.redis_client
         await redis_cli.delete(key)
         logger.debug(f"Deleted status key {key}")
 
     # --- Public methods for complete status deletion ---
     async def delete_agent_status_completely(self, agent_id: str):
-        """Deletes all Redis information for a given agent_id."""
+        """
+        Полностью удаляет всю информацию о статусе для указанного agent_id из Redis.
+
+        Формирует ключ статуса агента и вызывает `_delete_status_key_from_redis`.
+
+        Args:
+            agent_id (str): Идентификатор агента.
+        """
         status_key = self.agent_status_key_template.format(agent_id)
         await self._delete_status_key_from_redis(status_key)
         logger.info(f"Completely deleted status for agent {agent_id} from Redis.")
 
     async def delete_integration_status_completely(self, agent_id: str, integration_type: IntegrationTypeStr):
+        """
+        Полностью удаляет всю информацию о статусе для указанной интеграции агента из Redis.
+
+        Формирует ключ статуса интеграции и вызывает `_delete_status_key_from_redis`.
+
+        Args:
+            agent_id (str): Идентификатор агента.
+            integration_type (IntegrationTypeStr): Тип интеграции (например, "TELEGRAM").
+        """
         integration_type_for_redis_key = integration_type.lower()
 
         status_key = self.integration_status_key_template.format(agent_id, integration_type_for_redis_key)
@@ -180,6 +305,23 @@ class ProcessManager(RedisClientManager):
         logger.info(f"Completely deleted status for integration {integration_type} of agent {agent_id} from Redis.")
 
     async def stop_agent_process(self, agent_id: str, force: bool = False) -> bool:
+        """
+        Останавливает процесс агента (локальный или Docker).
+
+        Получает текущий статус агента. Если агент уже остановлен, ничего не делает.
+        Обновляет статус в Redis на "stopping".
+        Для Docker-агентов использует `docker stop` (и `docker kill` при `force=True`).
+        Для локальных агентов отправляет SIGTERM, затем SIGKILL (при `force=True`), если процесс не завершился.
+        После успешной остановки обновляет статус в Redis на "stopped" и удаляет динамические поля (pid, container_name и т.д.).
+
+        Args:
+            agent_id (str): Идентификатор агента.
+            force (bool): Если True, применяет принудительные методы остановки (SIGKILL для локальных, docker kill для Docker).
+                          По умолчанию False.
+
+        Returns:
+            bool: True, если процесс успешно остановлен (или уже был остановлен), иначе False.
+        """
         status_key = self.agent_status_key_template.format(agent_id)
         status_info = await self.get_agent_status(agent_id)
 
@@ -296,6 +438,20 @@ class ProcessManager(RedisClientManager):
             return False
 
     async def restart_agent_process(self, agent_id: str) -> bool:
+        """
+        Перезапускает процесс агента.
+
+        Сначала принудительно останавливает существующий процесс агента (`stop_agent_process` с `force=True`).
+        Если остановка не удалась, прерывает перезапуск.
+        После успешной остановки и небольшой паузы (`settings.RESTART_DELAY_SECONDS`) запускает новый процесс агента (`start_agent_process`).
+        Обновляет статус в Redis в соответствии с результатом каждой операции.
+
+        Args:
+            agent_id (str): Идентификатор агента для перезапуска.
+
+        Returns:
+            bool: True, если агент успешно перезапущен, иначе False.
+        """
         logger.info(f"Restarting agent process for {agent_id}...")
         # Force stop, as it's a restart.
         stopped = await self.stop_agent_process(agent_id, force=True) 
@@ -327,6 +483,23 @@ class ProcessManager(RedisClientManager):
             return False
 
     async def get_integration_status(self, agent_id: str, integration_type: IntegrationTypeStr) -> IntegrationStatusInfo:
+        """
+        Получает информацию о статусе для указанной интеграции агента.
+
+        Извлекает данные из Redis. Если статус в Redis указывает на запущенный локальный процесс,
+        проверяет его существование с помощью `os.kill(pid, 0)`.
+        Если процесс не найден, обновляет статус в Redis на "error_process_lost".
+
+        Args:
+            agent_id (str): Идентификатор агента.
+            integration_type (IntegrationTypeStr): Тип интеграции (например, "TELEGRAM").
+
+        Returns:
+            IntegrationStatusInfo: Словарь с информацией о статусе интеграции, включая:
+                `agent_id`, `integration_type`, `status`, `pid`, `last_active`, `runtime`,
+                `container_name`, `error_detail`.
+                Если статус не найден, возвращает статус "not_found".
+        """
         integration_type_for_redis_key = integration_type.lower()
 
         status_key = self.integration_status_key_template.format(agent_id, integration_type_for_redis_key)
@@ -380,6 +553,26 @@ class ProcessManager(RedisClientManager):
         }
 
     async def start_integration_process(self, agent_id: str, integration_type: IntegrationTypeStr, integration_settings: Optional[Dict[str, Any]] = None) -> bool:
+        """
+        Запускает процесс интеграции для указанного агента.
+
+        Проверяет, не запущен ли уже процесс или не находится ли он в процессе запуска.
+        Определяет путь к скрипту интеграции на основе `integration_type`.
+        Если скрипт не найден, устанавливает статус "error_script_not_found".
+        Формирует команду для запуска скрипта интеграции Python (`python -m module_path ...`)
+        с передачей `agent_id`, `integration_settings` (в JSON) и `redis_url`.
+        Запускает процесс с помощью `ProcessLauncher` без захвата вывода.
+        Обновляет статус в Redis ("starting", затем PID после успешного запуска, или "error_start_failed" при ошибке).
+
+        Args:
+            agent_id (str): Идентификатор агента.
+            integration_type (IntegrationTypeStr): Тип интеграции (например, "TELEGRAM").
+            integration_settings (Optional[Dict[str, Any]]): Настройки для интеграции, передаваемые в процесс.
+                                                              По умолчанию None.
+
+        Returns:
+            bool: True, если процесс интеграции успешно инициирован, иначе False.
+        """
         integration_type_for_redis_key = integration_type.lower()
 
         status_key = self.integration_status_key_template.format(agent_id, integration_type_for_redis_key)
@@ -474,6 +667,24 @@ class ProcessManager(RedisClientManager):
             return False
 
     async def stop_integration_process(self, agent_id: str, integration_type: IntegrationTypeStr, force: bool = False) -> bool:
+        """
+        Останавливает процесс интеграции для указанного агента.
+
+        Получает текущий статус интеграции. Если уже остановлена, ничего не делает.
+        Обновляет статус в Redis на "stopping".
+        Для локальных процессов отправляет SIGTERM, затем SIGKILL (при `force=True`), если процесс не завершился.
+        Остановка Docker-контейнеров для интеграций в настоящее время не реализована и вызовет ошибку, если `runtime`="docker" и есть `container_name`.
+        После успешной остановки обновляет статус в Redis на "stopped" и удаляет динамические поля.
+
+        Args:
+            agent_id (str): Идентификатор агента.
+            integration_type (IntegrationTypeStr): Тип интеграции (например, "TELEGRAM").
+            force (bool): Если True, применяет принудительные методы остановки (SIGKILL для локальных).
+                          По умолчанию False.
+
+        Returns:
+            bool: True, если процесс успешно остановлен (или уже был остановлен), иначе False.
+        """
         integration_type_for_redis_key = integration_type.lower()
 
         status_key = self.integration_status_key_template.format(agent_id, integration_type_for_redis_key)
@@ -531,7 +742,7 @@ class ProcessManager(RedisClientManager):
                                     logger.info(f"Integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id} confirmed terminated after SIGKILL.")
                                     stopped_successfully = True
                             except ProcessLookupError: 
-                                logger.info(f"Integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id} was already gone before SIGKILL could be sent or confirmed.")
+                                logger.info(f"Integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id} was already gone before SIGKILL could be sent или confirmed.")
                                 stopped_successfully = True
                             except Exception as e_sigkill:
                                 logger.error(f"Error sending SIGKILL to integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id}: {e_sigkill}", exc_info=True)

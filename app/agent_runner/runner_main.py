@@ -18,21 +18,32 @@ from app.core.logging_config import setup_logging # Uncommented
 
 # --- Custom Logging Filter ---
 class AgentIdFilter(logging.Filter):
-    """Adds a default agent_id if it's missing from the log record."""
+    """Добавляет `agent_id` по умолчанию, если он отсутствует в записи лога."""
     def __init__(self, default_agent_id="system"):
         super().__init__()
         self.default_agent_id = default_agent_id
 
     def filter(self, record):
+        """Применяет фильтр к записи лога, добавляя `agent_id` при необходимости."""
         if not hasattr(record, 'agent_id'):
             record.agent_id = self.default_agent_id
         return True
 
 def setup_logging_for_agent(agent_id: str) -> logging.LoggerAdapter:
     """
-    Configures logging for this specific agent runner instance.
-    Assumes basicConfig has been called elsewhere (e.g., by app.core.logging_config).
-    Adds AgentIdFilter to root handlers if not present and returns a LoggerAdapter.
+    Настраивает логирование для конкретного экземпляра исполнителя агента (agent runner).
+
+    Предполагается, что базовая конфигурация логирования (`basicConfig`) уже была вызвана
+    (например, через `app.core.logging_config`).
+    Добавляет `AgentIdFilter` к корневым обработчикам, если он еще не добавлен,
+    и возвращает `LoggerAdapter` для добавления `agent_id` ко всем сообщениям этого адаптера.
+
+    Args:
+        agent_id (str): Уникальный идентификатор агента, для которого настраивается логирование.
+
+    Returns:
+        logging.LoggerAdapter: Адаптер логгера, который автоматически добавляет `agent_id`
+                               в записи логов.
     """
     # Ensure app.core.logging_config has been imported and configured basicConfig
     # For example, by importing it in the main entry point of your application that launches runners
@@ -55,7 +66,24 @@ def setup_logging_for_agent(agent_id: str) -> logging.LoggerAdapter:
 
 async def main_async_runner(agent_id: str, config_url: str):
     """
-    Main asynchronous function to initialize and run the AgentRunner.
+    Основная асинхронная функция для инициализации и запуска `AgentRunner`.
+
+    Эта функция выполняет следующие шаги:
+    1. Настраивает логирование для указанного `agent_id` с помощью `setup_logging_for_agent`.
+    2. Получает фабрику сессий базы данных, если `DATABASE_URL` задан в настройках.
+    3. Создает экземпляр `AgentRunner` с предоставленными `agent_id`, `config_url`,
+       фабрикой сессий БД и адаптером логгера.
+    4. Запускает цикл, в котором вызывается `agent_runner.run()`. Этот метод `run()`
+       обрабатывает полный жизненный цикл агента (настройка, основной цикл, очистка).
+    5. Если `AgentRunner` запрашивает перезапуск (через атрибут `needs_restart`),
+       цикл продолжается, позволяя `AgentRunner` переинициализироваться при следующем вызове `run()`.
+    6. Если перезапуск не требуется или происходит исключение, цикл прерывается.
+    7. В блоке `finally` выполняется закрытие соединения с базой данных (если оно было открыто)
+       и логгируется завершение работы.
+
+    Args:
+        agent_id (str): Уникальный идентификатор агента для запуска.
+        config_url (str): URL-адрес для загрузки конфигурации агента.
     """
     log_adapter = setup_logging_for_agent(agent_id)
     log_adapter.info(f"Starting agent runner for Agent ID: {agent_id}, Config URL: {config_url}")

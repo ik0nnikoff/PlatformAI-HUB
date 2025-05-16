@@ -5,22 +5,17 @@ from fastapi import FastAPI
 
 from app.core.logging_config import setup_logging
 from app.db.session import close_db_engine
-from app.services.redis_service import init_redis_pool, close_redis_pool # get_redis_client removed as PM handles its own
+from app.services.redis_service import init_redis_pool, close_redis_pool
 from app.core.config import settings
 
-# Импорты для воркеров
-# from app.workers.history_saver_worker import main_loop as history_saver_main_loop # REMOVED
-# from app.workers.token_usage_worker import main_loop as token_usage_main_loop # REMOVED
-# from app.workers.inactivity_monitor_worker import main_loop as inactivity_monitor_main_loop # REMOVED
 from app.workers.history_saver_worker import HistorySaverWorker
 from app.workers.token_usage_worker import TokenUsageWorker
 from app.workers.inactivity_monitor_worker import InactivityMonitorWorker
 
 from app.api.schemas.common_schemas import IntegrationType
 from app.db.crud import agent_crud
-from app.services.process_manager import ProcessManager # MODIFIED: Import ProcessManager
+from app.services.process_manager import ProcessManager
 from app.db.session import get_async_session_factory
-# from app.services.redis_service import get_redis_client # REMOVED: No longer needed here
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +23,30 @@ background_tasks = []
 
 async def start_existing_agents_and_integrations():
     """
-    Запускает всех существующих агентов и их активные интеграции.
-    Эта функция будет вызываться при старте приложения.
+    Запускает все существующие агенты и их активные интеграции при старте приложения.
+
+    Действия:
+    1. Инициализирует `ProcessManager` и настраивает его соединение с Redis.
+    2. Получает фабрику сессий БД.
+    3. В рамках сессии БД:
+        - Загружает все конфигурации агентов из базы данных.
+        - Для каждого агента:
+            - Проверяет текущий статус агента в Redis.
+            - Если агент не запущен или не находится в процессе запуска, вызывает
+              `pm.start_agent_process()` для его запуска.
+            - Обрабатывает конфигурацию интеграций агента (из `agent_db.config_json`):
+                - Для каждой включенной интеграции (`enabled: true`):
+                    - Проверяет тип интеграции и наличие настроек.
+                    - Проверяет текущий статус интеграции в Redis.
+                    - Если интеграция не запущена, вызывает `pm.start_integration_process()`
+                      с передачей `agent_id`, типа интеграции и ее настроек.
+    4. Логирует все основные шаги, ошибки и пропущенные элементы.
+    5. Гарантирует очистку ресурсов `ProcessManager` (`pm.cleanup_manager()`) в блоке finally.
+
+    Примечание:
+    - Ошибки при запуске отдельного агента или интеграции логируются, но не прерывают
+      процесс запуска других агентов/интеграций.
+    - Ошибки при настройке `ProcessManager` или подключении к БД прерывают выполнение функции.
     """
     logger.info("Attempting to start existing agents and their integrations...")
     db_session_factory = get_async_session_factory()
@@ -136,7 +153,22 @@ async def start_existing_agents_and_integrations():
         logger.info("ProcessManager cleanup complete for startup function.")
 
 async def start_background_tasks(app: FastAPI):
-    """Запускает все необходимые фоновые задачи."""
+    """
+    Запускает все необходимые фоновые задачи (воркеры) для приложения.
+
+    Для каждого типа воркера (HistorySaverWorker, TokenUsageWorker, InactivityMonitorWorker):
+    1. Создает экземпляр воркера.
+    2. Создает задачу asyncio для выполнения метода `run()` воркера.
+    3. Добавляет задачу в список `background_tasks` для отслеживания.
+    4. Логирует запуск воркера или ошибку при запуске.
+
+    После инициализации всех воркеров, вызывает `start_existing_agents_and_integrations()`
+    для запуска ранее существовавших агентов и их интеграций.
+
+    Args:
+        app (FastAPI): Экземпляр FastAPI приложения (в данный момент не используется напрямую
+                       в теле функции, но может быть полезен для передачи зависимостей в будущем).
+    """
     logger.info("Starting background tasks...")
 
     # History Saver Worker
@@ -185,7 +217,16 @@ async def start_background_tasks(app: FastAPI):
 
 
 async def stop_background_tasks():
-    """Останавливает все фоновые задачи."""
+    """
+    Останавливает все фоновые задачи, запущенные при старте приложения.
+
+    Итерируется по списку `background_tasks`:
+    - Если задача еще не завершена (`task.done()` is False):
+        - Вызывает `task.cancel()` для запроса отмены задачи.
+        - Ожидает завершения задачи с таймаутом (10 секунд).
+        - Логирует результат отмены (успешно отменена, таймаут или другая ошибка).
+    - Если задача уже была завершена, логирует этот факт.
+    """
     logger.info(f"Stopping {len(background_tasks)} background tasks...")
 
     for task in background_tasks:
@@ -209,7 +250,28 @@ async def stop_background_tasks():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Контекстный менеджер для управления жизненным циклом FastAPI приложения."""
+    """
+    Асинхронный контекстный менеджер для управления жизненным циклом FastAPI приложения.
+
+    Выполняет действия при старте и остановке приложения.
+
+    При старте (до `yield`):
+    1. Настраивает логирование (`setup_logging()`).
+    2. Инициализирует пул соединений Redis (`init_redis_pool()`).
+    3. Запускает фоновые задачи (`start_background_tasks(app)`), включая воркеры
+       и инициализацию существующих агентов/интеграций.
+    4. Логирует завершение последовательности запуска.
+
+    При остановке (после `yield`):
+    1. Логирует начало последовательности остановки.
+    2. Останавливает фоновые задачи (`stop_background_tasks()`).
+    3. Закрывает пул соединений Redis (`close_redis_pool()`).
+    4. Закрывает движок базы данных (`close_db_engine()`).
+    5. Логирует завершение последовательности остановки.
+
+    Args:
+        app (FastAPI): Экземпляр FastAPI приложения. Передается в `start_background_tasks`.
+    """
     # --- Startup ---
     setup_logging() 
     logger.info("Application startup sequence initiated.")

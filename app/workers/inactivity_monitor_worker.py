@@ -23,10 +23,39 @@ from app.db.session import SessionLocal
 
 class InactivityMonitorWorker(ScheduledTaskWorker):
     """
-    Monitors agent and integration processes for inactivity and crashes,
-    and attempts to manage them (stop inactive, restart crashed).
+    Периодический воркер, который отслеживает активность и состояние
+    процессов агентов и их интеграций.
+
+    Основные задачи:
+    - Проверка неактивных агентов: останавливает агентов, которые не проявляли
+      активность дольше заданного таймаута (`settings.AGENT_INACTIVITY_TIMEOUT`).
+    - Проверка "упавших" или некорректно остановленных процессов: пытается
+      перезапустить процессы агентов или интеграций, которые должны быть запущены,
+      но неактивны (PID не существует) или находятся в ошибочном состоянии.
+
+    Наследует от `ScheduledTaskWorker` для выполнения периодических задач.
+    Использует `ProcessManager` для взаимодействия с процессами и их статусами в Redis.
+
+    Атрибуты:
+        process_manager (ProcessManager): Экземпляр менеджера процессов.
+
+    Методы:
+        __init__(): Инициализирует воркер.
+        setup(): Настраивает воркер, включая `ProcessManager` и начальную проверку процессов.
+        perform_task(): Основная задача, выполняемая периодически (проверка неактивности и падений).
+        _check_inactive_agents(): Проверяет и останавливает неактивные процессы агентов.
+        _check_and_restart_crashed_processes(): Проверяет и перезапускает "упавшие" или некорректно
+                                                 остановленные процессы агентов и интеграций.
+        cleanup(): Выполняет очистку ресурсов при завершении работы воркера.
     """
     def __init__(self):
+        """
+        Инициализирует InactivityMonitorWorker.
+
+        Устанавливает `component_id`, интервал выполнения задачи из
+        `settings.AGENT_INACTIVITY_CHECK_INTERVAL` и префикс ключа статуса в Redis.
+        Создает экземпляр `ProcessManager`.
+        """
         super().__init__(
             component_id="inactivity_monitor_worker", # Unique ID for this worker instance
             interval_seconds=settings.AGENT_INACTIVITY_CHECK_INTERVAL,
@@ -37,7 +66,16 @@ class InactivityMonitorWorker(ScheduledTaskWorker):
 
     async def setup(self):
         """
-        Initializes the ProcessManager and performs an initial check for crashed processes.
+        Выполняет настройку InactivityMonitorWorker перед запуском основного цикла.
+
+        Действия:
+        1. Вызывает `super().setup()` для инициализации `StatusUpdater` и клиента Redis для статуса воркера.
+        2. Если воркер уже находится в процессе остановки (`self._running` is False), прерывает настройку.
+        3. Инициализирует `self.process_manager` вызовом `setup_manager()`.
+           В случае ошибки инициализации `ProcessManager`, инициирует остановку воркера.
+        4. После небольшой задержки (10 секунд, чтобы дать другим компонентам время на запуск),
+           выполняет начальную проверку `_check_and_restart_crashed_processes()` для
+           перезапуска процессов, которые могли "упасть" до старта этого воркера.
         """
         await super().setup() # Sets up StatusUpdater, Redis client for worker status
         if not self._running:
@@ -61,8 +99,15 @@ class InactivityMonitorWorker(ScheduledTaskWorker):
 
     async def perform_task(self) -> None:
         """
-        Periodically checks for inactive agents and crashed processes.
-        This method is called by ScheduledTaskWorker's run_loop.
+        Основная периодическая задача, выполняемая `ScheduledTaskWorker`.
+
+        Проверяет доступность клиента Redis в `ProcessManager` и пытается его
+        переустановить в случае недоступности.
+        Если клиент Redis доступен и воркер активен (`self._running`):
+        - Вызывает `_check_inactive_agents()` для проверки и остановки неактивных агентов.
+        - Вызывает `_check_and_restart_crashed_processes()` для проверки и перезапуска
+          "упавших" или некорректно остановленных процессов агентов и интеграций.
+        Логирует ошибки, возникающие во время выполнения задачи.
         """
         if not self._running:
             self.logger.info(f"[{self._component_id}] Shutdown in progress. Skipping periodic checks.")
@@ -91,6 +136,17 @@ class InactivityMonitorWorker(ScheduledTaskWorker):
             self.logger.error(f"[{self._component_id}] Error during perform_task: {e}", exc_info=True)
 
     async def _check_inactive_agents(self):
+        """
+        Проверяет неактивные процессы агентов и останавливает их.
+
+        Если воркер находится в процессе остановки, проверка прерывается.
+        Получает список ключей статусов агентов из Redis (`agent_status:*`).
+        Для каждого агента со статусом "running" и имеющего `last_active_time`:
+        - Рассчитывает время неактивности.
+        - Если время неактивности превышает `settings.AGENT_INACTIVITY_TIMEOUT`,
+          пытается остановить процесс агента с помощью `self.process_manager.stop_agent_process()`.
+        Логирует обнаружение неактивных агентов и ошибки во время проверки.
+        """
         if not self._running:
             self.logger.info(f"[{self._component_id}] Shutdown in progress. Skipping inactivity check.")
             return
@@ -142,6 +198,35 @@ class InactivityMonitorWorker(ScheduledTaskWorker):
 
 
     async def _check_and_restart_crashed_processes(self):
+        """
+        Проверяет "упавшие" или некорректно остановленные процессы агентов и интеграций
+        и пытается их перезапустить или запустить.
+
+        Если воркер находится в процессе остановки, проверка прерывается.
+
+        Для агентов:
+        - Получает ключи статусов агентов из Redis (`agent_status:*`).
+        - Для каждого агента:
+            - Проверяет, существует ли процесс с указанным PID (если PID есть).
+            - Условия для перезапуска:
+                1. Статус "running" или "initializing", но процесс с PID не существует.
+                2. Поле `process_should_be_running` установлено в `true`, но процесс не жив
+                   (независимо от текущего статуса, например, "stopped" или "error").
+            - Если требуется перезапуск, вызывает `self.process_manager.restart_agent_process()`.
+
+        Для интеграций:
+        - Получает ключи статусов интеграций из Redis (`integration_status:*`).
+        - Парсит `agent_id` и `integration_type` из ключа.
+        - Для каждой интеграции:
+            - Проверяет существование процесса по PID (если есть).
+            - Определяет действие ("restart" или "start") на основе статуса, наличия PID,
+              живучести процесса и флага `process_should_be_running`.
+            - Если действие определено:
+                - Загружает конфигурацию агента из БД для получения настроек интеграции.
+                - Если настройки найдены, вызывает соответствующий метод `ProcessManager`
+                  (`restart_integration_process` или `start_integration_process`).
+        Логирует обнаружение "упавших" процессов, попытки перезапуска и ошибки.
+        """
         if not self._running:
             self.logger.info(f"[{self._component_id}] Shutdown in progress. Skipping crash check and restarts.")
             return
@@ -343,7 +428,11 @@ class InactivityMonitorWorker(ScheduledTaskWorker):
 
     async def cleanup(self):
         """
-        Cleans up the ProcessManager.
+        Выполняет очистку ресурсов при завершении работы InactivityMonitorWorker.
+
+        - Вызывает `cleanup_manager()` для `self.process_manager` для закрытия его соединений с Redis.
+        - Вызывает `super().cleanup()` для очистки ресурсов `ScheduledTaskWorker` (например, `StatusUpdater`).
+        Логирует процесс очистки.
         """
         self.logger.info(f"[{self._component_id}] Cleaning up InactivityMonitorWorker...")
         if self.process_manager:

@@ -8,14 +8,39 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 class RedisClientManager:
+    """
+    Управляет жизненным циклом клиента Redis, обеспечивая его инициализацию,
+    предоставление и закрытие соединений.
+
+    Этот класс может быть использован как базовый класс или миксин для компонентов,
+    которым требуется асинхронный доступ к Redis. Он обрабатывает автоматическую
+    инициализацию клиента при первом доступе, если он не был настроен явно.
+
+    Атрибуты:
+        _redis_client (Optional[redis.Redis]): Экземпляр асинхронного клиента Redis.
+        _redis_url_used (Optional[str]): URL-адрес Redis, который был использован для последней инициализации.
+
+    Методы:
+        redis_client (property): Предоставляет доступ к экземпляру клиента Redis.
+        setup_redis_client: Инициализирует клиент Redis.
+        close_redis_resources: Закрывает соединение с Redis.
+        is_redis_client_available: Проверяет доступность клиента Redis.
+        setup: Метод настройки для жизненного цикла компонента, инициализирует Redis.
+        cleanup: Метод очистки для жизненного цикла компонента, закрывает соединение с Redis.
+    """
     _redis_client: Optional[redis.Redis] = None
     _redis_url_used: Optional[str] = None # Store the URL used for initialization
 
     @property
     async def redis_client(self) -> redis.Redis:
         """
-        Предоставляет экземпляр клиента Redis.
-        Вызовет RuntimeError, если клиент не был инициализирован через setup_redis_client.
+        Асинхронное свойство для доступа к активному экземпляру клиента Redis.
+
+        Если клиент еще не был инициализирован при первом доступе, будет предпринята
+        попытка его настройки с использованием URL-адреса Redis из настроек
+        (`settings.REDIS_URL`) или ранее использованного URL.
+
+        Вызывает `RuntimeError`, если инициализация не удалась или клиент недоступен.
         """
         if self._redis_client is None:
             logger.warning("Redis client was accessed before explicit setup. Attempting default setup.")
@@ -35,8 +60,27 @@ class RedisClientManager:
 
     async def setup_redis_client(self, client: Optional[redis.Redis] = None, redis_url: Optional[str] = None):
         """
-        Инициализирует клиент Redis.
-        Может принять существующий клиент, URL Redis или использовать URL из настроек.
+        Асинхронно настраивает и инициализирует клиент Redis.
+
+        Если клиент уже инициализирован и успешно проходит проверку соединения (`ping()`),
+        метод завершает работу. В противном случае, он пытается инициализировать новый клиент,
+        используя один из следующих источников в порядке приоритета:
+        1. Предоставленный существующий экземпляр `client`.
+        2. Предоставленный `redis_url`.
+        3. URL-адрес из глобальных настроек `settings.REDIS_URL`.
+
+        После попытки инициализации выполняется проверка соединения (`ping()`).
+        Если соединение не удалось установить или произошла ошибка во время инициализации,
+        генерируется исключение. Успешно использованный URL сохраняется в `_redis_url_used`
+        для возможных последующих переинициализаций.
+
+        Args:
+            client (Optional[redis.Redis]): Существующий экземпляр клиента Redis для использования.
+            redis_url (Optional[str]): URL-адрес для подключения к Redis.
+
+        Raises:
+            ValueError: Если не предоставлен ни клиент, ни URL, и URL отсутствует в настройках.
+            Exception: Любое исключение, возникшее при подключении или проверке связи с Redis.
         """
         if self._redis_client and hasattr(self._redis_client, 'ping'): # Check for actual client, not str
             try:
@@ -85,7 +129,11 @@ class RedisClientManager:
 
     async def close_redis_resources(self):
         """
-        Закрывает соединение с Redis, если оно было установлено.
+        Асинхронно закрывает активное соединение с клиентом Redis, если оно существует.
+
+        После успешного закрытия соединения, внутренний атрибут `_redis_client`
+        и `_redis_url_used` устанавливаются в `None`. Логгирует ошибки, если они
+        возникают в процессе закрытия.
         """
         if self._redis_client:
             logger.info("Closing Redis client connection.")
@@ -99,7 +147,14 @@ class RedisClientManager:
                 self._redis_url_used = None # Clear stored URL on close
 
     async def is_redis_client_available(self) -> bool:
-        """Checks if the Redis client is initialized and can be pinged."""
+        """
+        Асинхронно проверяет, инициализирован ли клиент Redis и доступен ли он.
+
+        Доступность определяется путем отправки команды PING серверу Redis.
+
+        Returns:
+            bool: True, если клиент инициализирован и успешно отвечает на PING, иначе False.
+        """
         if self._redis_client is None:
             return False
         try:
@@ -116,8 +171,12 @@ class RedisClientManager:
     # которые наследуют RedisClientManager и, возможно, RunnableComponent.
     async def setup(self):
         """
-        Метод настройки, который может быть вызван в жизненном цикле компонента.
-        Инициализирует клиент Redis, используя URL из настроек по умолчанию.
+        Асинхронный метод настройки, предназначенный для использования в жизненном цикле компонента
+        (например, при наследовании от `RunnableComponent` или аналогичного класса).
+
+        Инициализирует клиент Redis, вызывая `self.setup_redis_client()`.
+        Использует ранее сохраненный URL (`_redis_url_used`) или, если он отсутствует,
+        URL из настроек (`settings.REDIS_URL`) по умолчанию.
         """
         logger.debug(f"Executing RedisClientManager setup for {self.__class__.__name__}")
         # Use stored URL if available from a previous setup, otherwise default from settings
@@ -129,8 +188,10 @@ class RedisClientManager:
 
     async def cleanup(self):
         """
-        Метод очистки, который может быть вызван в жизненном цикле компонента.
-        Закрывает соединение с Redis.
+        Асинхронный метод очистки, предназначенный для использования в жизненном цикле компонента.
+
+        Закрывает соединение с Redis, вызывая `self.close_redis_resources()`.
+        Этот метод следует вызывать при завершении работы компонента для освобождения ресурсов.
         """
         logger.debug(f"Executing RedisClientManager cleanup for {self.__class__.__name__}")
         await self.close_redis_resources()
