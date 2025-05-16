@@ -17,7 +17,8 @@ class TokenUsageWorker(QueueWorker):
     Worker to save token usage information from a Redis queue to the database.
     """
     def __init__(self):
-        token_usage_queue_name = getattr(settings, "REDIS_TOKEN_USAGE_QUEUE", "token_usage_queue")
+        # Исправлено: используем REDIS_TOKEN_USAGE_QUEUE_NAME, чтобы совпадало с агентом
+        token_usage_queue_name = getattr(settings, "REDIS_TOKEN_USAGE_QUEUE_NAME", "token_usage_queue")
         super().__init__(
             component_id="token_usage_worker", # Unique ID for this worker instance
             queue_names=[token_usage_queue_name],
@@ -33,6 +34,15 @@ class TokenUsageWorker(QueueWorker):
         await super().setup()
         self.async_session_factory = get_async_session_factory()
         self.logger.info(f"[{self._component_id}] Database session factory initialized.")
+        # Логируем имя очереди и её длину для диагностики (await redis client)
+        try:
+            queue_name = self.queue_names[0] if self.queue_names else None
+            if queue_name:
+                redis_client = await self.redis_client
+                length = await redis_client.llen(queue_name)
+                self.logger.info(f"[{self._component_id}] Redis queue '{queue_name}' length at setup: {length}")
+        except Exception as e:
+            self.logger.warning(f"[{self._component_id}] Could not check Redis queue length: {e}")
 
     async def _save_token_usage_to_db(self, db: AsyncSession, data: Dict[str, Any]):
         """
@@ -61,6 +71,7 @@ class TokenUsageWorker(QueueWorker):
         """
         Processes a single token usage message from the queue.
         """
+        self.logger.info(f"[{self._component_id}] RAW token usage data: {task_data}")
         self.logger.debug(f"[{self._component_id}] Received token usage data: {task_data}")
 
         if not self.async_session_factory:

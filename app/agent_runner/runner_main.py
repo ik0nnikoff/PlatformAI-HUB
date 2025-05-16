@@ -14,6 +14,7 @@ from app.db.session import get_async_session_factory, close_db_engine
 # Removed app.db.alchemy_models, app.db.crud (now in AgentRunner)
 from app.core.config import settings
 from app.agent_runner.agent_runner import AgentRunner # Import the new AgentRunner class
+from app.core.logging_config import setup_logging # Uncommented
 
 # --- Custom Logging Filter ---
 class AgentIdFilter(logging.Filter):
@@ -99,8 +100,8 @@ async def main_async_runner(agent_id: str, config_url: str):
 if __name__ == "__main__":
     # Ensure app.core.logging_config is imported and sets up basicConfig *before* any logging.
     # For example:
-    # from app.core.logging_config import setup_logging
-    # setup_logging() # Call it if not already called by a higher-level entry point
+    # from app.core.logging_config import setup_logging # This is now uncommented above
+    setup_logging() # Uncommented call
 
     parser = argparse.ArgumentParser(description="Agent Runner Main Program")
     parser.add_argument("--agent-id", required=True, help="Unique ID of the agent to run")

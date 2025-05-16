@@ -207,83 +207,167 @@ class AgentRunner(RunnableComponent, StatusUpdater):
                 async with self.db_session_factory() as db_session:
                     # Save user message
                     user_msg_db = await chat_crud.db_add_chat_message(
-                        db_session,
-                        chat_id=chat_id,
+                        db=db_session,
                         agent_id=self.agent_id,
-                        interaction_id=interaction_id, # Use interaction_id from payload
+                        thread_id=chat_id, # Changed from chat_id to thread_id
                         sender_type=SenderType.USER,
-                        message_text=user_input,
-                        platform_specific_data={"platform": "pubsub"} # Example
+                        content=user_input,
+                        channel=payload.get("channel"),
+                        timestamp=datetime.now(timezone.utc), # Consider parsing from payload if available and reliable
+                        interaction_id=interaction_id
                     )
-                    # Fetch history using the determined limit
-                    history_messages_db = await chat_crud.db_get_chat_history(db_session, chat_id, agent_id=self.agent_id, limit=actual_history_limit)
+                    history_messages_db.append(user_msg_db) # Add to history for current turn
             
-            langchain_history = convert_db_history_to_langchain_static(history_messages_db, self.logger)
+            # langchain_history = convert_db_history_to_langchain_static(history_messages_db, self.logger) # Temporarily commented out
+
+            initial_graph_input = {
+                # "messages": langchain_history +[HumanMessage(content=user_input)], # Temporarily simplified
+                "messages": [HumanMessage(content=user_input)], # Temporarily simplified
+            }
+
+            # Ensure key names here match exactly what langgraph_factory.create_agent_app returns in static_state_config
+            # and what agent_node expects in the state.
+            expected_static_keys = {
+                "system_prompt": "system_prompt", # Key expected in static_state_config and graph state
+                "temperature": "temperature",   # Key expected in static_state_config and graph state
+                "model_id": "model_id",         # Key expected in static_state_config and graph state
+                "provider": "provider"        # Key expected in static_state_config and graph state
+            }
+            if self.static_state_config:
+                for static_key, graph_key in expected_static_keys.items():
+                    if static_key in self.static_state_config:
+                        initial_graph_input[graph_key] = self.static_state_config[static_key]
+                    else:
+                        self.logger.warning(
+                            f"[{self.agent_id}] Key '{static_key}' not found in static_state_config. "
+                            f"Graph key '{graph_key}' may be missing. "
+                            f"Check agent configuration and langgraph_factory.py."
+                        )
+                        # Provide a default or handle absence as needed by your graph's logic
+                        if graph_key == "system_prompt":
+                            initial_graph_input[graph_key] = "" # Default for system_prompt
+                        # Add defaults for other critical keys if necessary
+                        elif graph_key == "model_id":
+                            self.logger.error(f"[{self.agent_id}] Critical key 'model_id' is missing from static_state_config. Graph execution will likely fail.")
+                            initial_graph_input[graph_key] = "default_model_id_placeholder" # Example placeholder
+                        elif graph_key == "provider":
+                            self.logger.error(f"[{self.agent_id}] Critical key 'provider' is missing from static_state_config. Graph execution will likely fail.")
+                            initial_graph_input[graph_key] = "default_provider_placeholder" # Example placeholder
+            else:
+                self.logger.error(
+                    f"[{self.agent_id}] static_state_config is not set. Critical parameters like system_prompt, temperature, etc., will be missing."
+                )
+                # Set defaults for critical keys if static_state_config is missing entirely
+                initial_graph_input["system_prompt"] = ""
+                # Defaults for other keys might be needed here if the graph cannot proceed without them
 
             # Invoke agent
-            self.logger.debug(f"[{self.agent_id}] Invoking agent for interaction_id: {interaction_id}...")
+            self.logger.debug(f"[{self.agent_id}] Invoking agent for interaction_id: {interaction_id} with input: {initial_graph_input}") # Log the input
             agent_response_stream = self.agent_app.astream(
-                {"messages": langchain_history + [HumanMessage(content=user_input)]},
+                initial_graph_input, # Use the input dict that now includes system_prompt and other params
                 config={"configurable": {"thread_id": chat_id, "agent_id": self.agent_id}}
             )
             
-            full_response_content = ""
+            extracted_text_content = "" # Initialize to store the final text
             token_usage_data: Optional[TokenUsageData] = None
             
+            self.logger.debug(f"[{self.agent_id}] Starting to process agent_response_stream for interaction_id: {interaction_id}")
             async for event_part in agent_response_stream:
-                # Assuming the structure of event_part needs to be inspected to find AIMessage chunks
-                # This part is highly dependent on how your LangGraph app streams AIMessage content.
-                # The example below is a common pattern.
+                self.logger.info(f"[{self.agent_id}] Stream event_part: {event_part}") # DEBUG LINE
                 if isinstance(event_part, dict):
-                    # Look for AIMessage content within the dict structure
-                    # This might be nested, e.g., event_part.get('agent_name', {}).get('messages', [{}])[0].content
-                    # For simplicity, let's assume a flatter structure or a known key for AIMessage chunks
-                    # Example: if 'messages' key contains a list of BaseMessage objects
-                    messages_chunk = event_part.get('messages', [])
+                    # Corrected path to messages based on new logs
+                    messages_chunk = event_part.get('agent_node', {}).get('messages', [])
                     if messages_chunk and isinstance(messages_chunk, list):
                         for msg_item in messages_chunk:
                             if isinstance(msg_item, AIMessage):
-                                full_response_content += msg_item.content
-                                # If token usage is part of the AIMessage or its metadata
-                                if msg_item.usage_metadata and msg_item.usage_metadata.get("token_usage"):
-                                    token_usage_data = TokenUsageData(**msg_item.usage_metadata["token_usage"])
-                                    self.logger.debug(f"[{self.agent_id}] Token usage data found in AIMessage metadata: {token_usage_data}")
-                                break # Assuming one AIMessage per relevant event part for streaming
+                                self.logger.info(f"[{self.agent_id}] Processing AIMessage from stream. Current extracted_text_content='{extracted_text_content[:100]}...'. New msg_item.content='{msg_item.content[:100]}...'. Interaction ID: {interaction_id}")
+                                extracted_text_content = msg_item.content
+                                self.logger.info(f"[{self.agent_id}] Updated extracted_text_content to: '{extracted_text_content[:100]}...'. Interaction ID: {interaction_id}")
+                                
+                                if hasattr(msg_item, 'usage_metadata') and msg_item.usage_metadata:
+                                    usage_metadata = msg_item.usage_metadata
+                                    usage_from_msg = usage_metadata.get("token_usage") or usage_metadata.get("usage_metadata")
+                                    if usage_from_msg:
+                                        try:
+                                            token_usage_data = TokenUsageData(**usage_from_msg)
+                                            self.logger.debug(f"[{self.agent_id}] Token usage from AIMessage metadata: {token_usage_data}")
+                                        except Exception as e_token_msg:
+                                            self.logger.warning(f"[{self.agent_id}] Could not parse token_usage from AIMessage metadata: {usage_from_msg}, error: {e_token_msg}")
+                                    else:
+                                        self.logger.debug(f"[{self.agent_id}] usage_metadata present but does not contain all required TokenUsageData fields: {usage_metadata}")
+                    
+                    # Fallback или альтернативный способ получить token usage, если он напрямую в event_part
+                    if token_usage_data is None and "token_usage" in event_part and event_part["token_usage"]:
+                        try:
+                            token_usage_data = TokenUsageData(**event_part["token_usage"])
+                            self.logger.debug(f"[{self.agent_id}] Token usage data from event part: {token_usage_data}")
+                        except Exception as e_token_event:
+                            self.logger.warning(f"[{self.agent_id}] Could not parse token_usage from event_part: {event_part.get('token_usage')}, error: {e_token_event}")
 
-                # Check for final token usage if it comes at the end or in a specific event type
-                # This depends on your LangGraph setup.
-                # Example: if token_usage is a top-level key in some event_parts
-                if "token_usage" in event_part and event_part["token_usage"]:
-                     try:
-                        token_usage_data = TokenUsageData(**event_part["token_usage"])
-                        self.logger.debug(f"[{self.agent_id}] Token usage data found in event part: {token_usage_data}")
-                     except Exception as e_token:
-                        self.logger.warning(f"[{self.agent_id}] Could not parse token_usage from event_part: {event_part.get('token_usage')}, error: {e_token}")
+                    # Новый fallback: если есть token_usage_events (список), взять первый (или все)
+                    if token_usage_data is None and "token_usage_events" in event_part and event_part["token_usage_events"]:
+                        try:
+                            tu_event = event_part["token_usage_events"][0]
+                            if isinstance(tu_event, dict):
+                                token_usage_data = TokenUsageData(**tu_event)
+                            else:
+                                token_usage_data = tu_event
+                            self.logger.debug(f"[{self.agent_id}] Token usage from token_usage_events: {token_usage_data}")
+                        except Exception as e_token_event:
+                            self.logger.warning(f"[{self.agent_id}] Could not parse token_usage from token_usage_events: {event_part.get('token_usage_events')}, error: {e_token_event}")
 
+            self.logger.info(f"[{self.agent_id}] Finished processing agent_response_stream for interaction_id: {interaction_id}")
+            full_response_content = extracted_text_content # Use the extracted content
 
-            self.logger.info(f"[{self.agent_id}] Agent response for interaction_id {interaction_id}: {full_response_content[:100]}...")
+            self.logger.info(f"[{self.agent_id}] Final extracted_text_content for interaction_id {interaction_id}: '{full_response_content}'")
+            self.logger.info(f"[{self.agent_id}] Agent response for interaction_id {interaction_id} (preview from full_response_content): {full_response_content[:100]}...")
 
             if self.db_session_factory:
                 async with self.db_session_factory() as db_session:
-                    # Save AI message
-                    ai_msg_db = await chat_crud.db_add_chat_message(
-                        db_session,
-                        chat_id=chat_id,
-                        agent_id=self.agent_id,
-                        interaction_id=interaction_id, # Use same interaction_id
-                        sender_type=SenderType.AI,
-                        message_text=full_response_content,
-                        platform_specific_data={"platform": "pubsub"}, # Example
-                        token_usage_data=token_usage_data.model_dump() if token_usage_data else None
-                    )
-            
+                    # Save agent response
+                    if full_response_content: # Only save if there's content
+                        await chat_crud.db_add_chat_message(
+                            db=db_session,
+                            agent_id=self.agent_id,
+                            thread_id=chat_id, # Changed from chat_id to thread_id
+                            sender_type=SenderType.AGENT,
+                            content=full_response_content,
+                            channel=payload.get("channel"), # Agent responds on the same channel
+                            timestamp=datetime.now(timezone.utc),
+                            interaction_id=interaction_id # Link AI response to the same interaction
+                        )
+                    # Save token usage if available
+                    self.logger.info(f"[{self.agent_id}] token_usage_data before publish: {token_usage_data}")
+                    if token_usage_data:
+                        # Формируем payload для очереди token_usage
+                        token_usage_payload = {
+                            "agent_id": self.agent_id,
+                            "thread_id": chat_id,
+                            "interaction_id": interaction_id,
+                            "call_type": getattr(token_usage_data, "call_type", None),
+                            "model_id": getattr(token_usage_data, "model_id", None),
+                            "prompt_tokens": getattr(token_usage_data, "prompt_tokens", 0),
+                            "completion_tokens": getattr(token_usage_data, "completion_tokens", 0),
+                            "total_tokens": getattr(token_usage_data, "total_tokens", 0),
+                            "timestamp": getattr(token_usage_data, "timestamp", datetime.now(timezone.utc).isoformat())
+                        }
+                        # Публикуем в Redis очередь для token_usage_worker
+                        if self.redis_pubsub_client:
+                            await self.redis_pubsub_client.rpush(
+                                settings.REDIS_TOKEN_USAGE_QUEUE_NAME,
+                                json.dumps(token_usage_payload)
+                            )
+                            self.logger.info(f"[{self.agent_id}] Published token usage to queue {settings.REDIS_TOKEN_USAGE_QUEUE_NAME}")
+                            self.logger.info(f"[{self.agent_id}] Published token usage event to Redis queue: {settings.REDIS_TOKEN_USAGE_QUEUE_NAME} | Data: {token_usage_payload}")
+
             # Publish response back to a response channel (e.g., agent_responses:{chat_id})
-            response_channel = f"agent_responses:{chat_id}"
+            response_channel = f"agent:{self.agent_id}:output" # NEW - MATCHES TELEGRAM BOT
             response_payload = {
                 "chat_id": chat_id,
+                "thread_id": chat_id, # ADDED thread_id
                 "agent_id": self.agent_id,
                 "interaction_id": interaction_id,
-                "text": full_response_content,
+                "response": full_response_content,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
             if self.redis_pubsub_client:
@@ -321,7 +405,7 @@ class AgentRunner(RunnableComponent, StatusUpdater):
             return
 
         pubsub = self.redis_pubsub_client.pubsub()
-        command_channel = f"agent_commands:{self.agent_id}" # Hardcoded channel name
+        command_channel = f"agent:{self.agent_id}:input" # Match Telegram integration
         
         try:
             await pubsub.subscribe(command_channel)

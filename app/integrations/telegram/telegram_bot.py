@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import time
+import uuid # Added import
 from typing import Optional, Dict, Any, List
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -121,30 +122,26 @@ class TelegramIntegrationBot(RunnableComponent, StatusUpdater):
 
     async def _publish_to_agent(self, chat_id: int, platform_user_id: str, message_text: str, user_data: dict):
         if not self.redis_client_bot:
-            self.logger.error("Cannot publish to agent: Redis client (bot) not available.")
-            if self.bot:
-                await self.bot.send_message(chat_id, "❌ Ошибка: Не удалось связаться с агентом (сервис недоступен).")
+            self.logger.error(f"Redis client for bot operations not available for agent {self.agent_id}. Cannot publish message.")
             return
 
         input_channel = f"agent:{self.agent_id}:input"
+        interaction_id = str(uuid.uuid4()) # Added interaction_id
         payload = {
-            "message": message_text,
-            "thread_id": str(chat_id),
+            "text": message_text,  # Changed from "message" to "text"
+            "chat_id": str(chat_id),  # Changed from "thread_id" to "chat_id"
+            "interaction_id": interaction_id, # Added interaction_id
             "platform_user_id": platform_user_id,
             "user_data": user_data,
             "channel": "telegram"
         }
         try:
             await self.redis_client_bot.publish(input_channel, json.dumps(payload))
-            self.logger.info(f"Published message to {input_channel} for chat {chat_id}")
-        except redis.RedisError as e:
-            self.logger.error(f"Redis error publishing message to {input_channel}: {e}")
-            if self.bot:
-                await self.bot.send_message(chat_id, "❌ Ошибка: Не удалось отправить сообщение агенту.")
+            self.logger.info(f"Published message to {input_channel} for chat {chat_id} (interaction_id: {interaction_id})") # Updated log
+        except redis_exceptions.RedisError as e: # CHANGED
+            self.logger.error(f"Redis error publishing to {input_channel} for agent {self.agent_id}: {e}", exc_info=True)
         except Exception as e:
-            self.logger.error(f"Unexpected error publishing message to {input_channel}: {e}", exc_info=True)
-            if self.bot:
-                 await self.bot.send_message(chat_id, "❌ Произошла внутренняя ошибка при отправке сообщения.")
+            self.logger.error(f"Unexpected error publishing to {input_channel} for agent {self.agent_id}: {e}", exc_info=True)
 
 
     async def _check_user_authorization(self, platform_user_id: str) -> bool:
