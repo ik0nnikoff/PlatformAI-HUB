@@ -385,7 +385,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             }
 
             await redis_cli.publish(response_channel, json.dumps(response_payload))
-            self.logger.info(f"[{self._component_id}] Published to {response_channel} response: {json.dumps(response_payload)}")
+            self.logger.debug(f"[{self._component_id}] Published to {response_channel} response: {json.dumps(response_payload)}")
 
             await self.update_last_active_time()
 
@@ -485,10 +485,17 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         # self._pubsub_channel уже установлен в __init__
         self._register_main_task(self._pubsub_listener_loop(), name="AgentPubSubListener")
 
-        # Передаем управление ServiceComponentBase.run_loop, который будет следить за задачами
-        await super().run_loop()
-        
-        self.logger.info(f"[{self._component_id}] AgentRunner run_loop finished.")
+        try:
+            await super().run_loop()
+        except Exception as e:
+            self.logger.critical(f"Unexpected error in AgentRunner run_loop for {self.agent_id}: {e}", exc_info=True)
+            self._running = False
+            self.clear_restart_request()
+            await self.mark_as_error(f"Run_loop critical error: {e}")
+        finally:
+            self.logger.info(f"[{self._component_id}] AgentRunner run_loop finished.")
+            self._running = False 
+
 
     async def cleanup(self) -> None:
         """

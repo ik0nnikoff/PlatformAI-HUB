@@ -158,6 +158,7 @@ class ServiceComponentBase(RunnableComponent, StatusUpdater, ABC):
 
         except asyncio.CancelledError:
             self.logger.info(f"[{self._component_id}] ServiceComponentBase run_loop itself was cancelled (e.g. during shutdown).")
+            self.initiate_shutdown()
             # initiate_shutdown() должен был быть вызван ранее, чтобы это произошло.
             # Все задачи будут отменены в cleanup.
         
@@ -256,7 +257,7 @@ class ServiceComponentBase(RunnableComponent, StatusUpdater, ABC):
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
                 
                 if message and message['type'] == 'message':
-                    self.logger.info(f"[{self._component_id}] Received message from {channel}: {message['data']}")
+                    self.logger.debug(f"[{self._component_id}] Received message from {channel}: {message['data']}")
                     try:
                         # Child class must implement _handle_pubsub_message
                         await self._handle_pubsub_message(message['data'])
