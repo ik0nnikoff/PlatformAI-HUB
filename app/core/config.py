@@ -19,8 +19,8 @@ class Settings:
     # Redis Configuration
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
     REDIS_USER_CACHE_TTL: int = int(os.getenv("REDIS_USER_CACHE_TTL", 3600))
-    REDIS_HISTORY_QUEUE_NAME: str = os.getenv("REDIS_HISTORY_QUEUE_NAME", "history_queue") # Added
-    REDIS_TOKEN_USAGE_QUEUE_NAME: str = os.getenv("REDIS_TOKEN_USAGE_QUEUE_NAME", "token_usage_queue") # Added
+    REDIS_HISTORY_QUEUE_NAME: str = os.getenv("REDIS_HISTORY_QUEUE_NAME", "history_queue")
+    REDIS_TOKEN_USAGE_QUEUE_NAME: str = os.getenv("REDIS_TOKEN_USAGE_QUEUE_NAME", "token_usage_queue")
 
     # PostgreSQL Configuration
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@localhost:5432/agentdb")

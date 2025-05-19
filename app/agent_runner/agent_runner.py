@@ -199,11 +199,23 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
 
             chat_id = payload.get("chat_id")
             user_input = payload.get("text")
-            interaction_id = payload.get("interaction_id") # Important for tracking
+            channel = payload.get("channel", "unknown")
+            platform_user_id = payload.get("platform_user_id")
+
+            interaction_id = str(uuid.uuid4())
+            self.logger.info(f"Generated InteractionID: {interaction_id} for Thread: {chat_id}")
 
             if not chat_id or user_input is None or not interaction_id:
                 self.logger.warning(f"Missing chat_id, text, or interaction_id in payload: {payload}")
                 return
+
+            await self._save_history(
+                sender_type="user",
+                thread_id=chat_id,
+                content=user_input,
+                channel=channel,
+                interaction_id=interaction_id
+            )
 
             # Determine context memory depth from agent_config
             enable_context_memory = self.agent_config.get("enableContextMemory", True)
@@ -216,22 +228,6 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             
             self.logger.info(f"Using history limit: {actual_history_limit} (enabled: {enable_context_memory}, configured depth: {context_memory_depth})")
 
-            history_messages_db: List[ChatMessageDB] = []
-            if self.db_session_factory:
-                async with self.db_session_factory() as db_session:
-                    # Save user message
-                    user_msg_db = await chat_crud.db_add_chat_message(
-                        db=db_session,
-                        agent_id=self._component_id,
-                        thread_id=chat_id, # Changed from chat_id to thread_id
-                        sender_type=SenderType.USER,
-                        content=user_input,
-                        channel=payload.get("channel"),
-                        timestamp=datetime.now(timezone.utc), # Consider parsing from payload if available and reliable
-                        interaction_id=interaction_id
-                    )
-                    history_messages_db.append(user_msg_db) # Add to history for current turn
-            
             # langchain_history = convert_db_history_to_langchain_static(history_messages_db, self.logger) # Temporarily commented out
 
             initial_graph_input = {
@@ -336,45 +332,38 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             self.logger.info(f"Final extracted_text_content for interaction_id {interaction_id}: '{full_response_content}'")
             self.logger.info(f"Agent response for interaction_id {interaction_id} (preview from full_response_content): {full_response_content[:100]}...")
 
-            if self.db_session_factory:
-                async with self.db_session_factory() as db_session:
-                    # Save agent response
-                    if full_response_content: # Only save if there's content
-                        await chat_crud.db_add_chat_message(
-                            db=db_session,
-                            agent_id=self._component_id,
-                            thread_id=chat_id, # Changed from chat_id to thread_id
-                            sender_type=SenderType.AGENT,
-                            content=full_response_content,
-                            channel=payload.get("channel"), # Agent responds on the same channel
-                            timestamp=datetime.now(timezone.utc),
-                            interaction_id=interaction_id # Link AI response to the same interaction
-                        )
-                    # Save token usage if available
-                    self.logger.info(f"token_usage_data before publish: {token_usage_data}")
-                    if token_usage_data:
-                        # Формируем payload для очереди token_usage
-                        token_usage_payload = {
-                            "agent_id": self._component_id,
-                            "thread_id": chat_id,
-                            "interaction_id": interaction_id,
-                            "call_type": getattr(token_usage_data, "call_type", None),
-                            "model_id": getattr(token_usage_data, "model_id", None),
-                            "prompt_tokens": getattr(token_usage_data, "prompt_tokens", 0),
-                            "completion_tokens": getattr(token_usage_data, "completion_tokens", 0),
-                            "total_tokens": getattr(token_usage_data, "total_tokens", 0),
-                            "timestamp": getattr(token_usage_data, "timestamp", datetime.now(timezone.utc).isoformat())
-                        }
-                        # Публикуем в Redis очередь для token_usage_worker
-                        await redis_cli.publish(
-                            settings.REDIS_TOKEN_USAGE_QUEUE_NAME,
-                            json.dumps(token_usage_payload)
-                        )
-                        self.logger.info(f"Published token usage to queue {settings.REDIS_TOKEN_USAGE_QUEUE_NAME}")
-                        self.logger.info(f"Published token usage event to Redis queue: {settings.REDIS_TOKEN_USAGE_QUEUE_NAME} | Data: {token_usage_payload}")
+            await self._save_history(
+                sender_type="agent",
+                thread_id=chat_id,
+                content=full_response_content,
+                channel=channel,
+                interaction_id=interaction_id
+            )
+
+            self.logger.info(f"token_usage_data before publish: {token_usage_data}")
+            if token_usage_data:
+                # Формируем payload для очереди token_usage
+                token_usage_payload = {
+                    "agent_id": self._component_id,
+                    "thread_id": chat_id,
+                    "interaction_id": interaction_id,
+                    "call_type": getattr(token_usage_data, "call_type", None),
+                    "model_id": getattr(token_usage_data, "model_id", None),
+                    "prompt_tokens": getattr(token_usage_data, "prompt_tokens", 0),
+                    "completion_tokens": getattr(token_usage_data, "completion_tokens", 0),
+                    "total_tokens": getattr(token_usage_data, "total_tokens", 0),
+                    "timestamp": getattr(token_usage_data, "timestamp", datetime.now(timezone.utc).isoformat())
+                }
+                # Публикуем в Redis очередь для token_usage_worker
+                await redis_cli.publish(
+                    settings.REDIS_TOKEN_USAGE_QUEUE_NAME,
+                    json.dumps(token_usage_payload)
+                )
+                self.logger.info(f"Published token usage to queue {settings.REDIS_TOKEN_USAGE_QUEUE_NAME}")
+                self.logger.info(f"Published token usage event to Redis queue: {settings.REDIS_TOKEN_USAGE_QUEUE_NAME} | Data: {token_usage_payload}")
 
             # Publish response back to a response channel (e.g., agent_responses:{chat_id})
-            response_channel = f"agent:{self._component_id}:output" # NEW - MATCHES TELEGRAM BOT
+            response_channel = f"agent:{self._component_id}:output"
             response_payload = {
                 "chat_id": chat_id,
                 "thread_id": chat_id, # ADDED thread_id
@@ -412,38 +401,38 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                     self.logger.error(f"Failed to publish error notification: {pub_err}", exc_info=True)
 
 
-    async def _save_history_to_redis_queue(self, agent_id: str, chat_id: str, interaction_id: str,
-                                           message_type: str, message_content: str) -> None:
-        """
-        Сохраняет историю сообщений в очередь Redis для последующей обработки.
+    async def _save_history(
+            self,
+            sender_type: str,
+            thread_id: str,
+            content: str,
+            channel: Optional[str],
+            interaction_id: str
+            ) -> None:
 
-        Args:
-            agent_id (str): Идентификатор агента.
-            chat_id (str): Идентификатор чата.
-            interaction_id (str): Идентификатор взаимодействия.
-            message_type (str): Тип сообщения (например, "user" или "agent").
-            message_content (str): Содержимое сообщения.
-        """
+        try:
+            redis_cli = await self.redis_client
+        except RuntimeError as e:
+            self.logger.error(f"Redis client not available for handling pubsub message: {e}")
+            return
+        
         message_to_save = {
-            "agent_id": agent_id,
-            "chat_id": chat_id,
-            "interaction_id": interaction_id,
-            "message_type": message_type,
-            "message_content": message_content,
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "agent_id": self._component_id,
+            "thread_id": thread_id,
+            "sender_type": sender_type,
+            "content": content,
+            "channel": channel,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "interaction_id": interaction_id
         }
         try:
-            # Use self.redis_client for LPUSH
-            redis_cli = await self.redis_client
             await redis_cli.lpush(settings.REDIS_HISTORY_QUEUE_NAME, json.dumps(message_to_save))
-            self.logger.info(f"Message {message_type} for interaction {interaction_id} pushed to history queue.")
+            self.logger.info(f"Queued {sender_type} message for history (Thread: {thread_id}, InteractionID: {interaction_id})")
         except redis_exceptions.RedisError as e:
-            self.logger.error(f"Redis error pushing message to history queue: {e}", exc_info=True)
+            self.logger.error(f"Failed to queue message for history (Thread: {thread_id}): {e}", exc_info=True)
         except Exception as e:
-            self.logger.error(f"Failed to push message to history queue for interaction {interaction_id}: {e}", exc_info=True)
+            self.logger.error(f"Unexpected error queuing message for history (Thread: {thread_id}): {e}", exc_info=True)
 
-
-    # --- Core Lifecycle Methods (setup, run_loop, cleanup from ServiceComponentBase) ---
 
     async def setup(self) -> None:
         """

@@ -85,7 +85,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         logger (logging.LoggerAdapter): Адаптер логгера для журналирования. (Установлен в ServiceComponentBase)
         agent_config (Optional[Dict]): Загруженная конфигурация агента.
         agent_app (Optional[Any]): Экземпляр приложения LangGraph агента.
-        pubsub_handler_task (Optional[asyncio.Task]): Задача asyncio, выполняющая прослушивание Pub/Sub.
+        # pubsub_handler_task (Optional[asyncio.Task]): Задача asyncio, выполняющая прослушивание Pub/Sub. # Удалено, используется _register_main_task
         static_state_config (Optional[Dict]): Статическая конфигурация состояния, извлеченная из конфигурации агента.
     """
 
@@ -106,11 +106,12 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                          logger_adapter=logger_adapter)
 
         self.db_session_factory = db_session_factory
+        self._pubsub_channel = f"agent:{self._component_id}:input"
 
         self.config_url = str
         self.agent_config: Optional[Dict] = None
         self.agent_app: Optional[Any] = None
-        self.pubsub_handler_task: Optional[asyncio.Task] = None
+        # self.pubsub_handler_task: Optional[asyncio.Task] = None # Удалено, т.к. задача управляется ServiceComponentBase
         self.static_state_config: Optional[Dict] = None
 
         self.logger.info(f"AgentRunner for agent {self._component_id} initialized. PID: {os.getpid()}")
@@ -124,15 +125,15 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         """
         self.config_url = f"http://{settings.MANAGER_HOST}:{settings.MANAGER_PORT}{settings.API_V1_STR}/agents/{self._component_id}/config"
 
-        self.logger.info(f"[{self._component_id}] Fetching configuration from {self.config_url}...")
+        self.logger.info(f"Fetching configuration from {self.config_url}...")
         self.agent_config = await fetch_config_static(self.config_url, self.logger)
         if not self.agent_config:
-            self.logger.error(f"[{self._component_id}] Failed to fetch or invalid configuration from {self.config_url}.")
+            self.logger.error(f"Failed to fetch or invalid configuration from {self.config_url}.")
             return False
 
         # Extract static state config if available
         self.static_state_config = {}
-        self.logger.info(f"[{self._component_id}] Agent configuration loaded and prepared successfully.")
+        self.logger.info(f"Agent configuration loaded and prepared successfully.")
         return True
 
     async def _setup_langgraph_app(self) -> bool:
@@ -142,95 +143,18 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         Returns:
             bool: True, если приложение успешно создано и настроено, иначе False.
         """
-        self.logger.info(f"[{self._component_id}] Creating LangGraph application...")
+        self.logger.info(f"Creating LangGraph application...")
         try:
             self.agent_app, static_state_config = create_agent_app(self.agent_config, self._component_id)
             self.static_state_config = static_state_config # Store for use in _process_message
         except Exception as e:
-            self.logger.error(f"[{self._component_id}] Failed to create LangGraph application: {e}", exc_info=True)
+            self.logger.error(f"Failed to create LangGraph application: {e}", exc_info=True)
             return False
 
-        self.logger.info(f"[{self._component_id}] LangGraph application created successfully.")
+        self.logger.info(f"LangGraph application created successfully.")
         return True
 
-    async def _pubsub_listener_loop(self):
-        """Прослушивает сообщения Pub/Sub из Redis и обрабатывает их."""
-        # self.redis_client is inherited from StatusUpdater -> RedisClientManager
-        # and initialized by ServiceComponentBase.setup() -> StatusUpdater.setup_status_updater()
-        
-        # Ensure redis_client is available (it should be after setup)
-        try:
-            redis_cli = await self.redis_client 
-        except RuntimeError as e:
-            self.logger.critical(f"[{self._component_id}] Redis client not available for Pub/Sub listener: {e}. Listener cannot start.")
-            await self.mark_as_error(reason=f"Redis client unavailable for Pub/Sub: {e}")
-            return
-
-        channel = f"agent:{self._component_id}:input"
-        pubsub = None
-        self.logger.info(f"[{self._component_id}] Pub/Sub listener starting for channel: {channel}")
-
-        while self._running:  # self._running is from RunnableComponent
-            try:
-                if not await redis_cli.ping():
-                    self.logger.warning(f"[{self._component_id}] Redis ping failed in listener. Re-establishing pubsub.")
-                    if pubsub:
-                        try:
-                            await pubsub.aclose()
-                        except Exception as e_close:
-                            self.logger.error(f"[{self._component_id}] Error closing pubsub during reconnect: {e_close}")
-                    pubsub = None
-                    await asyncio.sleep(settings.REDIS_RECONNECT_INTERVAL)
-                    continue
-
-                if pubsub is None:
-                    pubsub = redis_cli.pubsub()
-                    await pubsub.subscribe(channel)
-                    self.logger.info(f"[{self._component_id}] Subscribed to Redis channel: {channel}")
-
-                # Get message with timeout to allow checking self._running
-                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-
-                if not self._running: # Check again after potential blocking call
-                    break
-
-                if message and message.get("type") == "message":
-                    self.logger.debug(f"[{self._component_id}] Received raw message from {channel}: {message}")
-                    await self._handle_pubsub_message(message)
-                
-            except redis_exceptions.ConnectionError as e:
-                self.logger.error(f"[{self._component_id}] Redis connection error in listener: {e}. Attempting to reconnect...", exc_info=True)
-                if pubsub:
-                    try: await pubsub.aclose()
-                    except: pass
-                pubsub = None
-                await self.mark_as_error(reason=f"Redis connection error: {e}") # Temporary error state
-                await asyncio.sleep(settings.REDIS_RECONNECT_INTERVAL) 
-                # Attempt to recover by re-pinging and re-subscribing in the next iteration
-            except asyncio.CancelledError:
-                self.logger.info(f"[{self._component_id}] Pub/Sub listener task cancelled.")
-                break
-            except Exception as e:
-                self.logger.error(f"[{self._component_id}] Unexpected error in Pub/Sub listener: {e}", exc_info=True)
-                if pubsub:
-                    try: await pubsub.aclose()
-                    except: pass
-                pubsub = None
-                await self.mark_as_error(reason=f"Pub/Sub listener error: {e}")
-                await asyncio.sleep(settings.REDIS_RECONNECT_INTERVAL) # Wait before retrying
-
-        if pubsub:
-            try:
-                self.logger.info(f"[{self._component_id}] Unsubscribing and closing Pub/Sub connection.")
-                await pubsub.unsubscribe(channel)
-                await pubsub.aclose()
-            except Exception as e:
-                self.logger.error(f"[{self._component_id}] Error during Pub/Sub cleanup: {e}", exc_info=True)
-        
-        self.logger.info(f"[{self._component_id}] Pub/Sub listener for {channel} has stopped.")
-
-
-    async def _handle_pubsub_message(self, message: Dict):
+    async def _handle_pubsub_message(self, message_data: bytes) -> None:
         """
         Обрабатывает входящее сообщение от Redis Pub/Sub.
 
@@ -261,40 +185,39 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         """
 
         try:
-            redis_cli = await self.redis_client # Use inherited client
+            redis_cli = await self.redis_client
         except RuntimeError as e:
-            self.logger.error(f"[{self._component_id}] Redis client not available for auth check: {e}")
-            return False
+            self.logger.error(f"Redis client not available for handling pubsub message: {e}")
+            return
         
+        data_str: Optional[str] = None
+        payload: Optional[Dict[str, Any]] = None # Инициализируем payload
         try:
-            data_str = message.get('data')
-            if isinstance(data_str, bytes):
-                data_str = data_str.decode('utf-8')
-            elif not isinstance(data_str, str):
-                self.logger.warning(f"[{self._component_id}] Received non-string or non-bytes data in pubsub message: {type(data_str)}")
-                return
-
+            data_str = message_data.decode('utf-8')
             payload = json.loads(data_str)
-            self.logger.info(f"[{self._component_id}] Processing message for chat_id: {payload.get('chat_id')}")
+            self.logger.info(f"Processing message for chat_id: {payload.get('chat_id')}")
 
             chat_id = payload.get("chat_id")
             user_input = payload.get("text")
-            interaction_id = payload.get("interaction_id") # Important for tracking
+            thread_id = payload.get("thread_id")
+
+            interaction_id = str(uuid.uuid4())
+            self.logger.info(f"Generated InteractionID: {interaction_id} for Thread: {thread_id}")
 
             if not chat_id or user_input is None or not interaction_id:
-                self.logger.warning(f"[{self._component_id}] Missing chat_id, text, or interaction_id in payload: {payload}")
+                self.logger.warning(f"Missing chat_id, text, or interaction_id in payload: {payload}")
                 return
 
             # Determine context memory depth from agent_config
             enable_context_memory = self.agent_config.get("enableContextMemory", True)
             context_memory_depth = self.agent_config.get("contextMemoryDepth", 10) # Default to 10 if not specified
             if not enable_context_memory:
-                self.logger.info(f"[{self._component_id}] Context memory is disabled by agent config. History will not be loaded with depth.")
+                self.logger.info(f"Context memory is disabled by agent config. History will not be loaded with depth.")
                 actual_history_limit = 0
             else:
                 actual_history_limit = context_memory_depth
             
-            self.logger.info(f"[{self._component_id}] Using history limit: {actual_history_limit} (enabled: {enable_context_memory}, configured depth: {context_memory_depth})")
+            self.logger.info(f"Using history limit: {actual_history_limit} (enabled: {enable_context_memory}, configured depth: {context_memory_depth})")
 
             history_messages_db: List[ChatMessageDB] = []
             if self.db_session_factory:
@@ -333,7 +256,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                         initial_graph_input[graph_key] = self.static_state_config[static_key]
                     else:
                         self.logger.warning(
-                            f"[{self._component_id}] Key '{static_key}' not found in static_state_config. "
+                            f"Key '{static_key}' not found in static_state_config. "
                             f"Graph key '{graph_key}' may be missing. "
                             f"Check agent configuration and langgraph_factory.py."
                         )
@@ -342,21 +265,21 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                             initial_graph_input[graph_key] = "" # Default for system_prompt
                         # Add defaults for other critical keys if necessary
                         elif graph_key == "model_id":
-                            self.logger.error(f"[{self._component_id}] Critical key 'model_id' is missing from static_state_config. Graph execution will likely fail.")
+                            self.logger.error(f"Critical key 'model_id' is missing from static_state_config. Graph execution will likely fail.")
                             initial_graph_input[graph_key] = "default_model_id_placeholder" # Example placeholder
                         elif graph_key == "provider":
-                            self.logger.error(f"[{self._component_id}] Critical key 'provider' is missing from static_state_config. Graph execution will likely fail.")
+                            self.logger.error(f"Critical key 'provider' is missing from static_state_config. Graph execution will likely fail.")
                             initial_graph_input[graph_key] = "default_provider_placeholder" # Example placeholder
             else:
                 self.logger.error(
-                    f"[{self._component_id}] static_state_config is not set. Critical parameters like system_prompt, temperature, etc., will be missing."
+                    f"static_state_config is not set. Critical parameters like system_prompt, temperature, etc., will be missing."
                 )
                 # Set defaults for critical keys if static_state_config is missing entirely
                 initial_graph_input["system_prompt"] = ""
                 # Defaults for other keys might be needed here if the graph cannot proceed without them
 
             # Invoke agent
-            self.logger.debug(f"[{self._component_id}] Invoking agent for interaction_id: {interaction_id} with input: {initial_graph_input}") # Log the input
+            self.logger.debug(f"Invoking agent for interaction_id: {interaction_id} with input: {initial_graph_input}") # Log the input
             agent_response_stream = self.agent_app.astream(
                 initial_graph_input, # Use the input dict that now includes system_prompt and other params
                 config={"configurable": {"thread_id": chat_id, "agent_id": self._component_id}}
@@ -365,18 +288,18 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             extracted_text_content = "" # Initialize to store the final text
             token_usage_data: Optional[TokenUsageData] = None
             
-            self.logger.debug(f"[{self._component_id}] Starting to process agent_response_stream for interaction_id: {interaction_id}")
+            self.logger.debug(f"Starting to process agent_response_stream for interaction_id: {interaction_id}")
             async for event_part in agent_response_stream:
-                self.logger.info(f"[{self._component_id}] Stream event_part: {event_part}") # DEBUG LINE
+                self.logger.info(f"Stream event_part: {event_part}") # DEBUG LINE
                 if isinstance(event_part, dict):
                     # Corrected path to messages based on new logs
                     messages_chunk = event_part.get('agent_node', {}).get('messages', [])
                     if messages_chunk and isinstance(messages_chunk, list):
                         for msg_item in messages_chunk:
                             if isinstance(msg_item, AIMessage):
-                                self.logger.info(f"[{self._component_id}] Processing AIMessage from stream. Current extracted_text_content='{extracted_text_content[:100]}...'. New msg_item.content='{msg_item.content[:100]}...'. Interaction ID: {interaction_id}")
+                                self.logger.info(f"Processing AIMessage from stream. Current extracted_text_content='{extracted_text_content[:100]}...'. New msg_item.content='{msg_item.content[:100]}...'. Interaction ID: {interaction_id}")
                                 extracted_text_content = msg_item.content
-                                self.logger.info(f"[{self._component_id}] Updated extracted_text_content to: '{extracted_text_content[:100]}...'. Interaction ID: {interaction_id}")
+                                self.logger.info(f"Updated extracted_text_content to: '{extracted_text_content[:100]}...'. Interaction ID: {interaction_id}")
                                 
                                 if hasattr(msg_item, 'usage_metadata') and msg_item.usage_metadata:
                                     usage_metadata = msg_item.usage_metadata
@@ -384,19 +307,19 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                                     if usage_from_msg:
                                         try:
                                             token_usage_data = TokenUsageData(**usage_from_msg)
-                                            self.logger.debug(f"[{self._component_id}] Token usage from AIMessage metadata: {token_usage_data}")
+                                            self.logger.debug(f"Token usage from AIMessage metadata: {token_usage_data}")
                                         except Exception as e_token_msg:
-                                            self.logger.warning(f"[{self._component_id}] Could not parse token_usage from AIMessage metadata: {usage_from_msg}, error: {e_token_msg}")
+                                            self.logger.warning(f"Could not parse token_usage from AIMessage metadata: {usage_from_msg}, error: {e_token_msg}")
                                     else:
-                                        self.logger.debug(f"[{self._component_id}] usage_metadata present but does not contain all required TokenUsageData fields: {usage_metadata}")
+                                        self.logger.debug(f"usage_metadata present but does not contain all required TokenUsageData fields: {usage_metadata}")
                     
                     # Fallback или альтернативный способ получить token usage, если он напрямую в event_part
                     if token_usage_data is None and "token_usage" in event_part and event_part["token_usage"]:
                         try:
                             token_usage_data = TokenUsageData(**event_part["token_usage"])
-                            self.logger.debug(f"[{self._component_id}] Token usage data from event part: {token_usage_data}")
+                            self.logger.debug(f"Token usage data from event part: {token_usage_data}")
                         except Exception as e_token_event:
-                            self.logger.warning(f"[{self._component_id}] Could not parse token_usage from event_part: {event_part.get('token_usage')}, error: {e_token_event}")
+                            self.logger.warning(f"Could not parse token_usage from event_part: {event_part.get('token_usage')}, error: {e_token_event}")
 
                     # Новый fallback: если есть token_usage_events (список), взять первый (или все)
                     if token_usage_data is None and "token_usage_events" in event_part and event_part["token_usage_events"]:
@@ -406,15 +329,15 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                                 token_usage_data = TokenUsageData(**tu_event)
                             else:
                                 token_usage_data = tu_event
-                            self.logger.debug(f"[{self._component_id}] Token usage from token_usage_events: {token_usage_data}")
+                            self.logger.debug(f"Token usage from token_usage_events: {token_usage_data}")
                         except Exception as e_token_event:
-                            self.logger.warning(f"[{self._component_id}] Could not parse token_usage from token_usage_events: {event_part.get('token_usage_events')}, error: {e_token_event}")
+                            self.logger.warning(f"Could not parse token_usage from token_usage_events: {event_part.get('token_usage_events')}, error: {e_token_event}")
 
-            self.logger.info(f"[{self._component_id}] Finished processing agent_response_stream for interaction_id: {interaction_id}")
+            self.logger.info(f"Finished processing agent_response_stream for interaction_id: {interaction_id}")
             full_response_content = extracted_text_content # Use the extracted content
 
-            self.logger.info(f"[{self._component_id}] Final extracted_text_content for interaction_id {interaction_id}: '{full_response_content}'")
-            self.logger.info(f"[{self._component_id}] Agent response for interaction_id {interaction_id} (preview from full_response_content): {full_response_content[:100]}...")
+            self.logger.info(f"Final extracted_text_content for interaction_id {interaction_id}: '{full_response_content}'")
+            self.logger.info(f"Agent response for interaction_id {interaction_id} (preview from full_response_content): {full_response_content[:100]}...")
 
             if self.db_session_factory:
                 async with self.db_session_factory() as db_session:
@@ -431,7 +354,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                             interaction_id=interaction_id # Link AI response to the same interaction
                         )
                     # Save token usage if available
-                    self.logger.info(f"[{self._component_id}] token_usage_data before publish: {token_usage_data}")
+                    self.logger.info(f"token_usage_data before publish: {token_usage_data}")
                     if token_usage_data:
                         # Формируем payload для очереди token_usage
                         token_usage_payload = {
@@ -446,12 +369,12 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                             "timestamp": getattr(token_usage_data, "timestamp", datetime.now(timezone.utc).isoformat())
                         }
                         # Публикуем в Redis очередь для token_usage_worker
-                        await redis_cli.rpush(
+                        await redis_cli.publish(
                             settings.REDIS_TOKEN_USAGE_QUEUE_NAME,
                             json.dumps(token_usage_payload)
                         )
-                        self.logger.info(f"[{self._component_id}] Published token usage to queue {settings.REDIS_TOKEN_USAGE_QUEUE_NAME}")
-                        self.logger.info(f"[{self._component_id}] Published token usage event to Redis queue: {settings.REDIS_TOKEN_USAGE_QUEUE_NAME} | Data: {token_usage_payload}")
+                        self.logger.info(f"Published token usage to queue {settings.REDIS_TOKEN_USAGE_QUEUE_NAME}")
+                        self.logger.info(f"Published token usage event to Redis queue: {settings.REDIS_TOKEN_USAGE_QUEUE_NAME} | Data: {token_usage_payload}")
 
             # Publish response back to a response channel (e.g., agent_responses:{chat_id})
             response_channel = f"agent:{self._component_id}:output" # NEW - MATCHES TELEGRAM BOT
@@ -464,15 +387,15 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
 
-            await redis_cli.rpush(response_channel, json.dumps(response_payload))
-            self.logger.info(f"[{self._component_id}] Published to {response_channel} response: {json.dumps(response_payload)}")
+            await redis_cli.publish(response_channel, json.dumps(response_payload))
+            self.logger.debug(f"Published to {response_channel} response: {json.dumps(response_payload)}")
 
             await self.update_last_active_time()
 
         except json.JSONDecodeError as e:
-            self.logger.error(f"[{self._component_id}] JSONDecodeError processing PubSub message: {e}. Data: {data_str}", exc_info=True)
+            self.logger.error(f"JSONDecodeError processing PubSub message: {e}. Data: {data_str}", exc_info=True)
         except Exception as e:
-            self.logger.error(f"[{self._component_id}] Error processing PubSub message: {e}", exc_info=True)
+            self.logger.error(f"Error processing PubSub message: {e}", exc_info=True)
             # Optionally, publish an error response
             if 'payload' in locals() and 'chat_id' in payload and 'interaction_id' in payload:
                 error_response_channel = f"agent_responses:{payload['chat_id']}"
@@ -485,44 +408,45 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                 }
 
                 try:
-                    await redis_cli.rpush(error_response_channel, json.dumps(error_payload))
-                    self.logger.info(f"[{self._component_id}] Published error notification to {error_response_channel}")
+                    # Changed from rpush to publish
+                    await redis_cli.publish(error_response_channel, json.dumps(error_payload).encode('utf-8'))
+                    self.logger.info(f"Published error notification to {error_response_channel}")
                 except Exception as pub_err:
-                    self.logger.error(f"[{self._component_id}] Failed to publish error notification: {pub_err}", exc_info=True)
+                    self.logger.error(f"Failed to publish error notification: {pub_err}", exc_info=True)
 
 
-    async def _save_history_to_redis_queue(self, agent_id: str, chat_id: str, interaction_id: str,
-                                           message_type: str, message_content: str) -> None:
-        """
-        Сохраняет историю сообщений в очередь Redis для последующей обработки.
+    async def _save_history(
+            self,
+            sender_type: str,
+            thread_id: str,
+            content: str,
+            channel: Optional[str],
+            interaction_id: str
+            ) -> None:
 
-        Args:
-            agent_id (str): Идентификатор агента.
-            chat_id (str): Идентификатор чата.
-            interaction_id (str): Идентификатор взаимодействия.
-            message_type (str): Тип сообщения (например, "user" или "agent").
-            message_content (str): Содержимое сообщения.
-        """
+        try:
+            redis_cli = await self.redis_client
+        except RuntimeError as e:
+            self.logger.error(f"Redis client not available for handling pubsub message: {e}")
+            return
+        
         message_to_save = {
-            "agent_id": agent_id,
-            "chat_id": chat_id,
-            "interaction_id": interaction_id,
-            "message_type": message_type,
-            "message_content": message_content,
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "agent_id": self._component_id,
+            "thread_id": thread_id,
+            "sender_type": sender_type,
+            "content": content,
+            "channel": channel,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "interaction_id": interaction_id
         }
         try:
-            # Use self.redis_client for LPUSH
-            redis_cli = await self.redis_client
             await redis_cli.lpush(settings.REDIS_HISTORY_QUEUE_NAME, json.dumps(message_to_save))
-            self.logger.info(f"[{self._component_id}] Message {message_type} for interaction {interaction_id} pushed to history queue.")
+            self.logger.info(f"Queued {sender_type} message for history (Thread: {thread_id}, InteractionID: {interaction_id})")
         except redis_exceptions.RedisError as e:
-            self.logger.error(f"[{self._component_id}] Redis error pushing message to history queue: {e}", exc_info=True)
+            self.logger.error(f"Failed to queue message for history (Thread: {thread_id}): {e}", exc_info=True)
         except Exception as e:
-            self.logger.error(f"[{self._component_id}] Failed to push message to history queue for interaction {interaction_id}: {e}", exc_info=True)
+            self.logger.error(f"Unexpected error queuing message for history (Thread: {thread_id}): {e}", exc_info=True)
 
-
-    # --- Core Lifecycle Methods (setup, run_loop, cleanup from ServiceComponentBase) ---
 
     async def setup(self) -> None:
         """
@@ -530,20 +454,20 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         Вызывает super().setup() для инициализации StatusUpdater и RedisClientManager.
         Затем загружает конфигурацию агента и настраивает приложение LangGraph.
         """
-        self.logger.info(f"[{self._component_id}] AgentRunner setup started.")
+        self.logger.info(f"AgentRunner setup started.")
         await super().setup() # This calls ServiceComponentBase.setup() which handles StatusUpdater, Redis init, and clears needs_restart and _main_tasks
 
         if not await self._load_and_prepare_config():
-            self.logger.critical(f"[{self._component_id}] Failed to load or prepare agent configuration. AgentRunner cannot start.")
+            self.logger.critical(f"Failed to load or prepare agent configuration. AgentRunner cannot start.")
             await self.mark_as_error(reason="Failed to load agent config")
             raise RuntimeError("Agent configuration failed to load.")
 
         if not await self._setup_langgraph_app():
-            self.logger.critical(f"[{self._component_id}] Failed to setup LangGraph application. AgentRunner cannot start.")
+            self.logger.critical(f"Failed to setup LangGraph application. AgentRunner cannot start.")
             await self.mark_as_error(reason="Failed to setup LangGraph app")
             raise RuntimeError("LangGraph application setup failed.")
         
-        self.logger.info(f"[{self._component_id}] AgentRunner setup completed successfully.")
+        self.logger.debug(f"AgentRunner setup completed successfully.")
 
 
     async def run_loop(self) -> None:
@@ -552,62 +476,28 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         Регистрирует слушателя Pub/Sub как основную задачу и передает управление
         в `super().run_loop()` для ее выполнения и мониторинга.
         """
-        self.logger.info(f"[{self._component_id}] AgentRunner run_loop starting.")
+        if not self.agent_app:
+            self.logger.error(f"Agent application not initialized. Cannot start run_loop.")
+            await self.mark_as_error("Agent application not initialized")
+            # self.initiate_shutdown() # ServiceComponentBase.run_loop handles shutdown if _running becomes False
+            return
+
+        self.logger.info(f"AgentRunner run_loop starting...")
         
-        # Убедимся, что предыдущая задача (если была) очищена перед регистрацией новой.
-        # super().setup() должен был очистить self._main_tasks, но для надежности:
-        if self.pubsub_handler_task and not self.pubsub_handler_task.done():
-            self.logger.warning(f"[{self._component_id}] pubsub_handler_task was still active at the start of run_loop. Cancelling it.")
-            self.pubsub_handler_task.cancel()
-            try:
-                await self.pubsub_handler_task
-            except asyncio.CancelledError:
-                self.logger.info(f"[{self._component_id}] Old pubsub_handler_task cancelled.")
-            except Exception as e:
-                self.logger.error(f"[{self._component_id}] Error cancelling old pubsub_handler_task: {e}")
-        self.pubsub_handler_task = None
+        # Регистрируем _pubsub_listener_loop как основную задачу
+        # self._pubsub_channel уже установлен в __init__
+        self._register_main_task(self._pubsub_listener_loop(), name="AgentPubSubListener")
 
-        # Регистрация основной задачи
-        self.pubsub_handler_task = self._register_main_task(
-            self._pubsub_listener_loop(),
-            name=f"AgentRunner-PubSubListener-{self._component_id}"
-        )
-        
-        # Передача управления базовому классу для выполнения и мониторинга задач
-        await super().run_loop()
-
-        # После завершения super().run_loop() (т.е. когда все задачи остановлены или одна упала)
-        # можно выполнить специфичную для AgentRunner логику, если необходимо.
-        # Например, если _pubsub_listener_loop завершился с ошибкой, это будет обработано в super().run_loop(),
-        # который вызовет mark_as_error и initiate_shutdown.
-        # Если _pubsub_listener_loop завершился и вызвал self.request_restart(),
-        # то self.needs_restart будет True, и runner_main.py это обработает.
-
-        # Если мы дошли сюда, значит super().run_loop() завершился.
-        # Проверяем, не завершилась ли задача pubsub_handler_task с ошибкой,
-        # которая не была обработана как критическая в super().run_loop()
-        # (хотя она должна была быть).
-        if self.pubsub_handler_task and self.pubsub_handler_task.done():
-            try:
-                exc = self.pubsub_handler_task.exception()
-                if exc:
-                    self.logger.error(f"[{self._component_id}] PubSub listener task finished with an unhandled error after super().run_loop(): {exc}", exc_info=exc)
-                    # Потенциально установить self.request_restart() или self.clear_restart_request()
-                    # в зависимости от типа ошибки, если это не было сделано в super().run_loop()
-                    # Однако, super().run_loop() должен был это обработать.
-                    # Это больше для отладки.
-                    if self._running: # Если компонент все еще считает себя работающим
-                        await self.mark_as_error(reason=f"PubSub listener failed post-loop: {exc}")
-                        self.clear_restart_request() # Не перезапускать, если ошибка здесь
-                        self.initiate_shutdown() # Убедиться, что остановка инициирована
-            except asyncio.CancelledError:
-                self.logger.info(f"[{self._component_id}] PubSub listener task was cancelled (checked after super().run_loop()).")
-            # except asyncio.InvalidStateError:
-                # Задача еще не завершена, что странно, если super().run_loop() завершился
-                # self.logger.warning(f"[{self._component_id}] PubSub listener task in InvalidStateError after super().run_loop().")
-
-
-        self.logger.info(f"[{self._component_id}] AgentRunner run_loop finished.")
+        try:
+            await super().run_loop()
+        except Exception as e:
+            self.logger.critical(f"Unexpected error in AgentRunner run_loop for {self.agent_id}: {e}", exc_info=True)
+            self._running = False
+            self.clear_restart_request()
+            await self.mark_as_error(f"Run_loop critical error: {e}")
+        finally:
+            self.logger.info(f"AgentRunner run_loop finished.")
+            self._running = False 
 
 
     async def cleanup(self) -> None:
@@ -616,7 +506,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         Вызывает super().cleanup() для отмены зарегистрированных задач (включая pubsub_handler_task),
         закрытия RedisClientManager и обновления статуса.
         """
-        self.logger.info(f"[{self._component_id}] AgentRunner cleanup started.")
+        self.logger.info(f"AgentRunner cleanup started.")
         
         # self.pubsub_handler_task будет отменен в super().cleanup(), так как он был зарегистрирован.
         # Дополнительная логика отмены здесь не нужна, если только нет специфичных для AgentRunner задач,
@@ -625,16 +515,16 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         # LangGraph app cleanup (if any specific method exists)
         if hasattr(self.agent_app, 'cleanup'):
             try:
-                self.logger.info(f"[{self._component_id}] Cleaning up LangGraph application.")
+                self.logger.info(f"Cleaning up LangGraph application.")
                 # Убедимся, что это корутина, если это так
                 if asyncio.iscoroutinefunction(self.agent_app.cleanup):
                     await self.agent_app.cleanup()
                 elif callable(self.agent_app.cleanup):
                     self.agent_app.cleanup() # Если это обычная функция
                 else:
-                    self.logger.warning(f"[{self._component_id}] agent_app.cleanup is not callable or a coroutine function.")
+                    self.logger.warning(f"agent_app.cleanup is not callable or a coroutine function.")
             except Exception as e:
-                self.logger.error(f"[{self._component_id}] Error during LangGraph application cleanup: {e}", exc_info=True)
+                self.logger.error(f"Error during LangGraph application cleanup: {e}", exc_info=True)
 
         self.agent_app = None
         self.agent_config = None
@@ -642,7 +532,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         self.pubsub_handler_task = None # Очищаем ссылку
 
         await super().cleanup() # Это вызовет отмену self.pubsub_handler_task и другие базовые очистки
-        self.logger.info(f"[{self._component_id}] AgentRunner cleanup finished.")
+        self.logger.info(f"AgentRunner cleanup finished.")
 
     # Removed get_restart_flag and set_restart_flag, using self.needs_restart directly
     # The main runner loop in runner_main.py will check agent_runner.needs_restart

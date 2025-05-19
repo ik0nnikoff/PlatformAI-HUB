@@ -2,9 +2,7 @@ import asyncio
 import json
 import logging
 import os
-import time
-import uuid # Added import
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from aiogram import Bot, Dispatcher, F
@@ -96,11 +94,10 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
             return
 
         input_channel = f"agent:{self.agent_id}:input"
-        interaction_id = str(uuid.uuid4()) # Added interaction_id
+
         payload = {
             "text": message_text,  # Changed from "message" to "text"
             "chat_id": str(chat_id),  # Changed from "thread_id" to "chat_id"
-            "interaction_id": interaction_id, # Added interaction_id
             "platform_user_id": platform_user_id,
             "user_data": user_data,
             "channel": "telegram"
@@ -115,7 +112,7 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
             # then json.dumps(payload).encode('utf-8') would be needed here.
             # Given the decision to NOT use decode_responses=True in RedisClientManager:
             await redis_cli.publish(input_channel, json.dumps(payload).encode('utf-8'))
-            self.logger.info(f"Published message to {input_channel} for chat {chat_id} (interaction_id: {interaction_id})")
+            self.logger.info(f"Published message to {input_channel} for chat {chat_id}")
         except redis_exceptions.RedisError as e:
             self.logger.error(f"Redis error publishing to {input_channel}: {e}", exc_info=True)
         except Exception as e:
@@ -363,7 +360,6 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
             payload = json.loads(data_str)
             text_response = payload.get("response")
             chat_id_str = payload.get("chat_id")
-            # interaction_id = payload.get("interaction_id") # Not used directly for sending
 
             if not text_response or not chat_id_str:
                 self.logger.warning(f"Missing text_response or chat_id in pubsub message: {payload}")

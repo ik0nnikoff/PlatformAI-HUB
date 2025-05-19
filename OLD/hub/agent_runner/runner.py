@@ -256,7 +256,6 @@ def convert_db_history_to_langchain(db_messages: List[Any]) -> List[BaseMessage]
         else:
             logging.warning(f"Skipping message conversion due to unhandled sender_type: {msg.sender_type}")
     return converted
-# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
 
 async def redis_listener(
@@ -264,9 +263,7 @@ async def redis_listener(
     agent_id: str,
     redis_client: redis.Redis,
     static_state_config: Dict[str, Any],
-    # --- ИЗМЕНЕНИЕ: Используем импортированные типы ---
     db_session_factory: Optional[async_sessionmaker[AsyncSession]]
-    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 ):
     """Listens to Redis input channel, processes messages, publishes output, and queues history."""
     log_adapter = logging.LoggerAdapter(logging.getLogger(__name__), {'agent_id': agent_id})
@@ -279,9 +276,7 @@ async def redis_listener(
 
     pubsub = None
 
-    # --- ИЗМЕНЕНИЕ: Проверяем импорт SenderType тоже ---
     can_load_history = crud is not None and db_session_factory is not None and ChatMessageDB is not None and SenderType is not None
-    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     if not can_load_history:
         log_adapter.warning("Database history loading is disabled (CRUD, DB session factory, ChatMessageDB, or SenderType not available).")
 
@@ -316,7 +311,7 @@ async def redis_listener(
                 "content": content,
                 "channel": channel,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "interaction_id": interaction_id # --- НОВОЕ ---
+                "interaction_id": interaction_id
             }
             await redis_client.lpush(history_queue, json.dumps(history_payload))
             log_adapter.debug(f"Queued {sender_type} message for history (Thread: {thread_id}, InteractionID: {interaction_id})")
