@@ -157,7 +157,7 @@ class ProcessManager(RedisClientManager):
         Логирует успешную инициализацию.
         """
         await self.setup_redis_client(redis_url=str(settings.REDIS_URL))
-        logger.info(f"ProcessManager initialized with Redis connection to {settings.REDIS_URL}")
+        logger.debug(f"ProcessManager initialized with Redis connection to {settings.REDIS_URL}")
 
     async def cleanup_manager(self):
         """
@@ -585,7 +585,7 @@ class ProcessManager(RedisClientManager):
             
             # cmd.extend(["--redis-url", str(settings.REDIS_URL)])
 
-            logger.info(f"Starting integration {integration_type} for agent {agent_id}. Command: {' '.join(cmd)}")
+            logger.debug(f"Starting integration {integration_type} for agent {agent_id}. Command: {' '.join(cmd)}")
             await self._update_status_in_redis(status_key, initial_status_data)
 
             process_obj, _, _ = await self.launcher.launch_process(

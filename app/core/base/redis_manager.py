@@ -101,11 +101,11 @@ class RedisClientManager:
         elif redis_url:
             self._redis_client = redis.from_url(redis_url)
             self._redis_url_used = redis_url # Store the URL
-            logger.info(f"Initialized Redis client from URL: {redis_url}")
+            logger.debug(f"Initialized Redis client from URL: {redis_url}")
         elif settings.REDIS_URL:
             self._redis_client = redis.from_url(str(settings.REDIS_URL))
             self._redis_url_used = str(settings.REDIS_URL) # Store the URL
-            logger.info(f"Initialized Redis client from settings REDIS_URL.")
+            logger.debug(f"Initialized Redis client from settings REDIS_URL.")
         else:
             logger.error("Cannot initialize Redis client: No client instance, redis_url, or settings.REDIS_URL provided.")
             raise ValueError("Redis client cannot be initialized without a client instance or Redis URL.")
@@ -115,7 +115,7 @@ class RedisClientManager:
             # Но полезно для раннего обнаружения проблем конфигурации.
             if self._redis_client:
                 await self._redis_client.ping()
-                logger.info("Successfully connected to Redis and pinged.")
+                logger.debug("Successfully connected to Redis and pinged.")
         except Exception as e:
             logger.error(f"Failed to connect to Redis after initialization: {e}", exc_info=True)
             current_client = self._redis_client

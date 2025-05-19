@@ -95,7 +95,7 @@ class ProcessLauncher:
         # Преобразование команды в строку для логирования, если это список
         command_str = shlex.join(command) if isinstance(command, list) else command
 
-        logger.info(f"[{process_id}] Launching process: {command_str}")
+        logger.debug(f"[{process_id}] Launching process: {command_str}")
         logger.debug(f"[{process_id}] Environment: {effective_env}")
 
         stdout_pipe = asyncio.subprocess.PIPE if capture_output else None
@@ -110,7 +110,7 @@ class ProcessLauncher:
                 env=effective_env,
                 **kwargs
             )
-            logger.info(f"[{process_id}] Process started with PID: {process.pid}")
+            logger.debug(f"[{process_id}] Process started with PID: {process.pid}")
             
             stdout_bytes: Optional[bytes] = None
             stderr_bytes: Optional[bytes] = None

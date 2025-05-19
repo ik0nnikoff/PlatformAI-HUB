@@ -101,7 +101,7 @@ class RunnableComponent(ABC):
         self._shutdown_initiated = False
         self._main_task = None
 
-        self.logger.info(f"Component {self.__class__.__name__} (instance: {id(self)}) starting. Performing setup...")
+        self.logger.debug(f"Component {self.__class__.__name__} (instance: {id(self)}) starting. Performing setup...")
         try:
             await self.setup()
             # If setup initiated shutdown (e.g. by calling self.initiate_shutdown())

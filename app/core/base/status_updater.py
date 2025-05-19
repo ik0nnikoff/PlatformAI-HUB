@@ -297,7 +297,7 @@ class StatusUpdater(RedisClientManager, ABC):
         effective_redis_url = redis_url or str(settings.REDIS_URL)
         await self.setup_redis_client(effective_redis_url) # From RedisClientManager
         effective_logger = self._get_effective_logger()
-        effective_logger.info(f"StatusUpdater for {self._component_id} (prefix: {self._status_key_prefix}) initialized with Redis: {effective_redis_url}")
+        effective_logger.debug(f"StatusUpdater for {self._component_id} (prefix: {self._status_key_prefix}) initialized with Redis: {effective_redis_url}")
 
     async def cleanup_status_updater(self, clear_status_on_cleanup: bool = False):
         """

@@ -102,7 +102,7 @@ class QueueWorker(BaseWorker):
         self.queue_names_str = ", ".join(queue_names)
         self.process_timeout = process_timeout
         self.redis_block_timeout = redis_block_timeout
-        self.logger.info(f"QueueWorker [{self._component_id}] initialized for queues: {self.queue_names_str}")
+        self.logger.debug(f"QueueWorker [{self._component_id}] initialized for queues: {self.queue_names_str}")
 
     async def setup(self):
         """
@@ -231,7 +231,7 @@ class ScheduledTaskWorker(BaseWorker):
         if interval_seconds <= 0:
             raise ValueError("Interval for ScheduledTaskWorker must be positive.")
         self.interval_seconds = interval_seconds
-        self.logger.info(f"ScheduledTaskWorker [{self._component_id}] initialized with interval: {self.interval_seconds}s")
+        self.logger.debug(f"ScheduledTaskWorker [{self._component_id}] initialized with interval: {self.interval_seconds}s")
 
     async def setup(self):
         """

@@ -62,7 +62,7 @@ class InactivityMonitorWorker(ScheduledTaskWorker):
             status_key_prefix="worker_status:inactivity_monitor:" # Specific status key prefix
         )
         self.process_manager = ProcessManager()
-        self.logger.info(f"[{self._component_id}] Initialized with check interval: {self.interval_seconds}s.")
+        self.logger.debug(f"[{self._component_id}] Initialized with check interval: {self.interval_seconds}s.")
 
     async def setup(self):
         """

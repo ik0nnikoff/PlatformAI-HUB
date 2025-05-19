@@ -62,7 +62,7 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
 
         # self.needs_restart: bool = False # Removed, inherited from ServiceComponentBase
 
-        self.logger.info(f"[{self._component_id}] TelegramIntegrationBot initialized. PID: {os.getpid()}")
+        self.logger.info(f"TelegramIntegrationBot initialized. PID: {os.getpid()}")
 
     def _request_contact_markup(self) -> ReplyKeyboardMarkup:
         button = KeyboardButton(text="Поделиться контактом", request_contact=True)
@@ -92,7 +92,7 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
         try:
             redis_cli = await self.redis_client # Use inherited client
         except RuntimeError as e:
-            self.logger.error(f"[{self._component_id}] Redis client not available for publishing to agent: {e}")
+            self.logger.error(f"Redis client not available for publishing to agent: {e}")
             return
 
         input_channel = f"agent:{self.agent_id}:input"
@@ -115,31 +115,31 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
             # then json.dumps(payload).encode('utf-8') would be needed here.
             # Given the decision to NOT use decode_responses=True in RedisClientManager:
             await redis_cli.publish(input_channel, json.dumps(payload).encode('utf-8'))
-            self.logger.info(f"[{self._component_id}] Published message to {input_channel} for chat {chat_id} (interaction_id: {interaction_id})")
+            self.logger.info(f"Published message to {input_channel} for chat {chat_id} (interaction_id: {interaction_id})")
         except redis_exceptions.RedisError as e:
-            self.logger.error(f"[{self._component_id}] Redis error publishing to {input_channel}: {e}", exc_info=True)
+            self.logger.error(f"Redis error publishing to {input_channel}: {e}", exc_info=True)
         except Exception as e:
-            self.logger.error(f"[{self._component_id}] Unexpected error publishing to {input_channel}: {e}", exc_info=True)
+            self.logger.error(f"Unexpected error publishing to {input_channel}: {e}", exc_info=True)
 
 
     async def _check_user_authorization(self, platform_user_id: str) -> bool:
         try:
             redis_cli = await self.redis_client # Use inherited client
         except RuntimeError as e:
-            self.logger.error(f"[{self._component_id}] Redis client not available for auth check: {e}")
+            self.logger.error(f"Redis client not available for auth check: {e}")
             return False
 
         cache_key = f"{USER_CACHE_PREFIX}telegram:{platform_user_id}:agent:{self.agent_id}"
         try:
-            self.logger.debug(f"[{self._component_id}] Auth check: Attempting to get cache for key '{cache_key}'")
+            self.logger.debug(f"Auth check: Attempting to get cache for key '{cache_key}'")
             cached_auth_status_bytes = await redis_cli.get(cache_key)
             if cached_auth_status_bytes is not None:
                 cached_auth_status = cached_auth_status_bytes.decode('utf-8') # Decode bytes to string
                 is_authorized = cached_auth_status == "true"
-                self.logger.info(f"[{self._component_id}] Auth cache hit for user {platform_user_id}, agent {self.agent_id}. Status: {is_authorized}")
+                self.logger.info(f"Auth cache hit for user {platform_user_id}, agent {self.agent_id}. Status: {is_authorized}")
                 return is_authorized
             else:
-                self.logger.info(f"[{self._component_id}] Auth cache miss for user {platform_user_id}, agent {self.agent_id}. Checking DB.")
+                self.logger.info(f"Auth cache miss for user {platform_user_id}, agent {self.agent_id}. Checking DB.")
                 if not self.db_session_factory:
                     self.logger.error("db_session_factory not configured. Cannot check DB for authorization.")
                     return False
@@ -147,7 +147,7 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
                 async with self.db_session_factory() as session:
                     user = await user_crud.get_user_by_platform_id(session, platform="telegram", platform_user_id=platform_user_id)
                     if not user:
-                        self.logger.info(f"[{self._component_id}] User with platform_id {platform_user_id} (telegram) not found. Cannot check authorization.")
+                        self.logger.info(f"User with platform_id {platform_user_id} (telegram) not found. Cannot check authorization.")
                         # Encode string to bytes for Redis set
                         await redis_cli.set(cache_key, "false".encode('utf-8'), ex=REDIS_USER_CACHE_TTL // 4)
                         return False
@@ -159,16 +159,16 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
                     )
                     
                     if authorization_entry and authorization_entry.is_authorized:
-                        self.logger.info(f"[{self._component_id}] User {platform_user_id} (DBID: {user.id}) IS authorized for agent {self.agent_id} via DB.")
+                        self.logger.info(f"User {platform_user_id} (DBID: {user.id}) IS authorized for agent {self.agent_id} via DB.")
                         await redis_cli.set(cache_key, "true".encode('utf-8'), ex=REDIS_USER_CACHE_TTL)
                         return True
                     else:
                         status_detail = f"entry found: {authorization_entry is not None}, is_authorized flag: {authorization_entry.is_authorized if authorization_entry else 'N/A'}"
-                        self.logger.info(f"[{self._component_id}] User {platform_user_id} (DBID: {user.id}) IS NOT authorized for agent {self.agent_id} via DB ({status_detail}).")
+                        self.logger.info(f"User {platform_user_id} (DBID: {user.id}) IS NOT authorized for agent {self.agent_id} via DB ({status_detail}).")
                         await redis_cli.set(cache_key, "false".encode('utf-8'), ex=REDIS_USER_CACHE_TTL // 4) 
                         return False
         except redis_exceptions.RedisError as e:
-            self.logger.error(f"[{self._component_id}] Redis error during authorization check for agent {self.agent_id}, user {platform_user_id}: {e}", exc_info=True)
+            self.logger.error(f"Redis error during authorization check for agent {self.agent_id}, user {platform_user_id}: {e}", exc_info=True)
             return False # Default to not authorized on Redis error
         except Exception as e:
             self.logger.error(f"Unexpected error during authorization check for agent {self.agent_id}, user {platform_user_id}: {e}", exc_info=True)
@@ -197,7 +197,7 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
 
     async def _handle_contact(self, message: Message):
         if not self.bot: # Should be initialized if handlers are running
-            self.logger.error(f"[{self._component_id}] Bot not initialized, cannot handle contact.")
+            self.logger.error(f"Bot not initialized, cannot handle contact.")
             await message.answer("Бот не инициализирован. Пожалуйста, попробуйте позже.")
             return
 
@@ -251,17 +251,17 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
                 )
 
                 if auth_record and auth_record.is_authorized:
-                    self.logger.info(f"[{self._component_id}] User {created_or_updated_user.id} (TG: {contact_platform_user_id}) authorized for agent {self.agent_id}")
+                    self.logger.info(f"User {created_or_updated_user.id} (TG: {contact_platform_user_id}) authorized for agent {self.agent_id}")
                     
                     try:
                         redis_cli = await self.redis_client # Use inherited client
                         cache_key = f"{USER_CACHE_PREFIX}telegram:{contact_platform_user_id}:agent:{self.agent_id}"
                         await redis_cli.delete(cache_key)
-                        self.logger.info(f"[{self._component_id}] Auth cache cleared for {cache_key}")
+                        self.logger.info(f"Auth cache cleared for {cache_key}")
                     except RuntimeError as e_redis_runtime:
-                        self.logger.error(f"[{self._component_id}] Redis client not available for cache clearing: {e_redis_runtime}")
+                        self.logger.error(f"Redis client not available for cache clearing: {e_redis_runtime}")
                     except redis_exceptions.RedisError as e_redis_del:
-                        self.logger.error(f"[{self._component_id}] Redis error clearing auth cache for {cache_key}: {e_redis_del}")
+                        self.logger.error(f"Redis error clearing auth cache for {cache_key}: {e_redis_del}")
                     
                     await message.answer(
                         "✅ Спасибо! Вы успешно авторизованы.",
@@ -343,7 +343,7 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
     async def _handle_pubsub_message(self, message_data: bytes) -> None: # <--- Изменена сигнатура
         """Handles a message received from Redis Pub/Sub."""
         if not self.bot:
-            self.logger.error(f"[{self._component_id}] Bot not initialized, cannot handle pubsub message.")
+            self.logger.error(f"Bot not initialized, cannot handle pubsub message.")
             return
 
         try:
@@ -353,11 +353,11 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
             # elif isinstance(message_data, str): # Not expected from base class
             #     data_str = message_data
             else:
-                self.logger.warning(f"[{self._component_id}] Received non-bytes data in pubsub message: {type(message_data)}")
+                self.logger.warning(f"Received non-bytes data in pubsub message: {type(message_data)}")
                 return
 
             if data_str is None: # Should not happen if decode is successful
-                self.logger.warning(f"[{self._component_id}] Decoded message data is None from: {message_data!r}")
+                self.logger.warning(f"Decoded message data is None from: {message_data!r}")
                 return
 
             payload = json.loads(data_str)
@@ -366,13 +366,13 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
             # interaction_id = payload.get("interaction_id") # Not used directly for sending
 
             if not text_response or not chat_id_str:
-                self.logger.warning(f"[{self._component_id}] Missing text_response or chat_id in pubsub message: {payload}")
+                self.logger.warning(f"Missing text_response or chat_id in pubsub message: {payload}")
                 return
 
             try:
                 chat_id = int(chat_id_str)
             except ValueError:
-                self.logger.error(f"[{self._component_id}] Invalid chat_id format: {chat_id_str}")
+                self.logger.error(f"Invalid chat_id format: {chat_id_str}")
                 return
 
             # Stop typing indicator for this chat
@@ -388,23 +388,23 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
                         self.logger.error(f"Error awaiting cancelled typing task for chat {chat_id}: {e_task_cancel}", exc_info=True)
 
 
-            self.logger.info(f"[{self._component_id}] Sending message from agent to chat {chat_id}: '{text_response[:50]}...'")
+            self.logger.info(f"Sending message from agent to chat {chat_id}: '{text_response[:50]}...'")
             await self.bot.send_message(chat_id, text_response)
 
         except UnicodeDecodeError:
-            self.logger.error(f"[{self._component_id}] Failed to decode UTF-8 from pubsub message data: {message_data!r}")
+            self.logger.error(f"Failed to decode UTF-8 from pubsub message data: {message_data!r}")
         except json.JSONDecodeError:
-            self.logger.error(f"[{self._component_id}] Failed to decode JSON from pubsub message: {data_str if 'data_str' in locals() else message_data!r}")
+            self.logger.error(f"Failed to decode JSON from pubsub message: {data_str if 'data_str' in locals() else message_data!r}")
         except TelegramBadRequest as e:
-            self.logger.error(f"[{self._component_id}] Telegram API error sending message to {chat_id_str if 'chat_id_str' in locals() else 'unknown chat'}: {e}", exc_info=True)
+            self.logger.error(f"Telegram API error sending message to {chat_id_str if 'chat_id_str' in locals() else 'unknown chat'}: {e}", exc_info=True)
             if "chat not found" in str(e).lower() or \
                "bot was blocked by the user" in str(e).lower() or \
                "user is deactivated" in str(e).lower():
-                self.logger.warning(f"[{self._component_id}] Chat {chat_id_str if 'chat_id_str' in locals() else 'unknown chat'} may be inactive or bot blocked. Consider cleanup.")
+                self.logger.warning(f"Chat {chat_id_str if 'chat_id_str' in locals() else 'unknown chat'} may be inactive or bot blocked. Consider cleanup.")
                 # Potentially mark user as inactive or remove subscription if applicable
             # TODO: Add more specific error handling if needed (e.g., rate limits)
         except Exception as e:
-            self.logger.error(f"[{self._component_id}] Error processing pubsub message: {e}", exc_info=True)
+            self.logger.error(f"Error processing pubsub message: {e}", exc_info=True)
 
     # --- Core Lifecycle Methods (setup, run_loop, cleanup) ---
     async def setup(self) -> None:
@@ -412,7 +412,7 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
         Prepare the Telegram bot for running.
         Inherits from ServiceComponentBase, which handles StatusUpdater and Redis client setup.
         """
-        self.logger.info(f"[{self._component_id}] TelegramIntegrationBot setup started.")
+        self.logger.info(f"TelegramIntegrationBot setup started.")
         await super().setup() # Calls ServiceComponentBase.setup(), which also clears needs_restart
 
         # self.needs_restart = False # Removed, handled by super().setup()
@@ -424,23 +424,23 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
         # await self.mark_as_initializing(...) is done by super().setup()
 
         if not self.bot_token:
-            self.logger.critical(f"[{self._component_id}] Bot token is not configured. Telegram bot cannot start.")
+            self.logger.critical(f"Bot token is not configured. Telegram bot cannot start.")
             await self.mark_as_error(reason="Bot token missing")
             # self.initiate_shutdown() # Request shutdown
             raise RuntimeError("Bot token is not configured.")
 
         self.bot = Bot(token=self.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
         self.dp = Dispatcher()
-        self.logger.info(f"[{self._component_id}] Aiogram Bot and Dispatcher initialized.")
+        self.logger.info(f"Aiogram Bot and Dispatcher initialized.")
 
         await self._register_handlers()
 
         # Removed _get_redis_client_for_bot call, self.redis_client is used directly
         # try:
         #     _ = await self._get_redis_client_for_bot() # Ensure bot's redis client is ready
-        #     self.logger.info(f"[{self._component_id}] Successfully connected to Redis for bot operations.")
+        #     self.logger.info(f"Successfully connected to Redis for bot operations.")
         # except Exception as e:
-        #     self.logger.error(f"[{self._component_id}] Failed to connect to Redis for bot operations during setup: {e}", exc_info=True)
+        #     self.logger.error(f"Failed to connect to Redis for bot operations during setup: {e}", exc_info=True)
         #     await self.mark_as_error(reason=f"Bot Redis connection failed: {e}")
         #     # self.initiate_shutdown()
         #     raise RuntimeError(f"Bot Redis connection failed: {e}")
@@ -448,7 +448,7 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
         # Mark as running or ready after all setup steps specific to TelegramIntegrationBot are done.
         # super().setup() already marked as initializing.
         # run_loop will mark as running.
-        self.logger.info(f"[{self._component_id}] TelegramIntegrationBot setup complete.")
+        self.logger.info(f"TelegramIntegrationBot setup complete.")
 
     async def run_loop(self) -> None:
         """
@@ -469,16 +469,16 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
                 self.logger.error("DP or Bot not available for polling_wrapper")
                 return
             try:
-                self.logger.info(f"[{self._component_id}] Starting aiogram polling...")
+                self.logger.info(f"Starting aiogram polling...")
                 await self.dp.start_polling(self.bot, allowed_updates=self.dp.resolve_used_update_types())
             except asyncio.CancelledError:
-                self.logger.info(f"[{self._component_id}] Aiogram polling task cancelled.")
+                self.logger.info(f"Aiogram polling task cancelled.")
             except Exception as e_poll:
-                self.logger.error(f"[{self._component_id}] Aiogram polling failed: {e_poll}", exc_info=True)
+                self.logger.error(f"Aiogram polling failed: {e_poll}", exc_info=True)
                 await self.mark_as_error(f"Polling error: {e_poll}")
                 self.request_restart()
             finally:
-                self.logger.info(f"[{self._component_id}] Aiogram polling has stopped.")
+                self.logger.info(f"Aiogram polling has stopped.")
         
         self._register_main_task(polling_wrapper(), name="AiogramPolling")
 
@@ -499,7 +499,7 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
         Clean up resources used by the Telegram bot.
         Inherits from ServiceComponentBase, which handles StatusUpdater and Redis client cleanup.
         """
-        self.logger.info(f"[{self._component_id}] TelegramIntegrationBot cleanup started.")
+        self.logger.info(f"TelegramIntegrationBot cleanup started.")
         # self._running is already False if shutdown was initiated properly
 
         if self.typing_tasks:
@@ -512,15 +512,15 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
             self.logger.info("Active typing tasks processed for cancellation.")
 
         if self.bot and self.bot.session:
-            self.logger.info(f"[{self._component_id}] Closing Aiogram bot session.")
+            self.logger.info(f"Closing Aiogram bot session.")
             await self.bot.session.close()
-            self.logger.info(f"[{self._component_id}] Aiogram bot session closed.")
+            self.logger.info(f"Aiogram bot session closed.")
         
         self.bot = None
         self.dp = None
 
         await super().cleanup() # Calls ServiceComponentBase.cleanup()
-        self.logger.info(f"[{self._component_id}] TelegramIntegrationBot cleanup finished.")
+        self.logger.info(f"TelegramIntegrationBot cleanup finished.")
 
 
 # Removed:
