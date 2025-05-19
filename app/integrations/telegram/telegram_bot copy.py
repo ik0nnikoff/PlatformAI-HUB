@@ -52,17 +52,19 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
         self.agent_id = agent_id # Still useful to have directly for some logic
         self.bot_token = bot_token
         self.db_session_factory = db_session_factory
-        self._pubsub_channel = f"agent:{self.agent_id}:output"
 
         # --- Aiogram and Bot specific attributes ---
         self.bot: Optional[Bot] = None
         self.dp: Optional[Dispatcher] = None
+        # self.redis_client_bot: Optional[redis.Redis] = None # Removed, use self.redis_client
 
         self.typing_tasks: Dict[int, asyncio.Task] = {} # To manage typing indicator tasks
 
         # self.needs_restart: bool = False # Removed, inherited from ServiceComponentBase
 
         self.logger.info(f"[{self._component_id}] TelegramIntegrationBot initialized. PID: {os.getpid()}")
+
+    # _get_redis_client_for_bot method removed, self.redis_client will be used.
 
     def _request_contact_markup(self) -> ReplyKeyboardMarkup:
         button = KeyboardButton(text="Поделиться контактом", request_contact=True)
@@ -340,24 +342,93 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
         self.logger.info("Aiogram handlers registered.")
 
 
-    async def _handle_pubsub_message(self, message_data: bytes) -> None: # <--- Изменена сигнатура
+    async def _pubsub_listener_loop(self):
+        """Listens to Redis for messages from the agent and sends them to the user."""
+        
+        try:
+            redis_cli = await self.redis_client # Use inherited client
+        except RuntimeError as e:
+            self.logger.critical(f"[{self._component_id}] Redis client not available for output listener: {e}. Listener cannot start.")
+            await self.mark_as_error(reason=f"Redis client unavailable for output listener: {e}")
+            return
+
+        channel = f"agent:{self.agent_id}:output"
+        pubsub = None
+        
+        self.logger.info(f"[{self._component_id}] Pub/Sub listener starting for channel: {channel}")
+
+        while self._running: # Check self._running flag from RunnableComponent
+            try:
+                if not await redis_cli.ping():
+                    self.logger.warning(f"[{self._component_id}] Redis ping failed in listener. Re-establishing pubsub.")
+                    if pubsub:
+                        try:
+                            await pubsub.aclose()
+                        except Exception as e_close:
+                            self.logger.error(f"[{self._component_id}] Error closing pubsub during reconnect: {e_close}")
+                    pubsub = None
+                    await asyncio.sleep(settings.REDIS_RECONNECT_INTERVAL)
+                    continue
+
+                if pubsub is None:
+                    pubsub = redis_cli.pubsub()
+                    await pubsub.subscribe(channel)
+                    self.logger.info(f"[{self._component_id}] Subscribed to Redis channel: {channel}")
+
+                # Get message with timeout to allow checking self._running
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+
+                if not self._running: # Check again after potential blocking call
+                    break
+
+                if message and message.get("type") == "message":
+                    self.logger.debug(f"[{self._component_id}] Received raw message from {channel}: {message}")
+                    await self._handle_pubsub_message(message)
+                
+            except redis_exceptions.ConnectionError as e:
+                self.logger.error(f"[{self._component_id}] Redis connection error in listener: {e}. Attempting to reconnect...", exc_info=True)
+                if pubsub:
+                    try: await pubsub.aclose()
+                    except: pass
+                pubsub = None
+                await self.mark_as_error(reason=f"Redis connection error: {e}") # Temporary error state
+                await asyncio.sleep(settings.REDIS_RECONNECT_INTERVAL) 
+                # Attempt to recover by re-pinging and re-subscribing in the next iteration
+            except asyncio.CancelledError:
+                self.logger.info(f"[{self._component_id}] Pub/Sub listener task cancelled.")
+                break
+            except Exception as e:
+                self.logger.error(f"[{self._component_id}] Unexpected error in Pub/Sub listener: {e}", exc_info=True)
+                if pubsub:
+                    try: await pubsub.aclose()
+                    except: pass
+                pubsub = None
+                await self.mark_as_error(reason=f"Pub/Sub listener error: {e}")
+                await asyncio.sleep(settings.REDIS_RECONNECT_INTERVAL) # Wait before retrying
+
+        if pubsub:
+            try:
+                self.logger.info(f"[{self._component_id}] Unsubscribing and closing Pub/Sub connection.")
+                await pubsub.unsubscribe(channel)
+                await pubsub.aclose()
+            except Exception as e:
+                self.logger.error(f"[{self._component_id}] Error during Pub/Sub cleanup: {e}", exc_info=True)
+        
+        self.logger.info(f"[{self._component_id}] Pub/Sub listener for {channel} has stopped.")
+
+
+    async def _handle_pubsub_message(self, message: Dict):
         """Handles a message received from Redis Pub/Sub."""
         if not self.bot:
             self.logger.error(f"[{self._component_id}] Bot not initialized, cannot handle pubsub message.")
             return
 
         try:
-            data_str: Optional[str] = None
-            if isinstance(message_data, bytes):
-                data_str = message_data.decode('utf-8')
-            # elif isinstance(message_data, str): # Not expected from base class
-            #     data_str = message_data
-            else:
-                self.logger.warning(f"[{self._component_id}] Received non-bytes data in pubsub message: {type(message_data)}")
-                return
-
-            if data_str is None: # Should not happen if decode is successful
-                self.logger.warning(f"[{self._component_id}] Decoded message data is None from: {message_data!r}")
+            data_str = message.get("data")
+            if isinstance(data_str, bytes):
+                data_str = data_str.decode('utf-8')
+            elif not isinstance(data_str, str):
+                self.logger.warning(f"[{self._component_id}] Received non-string or non-bytes data in pubsub message: {type(data_str)}")
                 return
 
             payload = json.loads(data_str)
@@ -391,10 +462,8 @@ class TelegramIntegrationBot(ServiceComponentBase): # Changed inheritance
             self.logger.info(f"[{self._component_id}] Sending message from agent to chat {chat_id}: '{text_response[:50]}...'")
             await self.bot.send_message(chat_id, text_response)
 
-        except UnicodeDecodeError:
-            self.logger.error(f"[{self._component_id}] Failed to decode UTF-8 from pubsub message data: {message_data!r}")
         except json.JSONDecodeError:
-            self.logger.error(f"[{self._component_id}] Failed to decode JSON from pubsub message: {data_str if 'data_str' in locals() else message_data!r}")
+            self.logger.error(f"[{self._component_id}] Failed to decode JSON from pubsub message: {message.get('data')}")
         except TelegramBadRequest as e:
             self.logger.error(f"[{self._component_id}] Telegram API error sending message to {chat_id_str if 'chat_id_str' in locals() else 'unknown chat'}: {e}", exc_info=True)
             if "chat not found" in str(e).lower() or \

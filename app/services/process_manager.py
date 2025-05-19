@@ -31,7 +31,7 @@ class ProcessManager(RedisClientManager):
     Управляет жизненным циклом дочерних процессов для агентов и интеграций.
 
     Отвечает за запуск, остановку, перезапуск и мониторинг состояния
-    процессов агентов (локально или в Docker) и процессов интеграций (локально).
+    локальных процессов агентов и процессов интеграций.
     Использует Redis для хранения и обновления информации о состоянии процессов.
     Наследует от `RedisClientManager` для управления соединением с Redis.
 
@@ -68,8 +68,6 @@ class ProcessManager(RedisClientManager):
         get_integration_status(...): Получает статус интеграции.
         get_all_integration_statuses_for_agent(...): Получает статусы всех интеграций для агента.
         get_all_integration_statuses(...): Получает статусы всех интеграций.
-        _get_docker_container_id(...): Получает ID Docker-контейнера по его имени.
-        _get_docker_container_status(...): Получает статус Docker-контейнера.
         _validate_agent_process(...): Проверяет существование локального процесса агента.
         _validate_integration_process(...): Проверяет существование локального процесса интеграции.
     """
@@ -100,12 +98,12 @@ class ProcessManager(RedisClientManager):
             # .parent -> /path/to/app
             # .parent -> /path/to/ (project_root)
             resolved_file_path = Path(__file__).resolve()
-            self.logger.info(f"ProcessManager.__init__: Path(__file__).resolve() = {resolved_file_path}")
+            # self.logger.info(f"ProcessManager.__init__: Path(__file__).resolve() = {resolved_file_path}")
             
             project_root_path = resolved_file_path.parent.parent.parent
             self.project_root = str(project_root_path) # Convert Path object to string for os.path.join later
             
-            self.logger.info(f"ProcessManager.__init__: Calculated PROJECT_ROOT_PATH with pathlib = {self.project_root}")
+            # self.logger.info(f"ProcessManager.__init__: Calculated PROJECT_ROOT_PATH with pathlib = {self.project_root}")
             
             # Validate the calculated project root
             if not os.path.isdir(self.project_root) or not os.path.exists(os.path.join(self.project_root, "app")):
@@ -119,8 +117,8 @@ class ProcessManager(RedisClientManager):
                     # Fallback to os.getcwd() as a last resort if hardcoded path is also invalid
                     self.project_root = os.getcwd() 
                     self.logger.error(f"CRITICAL: Project root detection failed with pathlib and fallback, using CWD: {self.project_root}. This will likely cause issues.")
-            else:
-                self.logger.info(f"PROJECT_ROOT_PATH {self.project_root} (from pathlib) seems valid.")
+            # else:
+            #     self.logger.info(f"PROJECT_ROOT_PATH {self.project_root} (from pathlib) seems valid.")
 
         except Exception as e:
             self.logger.error(f"Error calculating PROJECT_ROOT_PATH with pathlib: {e}", exc_info=True)
@@ -306,17 +304,16 @@ class ProcessManager(RedisClientManager):
 
     async def stop_agent_process(self, agent_id: str, force: bool = False) -> bool:
         """
-        Останавливает процесс агента (локальный или Docker).
+        Останавливает локальный процесс агента.
 
         Получает текущий статус агента. Если агент уже остановлен, ничего не делает.
         Обновляет статус в Redis на "stopping".
-        Для Docker-агентов использует `docker stop` (и `docker kill` при `force=True`).
         Для локальных агентов отправляет SIGTERM, затем SIGKILL (при `force=True`), если процесс не завершился.
-        После успешной остановки обновляет статус в Redis на "stopped" и удаляет динамические поля (pid, container_name и т.д.).
+        После успешной остановки обновляет статус в Redis на "stopped" и удаляет динамические поля (pid и т.д.).
 
         Args:
             agent_id (str): Идентификатор агента.
-            force (bool): Если True, применяет принудительные методы остановки (SIGKILL для локальных, docker kill для Docker).
+            force (bool): Если True, применяет принудительные методы остановки (SIGKILL для локальных).
                           По умолчанию False.
 
         Returns:
@@ -326,45 +323,22 @@ class ProcessManager(RedisClientManager):
         status_info = await self.get_agent_status(agent_id)
 
         current_status = status_info.get("status", "unknown")
-        pid_to_stop = status_info.get("pid") 
-        runtime = status_info.get("runtime", "local")
-        container_name = status_info.get("container_name")
+        pid_to_stop = status_info.get("pid")
 
         if current_status == "stopped" or current_status == "not_found":
             logger.info(f"Agent {agent_id} is already stopped or not found.")
-            # Ensure Redis reflects this, cleaning up any lingering dynamic fields
-            redis_cli = await self.redis_client # Get the actual client instance
-            if await redis_cli.exists(status_key): # Now call exists on the instance
+            redis_cli = await self.redis_client
+            if await redis_cli.exists(status_key):
                  await self._update_status_in_redis(status_key, {"status": "stopped", "agent_id": agent_id})
-                 await self._delete_fields_from_redis_status(status_key, ["pid", "container_name", "runtime", "last_active", "error_detail", "actual_container_id", "start_attempt_utc"])
+                 await self._delete_fields_from_redis_status(status_key, ["pid", "last_active", "error_detail", "start_attempt_utc"])
             return True
 
         await self._update_status_in_redis(status_key, {"status": "stopping"})
         stopped_successfully = False
 
         try:
-            if runtime == "docker" and container_name:
-                logger.info(f"Stopping Docker agent {agent_id} (container: {container_name}). Force: {force}")
-                stop_cmd = ["docker", "stop", container_name]
-                rc_stop, out_stop, err_stop = await self.launcher.run_command_and_wait(stop_cmd, f"docker_stop_{container_name}")
-
-                if rc_stop == 0:
-                    logger.info(f"Docker container {container_name} stopped successfully.")
-                    stopped_successfully = True
-                else:
-                    logger.warning(f"docker stop {container_name} failed. RC:{rc_stop}, stdout:'{out_stop}', stderr:'{err_stop}'.")
-                    if force:
-                        logger.warning(f"Forcing stop with docker kill for container {container_name}.")
-                        kill_cmd = ["docker", "kill", container_name]
-                        rc_kill, out_kill, err_kill = await self.launcher.run_command_and_wait(kill_cmd, f"docker_kill_{container_name}")
-                        if rc_kill == 0:
-                            logger.info(f"Docker container {container_name} killed successfully.")
-                            stopped_successfully = True
-                        else:
-                            logger.error(f"docker kill {container_name} failed. RC:{rc_kill}, stdout:'{out_kill}', stderr:'{err_kill}'.")
-            
-            elif runtime == "local" and pid_to_stop:
-                logger.info(f"Stopping local agent process {agent_id} (PID: {pid_to_stop}). Force: {force}")
+            if pid_to_stop:
+                logger.info(f"Stopping agent process {agent_id} (PID: {pid_to_stop}). Force: {force}")
                 try:
                     os.kill(pid_to_stop, signal.SIGTERM)
                     logger.info(f"SIGTERM sent to agent {agent_id} (PID: {pid_to_stop})")
@@ -400,20 +374,16 @@ class ProcessManager(RedisClientManager):
                         # else (not force): stopped_successfully remains False if SIGTERM failed
                 
                 except ProcessLookupError:
-                    logger.warning(f"Local agent process {agent_id} (PID: {pid_to_stop}) not found (already stopped?).")
+                    logger.warning(f"Agent process {agent_id} (PID: {pid_to_stop}) not found (already stopped?).")
                     stopped_successfully = True # Effectively stopped
                 except Exception as e_kill: 
-                    logger.error(f"Error stopping local agent {agent_id} (PID: {pid_to_stop}): {e_kill}", exc_info=True)
+                    logger.error(f"Error stopping agent {agent_id} (PID: {pid_to_stop}): {e_kill}", exc_info=True)
 
             else: 
-                logger.warning(f"Cannot actively stop agent {agent_id}: runtime '{runtime}', PID '{pid_to_stop}', container '{container_name}'. Marking as stopped if no PID/container.")
-                if not pid_to_stop and not (runtime == "docker" and container_name):
+                logger.warning(f"Cannot actively stop agent {agent_id}: PID is '{pid_to_stop}'. Marking as stopped if no PID.")
+                if not pid_to_stop: # Simplified condition
                     stopped_successfully = True # No specific process to target, assume it's effectively stopped.
         
-        except FileNotFoundError: 
-            logger.error("'docker' command not found. Cannot stop Dockerized agent.", exc_info=True)
-            await self._update_status_in_redis(status_key, {"status": "error_stop_failed", "error_detail": "Docker command not found."})
-            return False
         except Exception as e: 
             logger.error(f"Unexpected error during stop_agent_process for {agent_id}: {e}", exc_info=True)
             await self._update_status_in_redis(status_key, {"status": "error_stop_failed", "error_detail": str(e)})
@@ -424,7 +394,7 @@ class ProcessManager(RedisClientManager):
             final_status_update = {"status": "stopped", "agent_id": agent_id}
             await self._update_status_in_redis(status_key, final_status_update)
             # Clean up dynamic fields after confirming stop
-            await self._delete_fields_from_redis_status(status_key, ["pid", "container_name", "runtime", "last_active", "error_detail", "actual_container_id", "start_attempt_utc"])
+            await self._delete_fields_from_redis_status(status_key, ["pid", "last_active", "error_detail", "start_attempt_utc"])
             # Re-set status to ensure only "stopped" and "agent_id" (and last_updated_utc) remain.
             await self._update_status_in_redis(status_key, {"status": "stopped", "agent_id": agent_id}) # This ensures last_updated_utc is fresh
             logger.info(f"Agent {agent_id} marked as stopped in Redis.")
@@ -496,8 +466,8 @@ class ProcessManager(RedisClientManager):
 
         Returns:
             IntegrationStatusInfo: Словарь с информацией о статусе интеграции, включая:
-                `agent_id`, `integration_type`, `status`, `pid`, `last_active`, `runtime`,
-                `container_name`, `error_detail`.
+                `agent_id`, `integration_type`, `status`, `pid`, `last_active`,
+                `error_detail`.
                 Если статус не найден, возвращает статус "not_found".
         """
         integration_type_for_redis_key = integration_type.lower()
@@ -512,8 +482,6 @@ class ProcessManager(RedisClientManager):
                 "status": "not_found", 
                 "pid": None, 
                 "last_active": None,
-                "runtime": "local", 
-                "container_name": None,
                 "error_detail": None
             }
 
@@ -526,29 +494,24 @@ class ProcessManager(RedisClientManager):
         except (ValueError, TypeError):
             last_active = None
         
-        runtime = status_data.get("runtime", "local") 
-        container_name = status_data.get("container_name")
-
-        # Validate process/container existence if status suggests it should be running
-        if pid and current_status in ["running", "starting", "initializing"] and runtime == "local":
+        # Validate process existence if status suggests it should be running
+        if pid and current_status in ["running", "starting", "initializing"]:
             try:
                 os.kill(pid, 0)
             except ProcessLookupError:
-                logger.warning(f"Integration {integration_type} for agent {agent_id} (local) status is '{current_status}' in Redis, but PID {pid} not found. Updating status.")
+                logger.warning(f"Integration {integration_type} for agent {agent_id} status is '{current_status}' in Redis, but PID {pid} not found. Updating status.")
                 current_status = "error_process_lost"
                 await self._update_status_in_redis(status_key, {"status": current_status, "pid": "", "integration_type": integration_type})
                 pid = None 
             except OSError as e:
-                logger.error(f"Error checking PID {pid} for local integration {integration_type} of agent {agent_id}: {e}. Status remains '{current_status}'.")
-        
+                logger.error(f"Error checking PID {pid} for integration {integration_type} of agent {agent_id}: {e}. Status remains '{current_status}'.")
+
         return {
             "agent_id": agent_id,
             "integration_type": integration_type,
             "status": current_status,
             "pid": pid,
             "last_active": last_active,
-            "runtime": runtime,
-            "container_name": container_name,
             "error_detail": status_data.get("error_detail")
         }
 
@@ -608,8 +571,7 @@ class ProcessManager(RedisClientManager):
             "agent_id": agent_id,
             "integration_type": integration_type,
             "start_attempt_utc": datetime.now(timezone.utc).isoformat(),
-            "last_active": str(time.time()),
-            "runtime": "local"
+            "last_active": str(time.time())
         }
         
         try:
@@ -621,25 +583,25 @@ class ProcessManager(RedisClientManager):
             if integration_settings:
                 cmd.extend(["--integration-settings", json.dumps(integration_settings)])
             
-            cmd.extend(["--redis-url", str(settings.REDIS_URL)])
+            # cmd.extend(["--redis-url", str(settings.REDIS_URL)])
 
-            logger.info(f"Starting local integration {integration_type} for agent {agent_id}. Command: {' '.join(cmd)}")
+            logger.info(f"Starting integration {integration_type} for agent {agent_id}. Command: {' '.join(cmd)}")
             await self._update_status_in_redis(status_key, initial_status_data)
 
             process_obj, _, _ = await self.launcher.launch_process(
                 command=cmd,
-                process_id=f"local_integration_start_{agent_id}_{integration_type}",
+                process_id=f"integration_start_{agent_id}_{integration_type}",
                 cwd=self.project_root,
                 env_vars=self.process_env,
                 capture_output=False
             )
 
             if process_obj and process_obj.pid is not None:
-                logger.info(f"Local integration process {integration_type} for agent {agent_id} initiated start with PID {process_obj.pid}")
+                logger.info(f"Integration process {integration_type} for agent {agent_id} initiated start with PID {process_obj.pid}")
                 await self._update_status_in_redis(status_key, {"pid": str(process_obj.pid), "integration_type": integration_type})
                 return True
             else:
-                err_msg = f"Failed to launch local integration process {integration_type} for agent {agent_id} (process_obj or pid is None)."
+                err_msg = f"Failed to launch integration process {integration_type} for agent {agent_id} (process_obj or pid is None)."
                 logger.error(err_msg)
                 await self._update_status_in_redis(status_key, {
                     "status": "error_start_failed", 
@@ -668,18 +630,17 @@ class ProcessManager(RedisClientManager):
 
     async def stop_integration_process(self, agent_id: str, integration_type: IntegrationTypeStr, force: bool = False) -> bool:
         """
-        Останавливает процесс интеграции для указанного агента.
+        Останавливает локальный процесс интеграции для указанного агента.
 
         Получает текущий статус интеграции. Если уже остановлена, ничего не делает.
         Обновляет статус в Redis на "stopping".
         Для локальных процессов отправляет SIGTERM, затем SIGKILL (при `force=True`), если процесс не завершился.
-        Остановка Docker-контейнеров для интеграций в настоящее время не реализована и вызовет ошибку, если `runtime`="docker" и есть `container_name`.
         После успешной остановки обновляет статус в Redis на "stopped" и удаляет динамические поля.
 
         Args:
             agent_id (str): Идентификатор агента.
             integration_type (IntegrationTypeStr): Тип интеграции (например, "TELEGRAM").
-            force (bool): Если True, применяет принудительные методы остановки (SIGKILL для локальных).
+            force (bool): Если True, применяет принудительные методы остановки (SIGКILL для локальных).
                           По умолчанию False.
 
         Returns:
@@ -694,8 +655,6 @@ class ProcessManager(RedisClientManager):
 
         current_status = status_info.get("status", "unknown")
         pid_to_stop = status_info.get("pid")
-        runtime = status_info.get("runtime", "local")
-        container_name = status_info.get("container_name") 
 
         if current_status == "stopped" or current_status == "not_found":
             logger.info(f"Integration {integration_type} for agent {agent_id} is already stopped or not found.")
@@ -706,15 +665,15 @@ class ProcessManager(RedisClientManager):
                      "agent_id": agent_id, 
                      "integration_type": integration_type
                  })
-                 await self._delete_fields_from_redis_status(status_key, ["pid", "container_name", "runtime", "last_active", "error_detail", "start_attempt_utc"])
+                 await self._delete_fields_from_redis_status(status_key, ["pid", "last_active", "error_detail", "start_attempt_utc"])
             return True
 
         await self._update_status_in_redis(status_key, {"status": "stopping", "integration_type": integration_type})
         stopped_successfully = False
 
         try:
-            if runtime == "local" and pid_to_stop is not None:
-                logger.info(f"Stopping local integration {integration_type} for agent {agent_id} (PID: {pid_to_stop}). Force: {force}")
+            if pid_to_stop is not None:
+                logger.info(f"Stopping integration {integration_type} for agent {agent_id} (PID: {pid_to_stop}). Force: {force}")
                 try:
                     os.kill(pid_to_stop, signal.SIGTERM) 
                     logger.info(f"SIGTERM sent to integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id}")
@@ -736,34 +695,26 @@ class ProcessManager(RedisClientManager):
                                 os.kill(pid_to_stop, signal.SIGKILL)
                                 await asyncio.sleep(0.1) 
                                 try:
-                                    os.kill(pid_to_stop, 0) 
+                                    os.kill(pid_to_stop, 0)
                                     logger.warning(f"Integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id} still exists after SIGKILL attempt.")
                                 except ProcessLookupError:
                                     logger.info(f"Integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id} confirmed terminated after SIGKILL.")
                                     stopped_successfully = True
                             except ProcessLookupError: 
-                                logger.info(f"Integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id} was already gone before SIGKILL could be sent или confirmed.")
+                                logger.info(f"Integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id} was already gone before SIGKILL could be sent or confirmed.")
                                 stopped_successfully = True
                             except Exception as e_sigkill:
                                 logger.error(f"Error sending SIGKILL to integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id}: {e_sigkill}", exc_info=True)
                 
                 except ProcessLookupError: 
-                    logger.warning(f"Local integration process {integration_type} for agent {agent_id} (PID: {pid_to_stop}) not found (already stopped?).")
+                    logger.warning(f"Integration process {integration_type} for agent {agent_id} (PID: {pid_to_stop}) not found (already stopped?).")
                     stopped_successfully = True 
                 except Exception as e_kill: 
-                    logger.error(f"Error stopping local integration {integration_type} for agent {agent_id} (PID: {pid_to_stop}): {e_kill}", exc_info=True)
+                    logger.error(f"Error stopping integration {integration_type} for agent {agent_id} (PID: {pid_to_stop}): {e_kill}", exc_info=True)
             
-            elif runtime == "docker": 
-                 logger.warning(f"Docker runtime for integration {integration_type} (agent {agent_id}) stop is not currently implemented. Container: {container_name}")
-                 if not container_name: 
-                     logger.info(f"Integration {integration_type} (agent {agent_id}) is Docker runtime but has no container name, considering it stopped.")
-                     stopped_successfully = True
-                 else:
-                     logger.error(f"Cannot stop Dockerized integration {integration_type} (agent {agent_id}), container {container_name}: not implemented.")
-
             else: 
-                logger.warning(f"Cannot actively stop integration {integration_type} for agent {agent_id}: runtime '{runtime}', PID '{pid_to_stop}'. Marking as stopped if no PID/container.")
-                if not pid_to_stop and not (runtime == "docker" and container_name):
+                logger.warning(f"Cannot actively stop integration {integration_type} for agent {agent_id}: PID is '{pid_to_stop}'. Marking as stopped if no PID.")
+                if not pid_to_stop : # Simplified condition
                     stopped_successfully = True 
         
         except Exception as e: 
@@ -782,7 +733,7 @@ class ProcessManager(RedisClientManager):
                 "integration_type": integration_type
             }
             await self._update_status_in_redis(status_key, final_status_update)
-            await self._delete_fields_from_redis_status(status_key, ["pid", "container_name", "runtime", "last_active", "error_detail", "start_attempt_utc"])
+            await self._delete_fields_from_redis_status(status_key, ["pid", "last_active", "error_detail", "start_attempt_utc"])
             await self._update_status_in_redis(status_key, {
                 "status": "stopped", 
                 "agent_id": agent_id, 
@@ -837,102 +788,94 @@ class ProcessManager(RedisClientManager):
             return False
 
     async def get_agent_status(self, agent_id: str) -> AgentStatusInfo:
+        """
+        Получает информацию о статусе для указанного агента.
+
+        Извлекает данные из Redis. Если статус в Redis указывает на запущенный локальный процесс,
+        проверяет его существование с помощью `os.kill(pid, 0)`.
+        Если процесс не найден, обновляет статус в Redis на "error_process_lost".
+
+        Args:
+            agent_id (str): Идентификатор агента.
+
+        Returns:
+            AgentStatusInfo: Словарь с информацией о статусе агента, включая:
+                `agent_id`, `status`, `pid`, `last_active`,
+                `error_detail`.
+                Если статус не найден, возвращает статус "not_found".
+        """
         status_key = self.agent_status_key_template.format(agent_id)
         status_data = await self._get_status_from_redis(status_key)
 
         if not status_data:
             return {
-                "agent_id": agent_id,
-                "status": "not_found",
-                "pid": None,
+                "agent_id": agent_id, 
+                "status": "not_found", 
+                "pid": None, 
                 "last_active": None,
-                "runtime": "local", # Default assumption
-                "container_name": None,
-                "actual_container_id": None,
-                "error_detail": None,
+                "error_detail": None
             }
 
         current_status = status_data.get("status", "unknown")
         pid_val = status_data.get("pid")
         pid = int(pid_val) if pid_val and pid_val.isdigit() else None
-        
         last_active_val = status_data.get("last_active")
         try:
             last_active = float(last_active_val) if last_active_val else None
         except (ValueError, TypeError):
             last_active = None
         
-        runtime = status_data.get("runtime", "local")
-        container_name = status_data.get("container_name")
-        actual_container_id = status_data.get("actual_container_id")
+        # Validate process existence if status suggests it should be running
+        if pid and current_status in ["running", "starting", "initializing"]:
+            try:
+                os.kill(pid, 0) # Check if process exists
+            except ProcessLookupError:
+                logger.warning(f"Agent {agent_id} status is '{current_status}' in Redis, but PID {pid} not found. Updating status.")
+                current_status = "error_process_lost"
+                await self._update_status_in_redis(status_key, {"status": current_status, "pid": ""})
+                pid = None # Clear pid as it's no longer valid
+            except OSError as e: # Other OS errors, e.g., permission denied
+                logger.error(f"Error checking PID {pid} for agent {agent_id}: {e}. Status remains '{current_status}'.")
 
-        # Validate process/container existence if status suggests it should be running
-        active_statuses = ["running", "starting", "initializing", "running_pending_agent_confirm"]
-        if current_status in active_statuses:
-            if runtime == "local" and pid:
-                try:
-                    os.kill(pid, 0)  # Check if host process exists
-                except ProcessLookupError:
-                    logger.warning(f"Agent {agent_id} (local) status is '{current_status}' in Redis, but PID {pid} not found. Updating status.")
-                    current_status = "error_process_lost"
-                    await self._update_status_in_redis(status_key, {"status": current_status, "pid": ""})
-                    pid = None
-                except OSError as e:
-                    logger.error(f"Error checking PID {pid} for local agent {agent_id}: {e}. Status remains '{current_status}'.")
-            elif runtime == "docker" and container_name:
-                try:
-                    # Check if container is running
-                    check_cmd = ["docker", "ps", "-q", "--filter", f"name=^{container_name}$"]
-                    rc, stdout, stderr = await self.launcher.run_command_and_wait(check_cmd, f"docker_ps_check_{container_name}")
-                    if rc == 0:
-                        if not stdout.strip(): # Container not found in running list
-                            logger.warning(f"Agent {agent_id} (Docker container {container_name}) status is '{current_status}' in Redis, but container not found running. Updating status.")
-                            current_status = "error_container_lost" # Or "stopped"
-                            await self._update_status_in_redis(status_key, {"status": current_status, "actual_container_id": ""})
-                            actual_container_id = None
-                        else: # Container is running, stdout is the ID
-                            running_container_id = stdout.strip()
-                            if actual_container_id != running_container_id:
-                                logger.info(f"Agent {agent_id} (Docker container {container_name}) running with ID {running_container_id}. Updating actual_container_id.")
-                                await self._update_status_in_redis(status_key, {"actual_container_id": running_container_id})
-                                actual_container_id = running_container_id
-                    else:
-                        logger.error(f"Error checking Docker container status for {container_name}: RC:{rc}, stdout:'{stdout}', stderr:'{stderr}'. Status remains '{current_status}'.")
-                except FileNotFoundError:
-                    logger.error("'docker' command not found. Cannot verify Dockerized agent status.", exc_info=True)
-                    current_status = "error_docker_unavailable" # Special status
-                    await self._update_status_in_redis(status_key, {"status": current_status})
-
-                except Exception as e:
-                    logger.error(f"Unexpected error checking Docker container {container_name} for agent {agent_id}: {e}", exc_info=True)
-        
         return {
             "agent_id": agent_id,
             "status": current_status,
             "pid": pid,
             "last_active": last_active,
-            "runtime": runtime,
-            "container_name": container_name,
-            "actual_container_id": actual_container_id,
-            "error_detail": status_data.get("error_detail"),
-            "last_updated_utc": status_data.get("last_updated_utc"),
-            "start_attempt_utc": status_data.get("start_attempt_utc"),
+            "error_detail": status_data.get("error_detail")
         }
 
     async def start_agent_process(self, agent_id: str, agent_settings: Optional[Dict[str, Any]] = None) -> bool:
+        """
+        Запускает локальный процесс агента.
+
+        Проверяет, не запущен ли уже процесс или не находится ли он в процессе запуска.
+        Формирует команду для запуска скрипта агента Python (`python -m module_path ...`)
+        с передачей `agent_id`, `agent_settings` (в JSON) и `redis_url`.
+        Запускает процесс с помощью `ProcessLauncher` без захвата вывода.
+        Обновляет статус в Redis ("starting", затем PID после успешного запуска, или "error_start_failed" при ошибке).
+
+        Args:
+            agent_id (str): Идентификатор агента.
+            agent_settings (Optional[Dict[str, Any]]): Настройки для агента, передаваемые в процесс.
+                                                        По умолчанию None.
+
+        Returns:
+            bool: True, если процесс агента успешно инициирован, иначе False.
+        """
         status_key = self.agent_status_key_template.format(agent_id)
         
         try:
             current_agent_status_info = await self.get_agent_status(agent_id)
-            if current_agent_status_info["status"] in ["running", "running_pending_agent_confirm"]:
-                logger.warning(f"Agent {agent_id} already reported as running or pending confirmation. Skipping start.")
+            if current_agent_status_info["status"] == "running":
+                logger.warning(f"Agent {agent_id} already reported as running. Skipping start.")
                 return True
             if current_agent_status_info["status"] == "starting":
                 logger.warning(f"Agent {agent_id} is already starting. Skipping duplicate start request.")
                 return True
-        except Exception as e:
+        except Exception as e: # Catch any error during status check
             logger.error(f"Error checking agent status before start for {agent_id}: {e}", exc_info=True)
-            # Continue to attempt start, but log this issue.
+            # Proceed with start, assuming it might be a transient Redis issue or first start
 
         logger.info(f"Attempting to start agent process for {agent_id}...")
 
@@ -940,145 +883,67 @@ class ProcessManager(RedisClientManager):
             "status": "starting",
             "agent_id": agent_id,
             "start_attempt_utc": datetime.now(timezone.utc).isoformat(),
-            "last_active": str(time.time()), # Mark activity at start attempt
-            "pid": None,
-            "container_name": None,
-            "actual_container_id": None,
-            "error_detail": None
+            "last_active": str(time.time())
         }
-
+        
         try:
-            if settings.RUN_AGENTS_WITH_DOCKER:
-                initial_status_data["runtime"] = "docker"
-                container_name = f"agent_runner_{agent_id}"
-                initial_status_data["container_name"] = container_name
-                
-                env_vars = {
-                    "AGENT_ID": agent_id,
-                    "REDIS_URL": str(settings.REDIS_URL), # Ensure REDIS_URL is accessible from container
-                    "MANAGER_HOST": settings.MANAGER_HOST, # Ensure MANAGER_HOST is accessible
-                    "MANAGER_PORT": str(settings.MANAGER_PORT),
-                    "PYTHONUNBUFFERED": "1", # Good practice
-                    # Add other necessary env vars based on agent_runner needs
-                }
-                if agent_settings: # Pass agent_settings as JSON string in env var
-                    env_vars["AGENT_SETTINGS_JSON"] = json.dumps(agent_settings)
+            # Always use process start
+            cmd = [
+                self.python_executable,
+                "-m", self.agent_runner_module_path,
+                "--agent-id", agent_id,
+            ]
+            if agent_settings:
+                cmd.extend(["--agent-settings", json.dumps(agent_settings)])
+            
+            # cmd.extend(["--redis-url", str(settings.REDIS_URL)])
 
-                cmd = ["docker", "run", "-d", "--rm", "--name", container_name]
-                for k, v_env in env_vars.items():
-                    cmd.extend(["-e", f"{k}={v_env}"])
-                
-                # Network configuration might be needed here, e.g. --network host or user-defined network
-                # This depends on how Redis and the manager API are exposed to Docker containers.
-                # Example: if Redis is on host, use host.docker.internal on Docker Desktop, or host IP.
-                # cmd.extend(["--network", "host"]) # If services are on localhost and need direct access
+            # logger.info(f"Starting agent {agent_id}. Command: {' '.join(cmd)}")
+            await self._update_status_in_redis(status_key, initial_status_data)
 
-                cmd.append(settings.AGENT_DOCKER_IMAGE)
-                # If agent_runner inside Docker needs specific command/args, append them here.
-                # Otherwise, assume Docker image's ENTRYPOINT/CMD handles it using ENV VARS.
+            process_obj, _, _ = await self.launcher.launch_process(
+                command=cmd,
+                process_id=f"agent_start_{agent_id}", # Unique ID for launcher
+                cwd=self.project_root,
+                env_vars=self.process_env,
+                capture_output=False # Agent runner handles its own logging
+            )
 
-                logger.info(f"Starting Dockerized agent {agent_id}. Command: {' '.join(cmd)}")
-                await self._update_status_in_redis(status_key, initial_status_data)
-
-                rc, stdout, stderr = await self.launcher.run_command_and_wait(cmd, f"docker_run_{container_name}")
-
-                if rc == 0 and stdout.strip():
-                    actual_container_id = stdout.strip()
-                    logger.info(f"Dockerized agent {agent_id} (container: {container_name}) initiated with ID: {actual_container_id}")
-                    # Agent itself should update status to "running". Manager confirms launch.
-                    await self._update_status_in_redis(status_key, {"status": "running_pending_agent_confirm", "actual_container_id": actual_container_id})
-                    return True
-                else:
-                    err_msg = f"Failed to start Docker container {container_name} for agent {agent_id}. RC:{rc}, stdout:'{stdout}', stderr:'{stderr}'"
-                    logger.error(err_msg)
-                    await self._update_status_in_redis(status_key, {"status": "error_start_failed", "error_detail": err_msg, "runtime": "docker"})
-                    return False
-            else: # Local execution
-                initial_status_data["runtime"] = "local"
-                if not os.path.exists(self.agent_runner_script_full_path) and not self.agent_runner_module_path:
-                     err_msg = f"Agent runner script/module not found. Path: {self.agent_runner_script_full_path}, Module: {self.agent_runner_module_path}"
-                     logger.error(err_msg)
-                     await self._update_status_in_redis(status_key, {"status": "error_script_not_found", "error_detail": err_msg, "runtime": "local"})
-                     return False
-
-                # Construct config_url
-                # Assumes http for local development. Use https if appropriate for production.
-                # Ensure API_V1_STR starts with a '/' if it's part of the path.
-                api_v1_path = settings.API_V1_STR
-                if not api_v1_path.startswith('/'):
-                    api_v1_path = '/' + api_v1_path
-                
-                # Ensure no double slashes between host:port and api_v1_path
-                base_url = f"http://{settings.MANAGER_HOST}:{settings.MANAGER_PORT}"
-                config_url = f"{base_url}{api_v1_path}/agents/{agent_id}/config"
-
-                cmd = [
-                    self.python_executable,
-                    "-m", self.agent_runner_module_path, # Use module path for robust execution
-                    "--agent-id", agent_id,
-                    # "--redis-url", str(settings.REDIS_URL),
-                    # "--manager-host", settings.MANAGER_HOST, # Kept for other potential uses by agent
-                    # "--manager-port", str(settings.MANAGER_PORT), # Kept for other potential uses by agent
-                    "--config-url", config_url # Added config-url
-                ]
-                if agent_settings: # Pass as JSON string argument
-                    cmd.extend(["--agent-settings-json", json.dumps(agent_settings)])
-
-                logger.info(f"Starting local agent {agent_id}. Command: {' '.join(cmd)}")
-                await self._update_status_in_redis(status_key, initial_status_data)
-
-                process_obj, _, _ = await self.launcher.launch_process(
-                    command=cmd,
-                    process_id=f"local_agent_start_{agent_id}",
-                    cwd=self.project_root, # Run from project root
-                    env_vars=self.process_env, # Ensure PYTHONPATH is set
-                    capture_output=False # Agent runs in background
-                )
-
-                if process_obj and process_obj.pid is not None:
-                    logger.info(f"Local agent process {agent_id} initiated start with PID {process_obj.pid}")
-                    # Agent itself should update status to "running". Manager confirms launch.
-                    await self._update_status_in_redis(status_key, {"status": "running_pending_agent_confirm", "pid": str(process_obj.pid)})
-                    return True
-                else:
-                    err_msg = f"Failed to launch local agent process {agent_id} (process_obj or pid is None)."
-                    logger.error(err_msg)
-                    await self._update_status_in_redis(status_key, {"status": "error_start_failed", "error_detail": err_msg, "runtime": "local"})
-                    return False
-
-        except FileNotFoundError as fnf_e: # E.g. python executable or docker not found
+            if process_obj and process_obj.pid is not None:
+                logger.info(f"Agent process {agent_id} initiated start with PID {process_obj.pid}")
+                await self._update_status_in_redis(status_key, {"pid": str(process_obj.pid)})
+                # Status will be updated to "running" by the agent runner itself via StatusUpdater
+                return True
+            else:
+                err_msg = f"Failed to launch agent process {agent_id} (process_obj or pid is None)."
+                logger.error(err_msg)
+                await self._update_status_in_redis(status_key, {"status": "error_start_failed", "error_detail": err_msg})
+                return False
+        
+        except FileNotFoundError as fnf_e: # e.g. python executable not found
             logger.error(f"Failed to start agent {agent_id} due to FileNotFoundError: {fnf_e}", exc_info=True)
-            err_detail = f"File not found: {str(fnf_e)}"
-            current_runtime = initial_status_data.get("runtime", "unknown")
-            await self._update_status_in_redis(status_key, {"status": "error_start_failed", "error_detail": err_detail, "runtime": current_runtime})
+            await self._update_status_in_redis(status_key, {"status": "error_script_not_found", "error_detail": str(fnf_e)})
             return False
         except Exception as e:
             logger.error(f"Failed to start agent {agent_id}: {e}", exc_info=True)
-            err_detail = str(e)
-            current_runtime = initial_status_data.get("runtime", "unknown")
-            await self._update_status_in_redis(status_key, {"status": "error_start_failed", "error_detail": err_detail, "runtime": current_runtime})
+            await self._update_status_in_redis(status_key, {"status": "error_start_failed", "error_detail": str(e)})
             return False
 
-    async def _start_local_agent_process(self, agent_id: str, config_url: str, agent_settings: Dict[str, Any]) -> Optional[int]:
-        """Helper to start a local agent process."""
+    async def _start_agent_process(self, agent_id: str, config_url: str, agent_settings: Dict[str, Any]) -> Optional[int]:
+        """Helper to start a agent process."""
         cmd = [
             self.python_executable,
             "-u", # Unbuffered stdout/stderr
             self.agent_runner_script_full_path,
             "--agent-id", agent_id,
             "--config-url", config_url,
-            # Удален --redis-url так как runner_main.py его больше не использует напрямую
         ]
-        # Дополнительные аргументы из agent_settings могут быть добавлены здесь, если runner_main.py их поддерживает
-        # Например, если runner_main.py будет принимать --custom-arg value
-        # if "custom_arg_value" in agent_settings:
-        #     cmd.extend(["--custom-arg", str(agent_settings["custom_arg_value"])])
 
         pid = await self.launcher.launch_process(cmd, self.process_env, f"agent_{agent_id}")
         if pid:
-            logger.info(f"Successfully started local agent process for {agent_id} with PID {pid}. Command: {' '.join(cmd)}")
+            logger.info(f"Successfully started agent process for {agent_id} with PID {pid}. Command: {' '.join(cmd)}")
         else:
-            logger.error(f"Failed to start local agent process for {agent_id}. Command: {' '.join(cmd)}")
+            logger.error(f"Failed to start agent process for {agent_id}. Command: {' '.join(cmd)}")
         return pid
 
 # Example of how to use the ProcessManager (e.g., in an API router or a main service script)
@@ -1088,7 +953,7 @@ async def example_usage():
 
     test_agent_id = "test_agent_001"
     
-    # Start an agent (assuming RUN_AGENTS_WITH_DOCKER=False for local test)
+    # Start an agent
     # You'd need to have the agent runner script and its dependencies set up.
     # print(f"Attempting to start agent: {test_agent_id}")
     # success_start = await manager.start_agent_process(test_agent_id)
@@ -1120,8 +985,7 @@ if __name__ == "__main__":
     # 1. Redis is running and REDIS_URL in settings is correct.
     # 2. AGENT_RUNNER_MODULE_PATH, AGENT_RUNNER_SCRIPT_FULL_PATH are correct.
     # 3. PYTHON_EXECUTABLE points to a valid Python interpreter.
-    # 4. If testing Docker, Docker is running and AGENT_DOCKER_IMAGE is set.
-    # 5. The agent script itself (e.g., runner_main.py) is runnable and handles its lifecycle.
+    # 4. The agent script itself (e.g., runner_main.py) is runnable and handles its lifecycle.
     
     # asyncio.run(example_usage())
     pass

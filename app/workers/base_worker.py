@@ -29,7 +29,7 @@ class BaseWorker(RunnableComponent, StatusUpdater, ABC):
         run_loop(): Абстрактный метод для основного цикла работы воркера (должен быть
                     реализован в дочерних классах).
     """
-    def __init__(self, component_id: str, status_key_prefix: str = "worker_status:"): # Added colon for consistency
+    def __init__(self, component_id: str, status_key_prefix: str = "worker_status:"):
         RunnableComponent.__init__(self) 
         StatusUpdater.__init__(self) 
         

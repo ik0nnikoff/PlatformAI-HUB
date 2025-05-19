@@ -55,10 +55,6 @@ class Settings:
 
     PYTHON_EXECUTABLE: str = os.getenv("PYTHON_EXECUTABLE", "python") 
 
-    # Docker settings for agent runner
-    RUN_AGENTS_WITH_DOCKER: bool = os.getenv("RUN_AGENTS_WITH_DOCKER", "false").lower() == "true"
-    AGENT_DOCKER_IMAGE: str = os.getenv("AGENT_DOCKER_IMAGE", "agent_runner_image")
-
     # Service Configuration
     MANAGER_HOST: str = os.getenv("MANAGER_HOST", "localhost")
     MANAGER_PORT: int = int(os.getenv("MANAGER_PORT", "8001"))
@@ -76,23 +72,7 @@ class Settings:
     AGENT_INACTIVITY_TIMEOUT: int = int(os.getenv("AGENT_INACTIVITY_TIMEOUT", "1800")) # seconds (30 minutes)
     AGENT_INACTIVITY_CHECK_INTERVAL: int = int(os.getenv("AGENT_INACTIVITY_CHECK_INTERVAL", "60")) # seconds (1 minute)
 
-    # Telegram Integration Specific (может быть вынесено в настройки интеграции, но для примера здесь)
-    TELEGRAM_BOT_REDIS_PUBSUB_URL: Optional[str] = os.getenv("TELEGRAM_BOT_REDIS_PUBSUB_URL", None) # Specific Redis for Telegram bot Pub/Sub, if different
-
 settings = Settings()
-
-# Check if runner script exists (if not running with Docker)
-# and print warnings if paths or settings seem problematic.
-if not settings.RUN_AGENTS_WITH_DOCKER:
-    if not os.path.exists(settings.AGENT_RUNNER_SCRIPT_FULL_PATH):
-        print(f"App Config: CRITICAL WARNING! Agent runner script not found at: {settings.AGENT_RUNNER_SCRIPT_FULL_PATH}")
-        print(f"Ensure AGENT_RUNNER_SCRIPT_NAME ('{settings.AGENT_RUNNER_SCRIPT_NAME}') is correct and present in 'app/agent_runner/'.")
-    # Дополнительно можно проверить PYTHON_EXECUTABLE, если он кастомный
-elif settings.RUN_AGENTS_WITH_DOCKER:
-    if not settings.AGENT_DOCKER_IMAGE:
-        print(f"App Config: CRITICAL WARNING! RUN_AGENTS_WITH_DOCKER is true, but AGENT_DOCKER_IMAGE is not set.")
-    else:
-        print(f"App Config: Agent runners will be launched using Docker image: {settings.AGENT_DOCKER_IMAGE}")
 
 # For debugging purposes, print out a few key settings
 # print(f"App Config: MANAGER_PORT set to {settings.MANAGER_PORT}")

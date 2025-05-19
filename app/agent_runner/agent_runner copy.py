@@ -85,7 +85,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         logger (logging.LoggerAdapter): Адаптер логгера для журналирования. (Установлен в ServiceComponentBase)
         agent_config (Optional[Dict]): Загруженная конфигурация агента.
         agent_app (Optional[Any]): Экземпляр приложения LangGraph агента.
-        # pubsub_handler_task (Optional[asyncio.Task]): Задача asyncio, выполняющая прослушивание Pub/Sub. # Удалено, используется _register_main_task
+        pubsub_handler_task (Optional[asyncio.Task]): Задача asyncio, выполняющая прослушивание Pub/Sub.
         static_state_config (Optional[Dict]): Статическая конфигурация состояния, извлеченная из конфигурации агента.
     """
 
@@ -106,12 +106,11 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                          logger_adapter=logger_adapter)
 
         self.db_session_factory = db_session_factory
-        self._pubsub_channel = f"agent:{self._component_id}:input"
 
         self.config_url = str
         self.agent_config: Optional[Dict] = None
         self.agent_app: Optional[Any] = None
-        # self.pubsub_handler_task: Optional[asyncio.Task] = None # Удалено, т.к. задача управляется ServiceComponentBase
+        self.pubsub_handler_task: Optional[asyncio.Task] = None
         self.static_state_config: Optional[Dict] = None
 
         self.logger.info(f"AgentRunner for agent {self._component_id} initialized. PID: {os.getpid()}")
@@ -154,7 +153,84 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         self.logger.info(f"[{self._component_id}] LangGraph application created successfully.")
         return True
 
-    async def _handle_pubsub_message(self, message_data: bytes) -> None:
+    async def _pubsub_listener_loop(self):
+        """Прослушивает сообщения Pub/Sub из Redis и обрабатывает их."""
+        # self.redis_client is inherited from StatusUpdater -> RedisClientManager
+        # and initialized by ServiceComponentBase.setup() -> StatusUpdater.setup_status_updater()
+        
+        # Ensure redis_client is available (it should be after setup)
+        try:
+            redis_cli = await self.redis_client 
+        except RuntimeError as e:
+            self.logger.critical(f"[{self._component_id}] Redis client not available for Pub/Sub listener: {e}. Listener cannot start.")
+            await self.mark_as_error(reason=f"Redis client unavailable for Pub/Sub: {e}")
+            return
+
+        channel = f"agent:{self._component_id}:input"
+        pubsub = None
+        self.logger.info(f"[{self._component_id}] Pub/Sub listener starting for channel: {channel}")
+
+        while self._running:  # self._running is from RunnableComponent
+            try:
+                if not await redis_cli.ping():
+                    self.logger.warning(f"[{self._component_id}] Redis ping failed in listener. Re-establishing pubsub.")
+                    if pubsub:
+                        try:
+                            await pubsub.aclose()
+                        except Exception as e_close:
+                            self.logger.error(f"[{self._component_id}] Error closing pubsub during reconnect: {e_close}")
+                    pubsub = None
+                    await asyncio.sleep(settings.REDIS_RECONNECT_INTERVAL)
+                    continue
+
+                if pubsub is None:
+                    pubsub = redis_cli.pubsub()
+                    await pubsub.subscribe(channel)
+                    self.logger.info(f"[{self._component_id}] Subscribed to Redis channel: {channel}")
+
+                # Get message with timeout to allow checking self._running
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+
+                if not self._running: # Check again after potential blocking call
+                    break
+
+                if message and message.get("type") == "message":
+                    self.logger.debug(f"[{self._component_id}] Received raw message from {channel}: {message}")
+                    await self._handle_pubsub_message(message)
+                
+            except redis_exceptions.ConnectionError as e:
+                self.logger.error(f"[{self._component_id}] Redis connection error in listener: {e}. Attempting to reconnect...", exc_info=True)
+                if pubsub:
+                    try: await pubsub.aclose()
+                    except: pass
+                pubsub = None
+                await self.mark_as_error(reason=f"Redis connection error: {e}") # Temporary error state
+                await asyncio.sleep(settings.REDIS_RECONNECT_INTERVAL) 
+                # Attempt to recover by re-pinging and re-subscribing in the next iteration
+            except asyncio.CancelledError:
+                self.logger.info(f"[{self._component_id}] Pub/Sub listener task cancelled.")
+                break
+            except Exception as e:
+                self.logger.error(f"[{self._component_id}] Unexpected error in Pub/Sub listener: {e}", exc_info=True)
+                if pubsub:
+                    try: await pubsub.aclose()
+                    except: pass
+                pubsub = None
+                await self.mark_as_error(reason=f"Pub/Sub listener error: {e}")
+                await asyncio.sleep(settings.REDIS_RECONNECT_INTERVAL) # Wait before retrying
+
+        if pubsub:
+            try:
+                self.logger.info(f"[{self._component_id}] Unsubscribing and closing Pub/Sub connection.")
+                await pubsub.unsubscribe(channel)
+                await pubsub.aclose()
+            except Exception as e:
+                self.logger.error(f"[{self._component_id}] Error during Pub/Sub cleanup: {e}", exc_info=True)
+        
+        self.logger.info(f"[{self._component_id}] Pub/Sub listener for {channel} has stopped.")
+
+
+    async def _handle_pubsub_message(self, message: Dict):
         """
         Обрабатывает входящее сообщение от Redis Pub/Sub.
 
@@ -185,15 +261,19 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         """
 
         try:
-            redis_cli = await self.redis_client
+            redis_cli = await self.redis_client # Use inherited client
         except RuntimeError as e:
-            self.logger.error(f"[{self._component_id}] Redis client not available for handling pubsub message: {e}")
-            return
+            self.logger.error(f"[{self._component_id}] Redis client not available for auth check: {e}")
+            return False
         
-        data_str: Optional[str] = None
-        payload: Optional[Dict[str, Any]] = None # Инициализируем payload
         try:
-            data_str = message_data.decode('utf-8')
+            data_str = message.get('data')
+            if isinstance(data_str, bytes):
+                data_str = data_str.decode('utf-8')
+            elif not isinstance(data_str, str):
+                self.logger.warning(f"[{self._component_id}] Received non-string or non-bytes data in pubsub message: {type(data_str)}")
+                return
+
             payload = json.loads(data_str)
             self.logger.info(f"[{self._component_id}] Processing message for chat_id: {payload.get('chat_id')}")
 
@@ -366,7 +446,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                             "timestamp": getattr(token_usage_data, "timestamp", datetime.now(timezone.utc).isoformat())
                         }
                         # Публикуем в Redis очередь для token_usage_worker
-                        await redis_cli.publish(
+                        await redis_cli.rpush(
                             settings.REDIS_TOKEN_USAGE_QUEUE_NAME,
                             json.dumps(token_usage_payload)
                         )
@@ -384,7 +464,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
 
-            await redis_cli.publish(response_channel, json.dumps(response_payload))
+            await redis_cli.rpush(response_channel, json.dumps(response_payload))
             self.logger.info(f"[{self._component_id}] Published to {response_channel} response: {json.dumps(response_payload)}")
 
             await self.update_last_active_time()
@@ -405,8 +485,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                 }
 
                 try:
-                    # Changed from rpush to publish
-                    await redis_cli.publish(error_response_channel, json.dumps(error_payload).encode('utf-8'))
+                    await redis_cli.rpush(error_response_channel, json.dumps(error_payload))
                     self.logger.info(f"[{self._component_id}] Published error notification to {error_response_channel}")
                 except Exception as pub_err:
                     self.logger.error(f"[{self._component_id}] Failed to publish error notification: {pub_err}", exc_info=True)
@@ -473,22 +552,63 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         Регистрирует слушателя Pub/Sub как основную задачу и передает управление
         в `super().run_loop()` для ее выполнения и мониторинга.
         """
-        if not self.agent_app:
-            self.logger.error(f"[{self._component_id}] Agent application not initialized. Cannot start run_loop.")
-            await self.mark_as_error("Agent application not initialized")
-            # self.initiate_shutdown() # ServiceComponentBase.run_loop handles shutdown if _running becomes False
-            return
-
-        self.logger.info(f"[{self._component_id}] AgentRunner run_loop starting...")
+        self.logger.info(f"[{self._component_id}] AgentRunner run_loop starting.")
         
-        # Регистрируем _pubsub_listener_loop как основную задачу
-        # self._pubsub_channel уже установлен в __init__
-        self._register_main_task(self._pubsub_listener_loop(), name="AgentPubSubListener")
+        # Убедимся, что предыдущая задача (если была) очищена перед регистрацией новой.
+        # super().setup() должен был очистить self._main_tasks, но для надежности:
+        if self.pubsub_handler_task and not self.pubsub_handler_task.done():
+            self.logger.warning(f"[{self._component_id}] pubsub_handler_task was still active at the start of run_loop. Cancelling it.")
+            self.pubsub_handler_task.cancel()
+            try:
+                await self.pubsub_handler_task
+            except asyncio.CancelledError:
+                self.logger.info(f"[{self._component_id}] Old pubsub_handler_task cancelled.")
+            except Exception as e:
+                self.logger.error(f"[{self._component_id}] Error cancelling old pubsub_handler_task: {e}")
+        self.pubsub_handler_task = None
 
-        # Передаем управление ServiceComponentBase.run_loop, который будет следить за задачами
+        # Регистрация основной задачи
+        self.pubsub_handler_task = self._register_main_task(
+            self._pubsub_listener_loop(),
+            name=f"AgentRunner-PubSubListener-{self._component_id}"
+        )
+        
+        # Передача управления базовому классу для выполнения и мониторинга задач
         await super().run_loop()
-        
+
+        # После завершения super().run_loop() (т.е. когда все задачи остановлены или одна упала)
+        # можно выполнить специфичную для AgentRunner логику, если необходимо.
+        # Например, если _pubsub_listener_loop завершился с ошибкой, это будет обработано в super().run_loop(),
+        # который вызовет mark_as_error и initiate_shutdown.
+        # Если _pubsub_listener_loop завершился и вызвал self.request_restart(),
+        # то self.needs_restart будет True, и runner_main.py это обработает.
+
+        # Если мы дошли сюда, значит super().run_loop() завершился.
+        # Проверяем, не завершилась ли задача pubsub_handler_task с ошибкой,
+        # которая не была обработана как критическая в super().run_loop()
+        # (хотя она должна была быть).
+        if self.pubsub_handler_task and self.pubsub_handler_task.done():
+            try:
+                exc = self.pubsub_handler_task.exception()
+                if exc:
+                    self.logger.error(f"[{self._component_id}] PubSub listener task finished with an unhandled error after super().run_loop(): {exc}", exc_info=exc)
+                    # Потенциально установить self.request_restart() или self.clear_restart_request()
+                    # в зависимости от типа ошибки, если это не было сделано в super().run_loop()
+                    # Однако, super().run_loop() должен был это обработать.
+                    # Это больше для отладки.
+                    if self._running: # Если компонент все еще считает себя работающим
+                        await self.mark_as_error(reason=f"PubSub listener failed post-loop: {exc}")
+                        self.clear_restart_request() # Не перезапускать, если ошибка здесь
+                        self.initiate_shutdown() # Убедиться, что остановка инициирована
+            except asyncio.CancelledError:
+                self.logger.info(f"[{self._component_id}] PubSub listener task was cancelled (checked after super().run_loop()).")
+            # except asyncio.InvalidStateError:
+                # Задача еще не завершена, что странно, если super().run_loop() завершился
+                # self.logger.warning(f"[{self._component_id}] PubSub listener task in InvalidStateError after super().run_loop().")
+
+
         self.logger.info(f"[{self._component_id}] AgentRunner run_loop finished.")
+
 
     async def cleanup(self) -> None:
         """

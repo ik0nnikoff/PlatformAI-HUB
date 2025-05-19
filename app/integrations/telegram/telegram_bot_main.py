@@ -5,21 +5,106 @@ import json
 import sys
 
 from app.core.logging_config import setup_logging
-from app.core.config import settings # Для DATABASE_URL
+from app.core.config import settings
 from app.db.session import get_async_session_factory, close_db_engine
 from app.integrations.telegram.telegram_bot import TelegramIntegrationBot
 
-# Все старые глобальные переменные (bot, dp, redis_client, и т.д.) удалены.
-# Все старые функции (обработчики, слушатели, lifespan, main_bot_runner, и т.д.) удалены.
+
+def setup_logging_for_agent(agent_id: str) -> logging.LoggerAdapter:
+        
+    module_logger = logging.getLogger(f"TELEGRAM_BOT:{args.agent_id}")
+    adapter = logging.LoggerAdapter(module_logger, {'agent_id': agent_id})
+    return adapter
+
+def get_bot_token(integration_settings: str, log_adapter) -> str | None:
+    bot_token: str | None = None
+    try:
+        integration_settings_data = json.loads(args.integration_settings)
+        if isinstance(integration_settings_data, dict):
+            bot_token = integration_settings_data.get("botToken") or integration_settings_data.get("bot_token")
+        else:
+            log_adapter.error(
+                f"Parsed --integration-settings is not a dictionary: {type(integration_settings_data)}. "
+                f"Settings: '{args.integration_settings}'"
+            )
+    except json.JSONDecodeError as e:
+        log_adapter.error(
+            f"Failed to parse --integration-settings JSON: {e}. Settings: '{args.integration_settings}'",
+            exc_info=True
+        )
+    except Exception as e_parse: # Ловим любые другие ошибки парсинга
+        log_adapter.error(
+            f"Unexpected error parsing --integration-settings: {e_parse}. Settings: '{args.integration_settings}'",
+            exc_info=True
+        )
+
+    if not bot_token:
+        log_adapter.critical("CRITICAL: Telegram Bot Token not found in --integration-settings. Bot cannot start.")
+        sys.exit(1)
+    
+    return bot_token
+
+async def main_async_runner(agent_id: str, integration_settings: str):
+
+    log_adapter = setup_logging_for_agent(agent_id)
+    log_adapter.info(f"Starting Telegram bot for Agent ID: {agent_id}")
+
+    db_session_factory = None
+    if settings.DATABASE_URL:
+        try:
+            # Передаем строку URL базы данных напрямую из настроек
+            db_session_factory = get_async_session_factory() # Убран аргумент
+            log_adapter.info("Database session factory configured for Telegram bot.")
+        except Exception as e_db_setup:
+            log_adapter.error(f"Failed to setup database session factory: {e_db_setup}", exc_info=True)
+    else:
+        log_adapter.warning("DATABASE_URL not set. Database features will be unavailable.")
+
+    bot_token = get_bot_token(integration_settings, log_adapter)
+
+    telegram_bot = TelegramIntegrationBot(
+        agent_id=args.agent_id,
+        bot_token=bot_token,
+        db_session_factory=db_session_factory,
+        logger_adapter=log_adapter
+    )
+
+    try:
+        while True:
+            log_adapter.info(f"Calling TelegramIntegrationBot.run() for agent {agent_id}...")
+            await telegram_bot.run()
+
+            if hasattr(telegram_bot, 'needs_restart') and telegram_bot.needs_restart:
+                log_adapter.info(f"Telegram bot for {agent_id} requested restart. Re-initializing for another run cycle...")
+                telegram_bot = TelegramIntegrationBot(
+                    agent_id=args.agent_id,
+                    bot_token=bot_token,
+                    db_session_factory=db_session_factory,
+                    logger_adapter=log_adapter
+                )
+            else:
+                log_adapter.info(f"TelegramIntegrationBot for {agent_id} finished execution or was shut down without a restart request.")
+                break
+    except (KeyboardInterrupt, SystemExit):
+        log_adapter.info(f"Telegram bot {args.agent_id} process interrupted or exited.")
+    except Exception as e:
+        log_adapter.critical(f"Unhandled exception in main_async_runner for Telegram bot {agent_id}: {e}", exc_info=True)
+        # Depending on desired behavior, could attempt a restart or ensure shutdown
+    finally:
+        if settings.DATABASE_URL and db_session_factory:
+            log_adapter.info(f"Shutting down Telegram bot runner for {agent_id}.")
+            try:
+                await close_db_engine()
+                log_adapter.info("Database engine closed.")
+            except Exception as e_db_close:
+                log_adapter.error(f"Error closing database engine: {e_db_close}", exc_info=True)
+        log_adapter.info(f"Telegram bot runner for {agent_id} has been shut down.")
 
 if __name__ == "__main__":
-    # 1. Настройка стандартного логирования
     setup_logging()
 
-    # 2. Парсинг аргументов командной строки
     parser = argparse.ArgumentParser(description="Telegram Bot Integration for Configurable Agent")
-    parser.add_argument("--agent-id", required=True, help="Unique ID of the agent this bot interacts with")
-    parser.add_argument("--redis-url", required=True, help="URL for Redis connection for this bot instance")
+    parser.add_argument("--agent-id", required=True, help="Unique ID of the agent to run")
     parser.add_argument(
         "--integration-settings",
         type=str,
@@ -28,83 +113,12 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # 3. Создание логгера для экземпляра Telegram-бота этого агента
-    logger = logging.getLogger(f"telegram_bot:{args.agent_id}")
-    logger.info(
-        f"Initializing Telegram bot for Agent ID: {args.agent_id} with Redis URL: {args.redis_url}"
-    )
-
-    # 4. Извлечение bot_token из integration_settings
-    bot_token_to_use: str | None = None
     try:
-        integration_settings_data = json.loads(args.integration_settings)
-        if isinstance(integration_settings_data, dict):
-            bot_token_to_use = integration_settings_data.get("botToken") or integration_settings_data.get("bot_token")
-        else:
-            logger.error(
-                f"Parsed --integration-settings is not a dictionary: {type(integration_settings_data)}. "
-                f"Settings: '{args.integration_settings}'"
-            )
-    except json.JSONDecodeError as e:
-        logger.error(
-            f"Failed to parse --integration-settings JSON: {e}. Settings: '{args.integration_settings}'",
-            exc_info=True
-        )
-    except Exception as e_parse: # Ловим любые другие ошибки парсинга
-        logger.error(
-            f"Unexpected error parsing --integration-settings: {e_parse}. Settings: '{args.integration_settings}'",
-            exc_info=True
-        )
-
-    if not bot_token_to_use:
-        logger.critical("CRITICAL: Telegram Bot Token not found in --integration-settings. Bot cannot start.")
-        sys.exit(1) # Выход, если токена нет
-
-    logger.info(f"Telegram Bot Token obtained (length: {len(bot_token_to_use)}).")
-
-    # 5. Настройка фабрики сессий базы данных (если используется база данных)
-    db_session_factory = None
-    if settings.DATABASE_URL:
-        try:
-            # Передаем строку URL базы данных напрямую из настроек
-            db_session_factory = get_async_session_factory() # Убран аргумент
-            logger.info("Database session factory configured for Telegram bot.")
-        except Exception as e_db_setup:
-            logger.error(f"Failed to setup database session factory: {e_db_setup}", exc_info=True)
-            # В зависимости от требований, можно выйти или продолжить без функций БД
-            # Пока что он продолжит, и TelegramIntegrationBot должен обрабатывать db_session_factory равным None.
-    else:
-        logger.warning("DATABASE_URL not set. Database features will be unavailable for the Telegram bot.")
-
-    # 6. Инициализация и запуск TelegramIntegrationBot
-    telegram_bot_instance = TelegramIntegrationBot(
-        agent_id=args.agent_id,
-        bot_token=bot_token_to_use,
-        redis_url=args.redis_url, # Для StatusUpdater и как fallback для операций бота
-        # redis_pubsub_url=args.redis_url, # Можно явно указать, если URL для Pub/Sub отличается
-        db_session_factory=db_session_factory,
-        logger_adapter=logger # Изменено с logger на logger_adapter
-    )
-
-    try:
-        asyncio.run(telegram_bot_instance.run())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info(f"Telegram bot for agent {args.agent_id} process interrupted or exited.")
+        asyncio.run(main_async_runner(agent_id=args.agent_id, integration_settings=args.integration_settings))
+    except KeyboardInterrupt:
+        logging.getLogger(__name__).info("Telegram bot runner main received KeyboardInterrupt. Exiting.")
     except Exception as e:
-        # Ловит исключения из telegram_bot_instance.run(), если они не обработаны внутри
-        # или исключения из самого asyncio.run().
-        logger.critical(
-            f"Unhandled exception in Telegram bot main execution for agent {args.agent_id}: {e}",
-            exc_info=True
-        )
+        logging.getLogger(__name__).critical(f"Critical error in Telegram bot runner main: {e}", exc_info=True)
+        sys.exit(1) # Or os._exit(1) if absolutely necessary
     finally:
-        logger.info(f"Telegram bot application for agent {args.agent_id} is shutting down.")
-        if settings.DATABASE_URL and db_session_factory: # Убедимся, что была попытка настройки
-            logger.info("Closing database engine...")
-            try:
-                # close_db_engine - асинхронная функция
-                asyncio.run(close_db_engine())
-                logger.info("Database engine closed successfully.")
-            except Exception as e_db_close:
-                logger.error(f"Error closing database engine: {e_db_close}", exc_info=True)
-        logger.info(f"Telegram bot for agent {args.agent_id} finished.")
+        logging.getLogger(__name__).info("Telegram bot runner main finished.")
