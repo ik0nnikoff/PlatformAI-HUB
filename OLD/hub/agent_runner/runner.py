@@ -442,7 +442,7 @@ async def redis_listener(
                                 break
 
                             for key, value in output.items():
-                                log_adapter.debug(f"Graph node '{key}' output: {value}")
+                                log_adapter.info(f"Graph node '{key}' output: {value}")
                                 if key == "agent" or key == "generate":
                                     if "messages" in value and value["messages"]:
                                         last_msg = value["messages"][-1]

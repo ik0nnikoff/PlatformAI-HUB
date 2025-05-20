@@ -4,10 +4,9 @@ import logging
 from dotenv import load_dotenv
 import redis.asyncio as redis
 from pydantic import BaseModel, Field
-# --- ДОБАВЛЕНО: Импорт datetime ---
-from datetime import datetime, timedelta, timezone # Добавляем timezone
-# --- КОНЕЦ ДОБАВЛЕНИЯ ---
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Literal, Optional, Tuple
+
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder
@@ -139,7 +138,6 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
 
     # --- Extract Settings ---
     # Adjust path based on the actual structure logged: agent_config['config']['simple']['settings']
-    config_data = agent_config.get("config", {})
     simple_config = config_data.get("simple", {}) # Get the 'simple' dictionary
     settings_data = simple_config.get("settings", {}) # Get the 'settings' dictionary
 
