@@ -11,13 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from datetime import datetime, timezone
 
-import redis.asyncio as redis
 from redis import exceptions as redis_exceptions
 
 from app.agent_runner.langgraph_factory import create_agent_app
 from app.agent_runner.langgraph_models import TokenUsageData
 from app.db.alchemy_models import ChatMessageDB, SenderType
-from app.db.crud import chat_crud
+from app.db.crud.chat_crud import db_get_recent_chat_history
 from app.core.config import settings
 from app.core.base.service_component import ServiceComponentBase # Added import
 
@@ -44,7 +43,7 @@ async def fetch_config_static(config_url: str, logger: logging.Logger) -> Option
     return None
 
 
-def convert_db_history_to_langchain_static(db_messages: List[ChatMessageDB], logger: logging.Logger) -> List[BaseMessage]:
+def convert_db_history_to_langchain(db_messages: List[ChatMessageDB], logger: logging.Logger) -> List[BaseMessage]:
     """Converts messages from DB format (ChatMessageDB) to LangChain BaseMessage list."""
     converted = []
     if not ChatMessageDB or not SenderType:
@@ -55,6 +54,7 @@ def convert_db_history_to_langchain_static(db_messages: List[ChatMessageDB], log
         if not isinstance(msg, ChatMessageDB):
              logger.warning(f"Skipping message conversion due to unexpected type: {type(msg)}")
              continue
+        
         if msg.sender_type == SenderType.USER:
             converted.append(HumanMessage(content=msg.content))
         elif msg.sender_type == SenderType.AGENT:
@@ -203,10 +203,10 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             platform_user_id = payload.get("platform_user_id")
 
             interaction_id = str(uuid.uuid4())
-            self.logger.info(f"Generated InteractionID: {interaction_id} for Thread: {chat_id}")
+            self.logger.debug(f"Generated InteractionID: {interaction_id} for Thread: {chat_id}")
 
-            if not chat_id or user_input is None or not interaction_id:
-                self.logger.warning(f"Missing chat_id, text, or interaction_id in payload: {payload}")
+            if not chat_id or user_input is None:
+                self.logger.warning(f"Missing 'message' or 'thread_id' in Redis payload: {payload}")
                 return
 
             await self._save_history(
@@ -219,24 +219,22 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
 
             # Determine context memory depth from agent_config
             enable_context_memory = self.agent_config.get("enableContextMemory", True)
-            context_memory_depth = self.agent_config.get("contextMemoryDepth", 10) # Default to 10 if not specified
+            context_memory_depth = self.agent_config.get("contextMemoryDepth", 10)
+
             if not enable_context_memory:
                 self.logger.info(f"Context memory is disabled by agent config. History will not be loaded with depth.")
-                actual_history_limit = 0
+                context_memory_depth = 0
             else:
-                actual_history_limit = context_memory_depth
-            
-            self.logger.info(f"Using history limit: {actual_history_limit} (enabled: {enable_context_memory}, configured depth: {context_memory_depth})")
-
-            # langchain_history = convert_db_history_to_langchain_static(history_messages_db, self.logger) # Temporarily commented out
+                self.logger.info(f"Using history limit: {context_memory_depth} (enabled: {enable_context_memory}, configured depth: {context_memory_depth})")
+                history_messages_db = await self._get_history(
+                    thread_id=chat_id,
+                    history_limit=context_memory_depth
+                )
 
             initial_graph_input = {
-                # "messages": langchain_history +[HumanMessage(content=user_input)], # Temporarily simplified
-                "messages": [HumanMessage(content=user_input)], # Temporarily simplified
+                "messages": history_messages_db +[HumanMessage(content=user_input)],
             }
-
-            # Ensure key names here match exactly what langgraph_factory.create_agent_app returns in static_state_config
-            # and what agent_node expects in the state.
+# Я ТУТ
             expected_static_keys = {
                 "system_prompt": "system_prompt", # Key expected in static_state_config and graph state
                 "temperature": "temperature",   # Key expected in static_state_config and graph state
@@ -399,6 +397,65 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                     self.logger.info(f"Published error notification to {error_response_channel}")
                 except Exception as pub_err:
                     self.logger.error(f"Failed to publish error notification: {pub_err}", exc_info=True)
+
+
+    async def _get_history(
+            self,
+            thread_id: str,
+            history_limit: int = 10
+            ) -> List[BaseMessage]:
+        """
+        Получает историю сообщений из БД для указанного thread_id.
+        Возвращает список сообщений в формате LangChain BaseMessage.
+        Если история не найдена, возвращает пустой список.
+        """
+        can_load_history = db_get_recent_chat_history is not None and self.db_session_factory is not None and ChatMessageDB is not None and SenderType is not None
+        if not can_load_history:
+            self.logger.warning("Database history loading is disabled (CRUD, DB session factory, ChatMessageDB, or SenderType not available).")
+
+        try:
+            redis_cli = await self.redis_client
+        except RuntimeError as e:
+            self.logger.error(f"Redis client not available for handling pubsub message: {e}")
+            return
+
+        loaded_threads_key = f"agent_threads:{self._component_id}"
+        loaded_messages: List[BaseMessage] = []
+        # Загружаем историю только если включена память контекста и есть глубина
+        if can_load_history and history_limit > 0:
+            try:
+                is_loaded = await redis_cli.sismember(loaded_threads_key, thread_id)
+                if not is_loaded:
+                    self.logger.info(f"Thread '{thread_id}' not found in cache '{loaded_threads_key}'. Loading history from DB with depth {history_limit}.")
+                    async with self.db_session_factory() as session:
+                        history_from_db = await db_get_recent_chat_history(
+                            db=session,
+                            agent_id=self._component_id,
+                            thread_id=thread_id,
+                            limit=history_limit
+                        )
+                        loaded_messages = convert_db_history_to_langchain(history_from_db, self.logger)
+
+                    self.logger.info(f"Loaded {len(loaded_messages)} messages from DB for thread '{thread_id}'.")
+
+                    await redis_cli.sadd(loaded_threads_key, thread_id)
+                    self.logger.info(f"Added thread '{thread_id}' to cache '{loaded_threads_key}'.")
+                    return loaded_messages
+                else:
+                    self.logger.info(f"Thread '{thread_id}' found in cache '{loaded_threads_key}'. Skipping DB load.")
+                    return []
+
+            except redis_exceptions as redis_err:
+                self.logger.error(f"Redis error checking/adding thread cache for '{thread_id}': {redis_err}. Proceeding without history.")
+                return []
+            except Exception as db_err:
+                self.logger.error(f"Database error loading history for thread '{thread_id}': {db_err}. Proceeding without history.", exc_info=True)
+                return []
+        else:
+            if not await redis_cli.sismember(loaded_threads_key, thread_id):
+                self.logger.warning(f"Cannot load history for thread '{thread_id}' because DB/CRUD/Models are unavailable (but memory was enabled).")
+                await redis_cli.sadd(loaded_threads_key, thread_id)
+                return []
 
 
     async def _save_history(
