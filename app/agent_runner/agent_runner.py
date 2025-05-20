@@ -4,7 +4,7 @@ import os
 import json
 import uuid
 import time
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, Any, List, Tuple
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -107,11 +107,12 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
 
         self.db_session_factory = db_session_factory
         self._pubsub_channel = f"agent:{self._component_id}:input"
+        self.response_channel = f"agent:{self._component_id}:output"
+        self.loaded_threads_key = f"agent_threads:{self._component_id}"
 
         self.config_url = str
         self.agent_config: Optional[Dict] = None
         self.agent_app: Optional[Any] = None
-        # self.pubsub_handler_task: Optional[asyncio.Task] = None # Удалено, т.к. задача управляется ServiceComponentBase
         self.static_state_config: Optional[Dict] = None
 
         self.logger.info(f"AgentRunner for agent {self._component_id} initialized. PID: {os.getpid()}")
@@ -197,8 +198,9 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             payload = json.loads(data_str)
             self.logger.info(f"Processing message for chat_id: {payload.get('chat_id')}")
 
-            chat_id = payload.get("chat_id")
             user_input = payload.get("text")
+            chat_id = payload.get("chat_id")
+            user_data = payload.get("user_data", {})
             channel = payload.get("channel", "unknown")
             platform_user_id = payload.get("platform_user_id")
 
@@ -217,7 +219,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                 interaction_id=interaction_id
             )
 
-            # Determine context memory depth from agent_config
+            # TODO - Засунуть это в метод _get_history
             enable_context_memory = self.agent_config.get("enableContextMemory", True)
             context_memory_depth = self.agent_config.get("contextMemoryDepth", 10)
 
@@ -231,148 +233,31 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                     history_limit=context_memory_depth
                 )
 
-            initial_graph_input = {
-                "messages": history_messages_db +[HumanMessage(content=user_input)],
-            }
-# Я ТУТ
-            expected_static_keys = {
-                "system_prompt": "system_prompt", # Key expected in static_state_config and graph state
-                "temperature": "temperature",   # Key expected in static_state_config and graph state
-                "model_id": "model_id",         # Key expected in static_state_config and graph state
-                "provider": "provider"        # Key expected in static_state_config and graph state
-            }
-            if self.static_state_config:
-                for static_key, graph_key in expected_static_keys.items():
-                    if static_key in self.static_state_config:
-                        initial_graph_input[graph_key] = self.static_state_config[static_key]
-                    else:
-                        self.logger.warning(
-                            f"Key '{static_key}' not found in static_state_config. "
-                            f"Graph key '{graph_key}' may be missing. "
-                            f"Check agent configuration and langgraph_factory.py."
-                        )
-                        # Provide a default or handle absence as needed by your graph's logic
-                        if graph_key == "system_prompt":
-                            initial_graph_input[graph_key] = "" # Default for system_prompt
-                        # Add defaults for other critical keys if necessary
-                        elif graph_key == "model_id":
-                            self.logger.error(f"Critical key 'model_id' is missing from static_state_config. Graph execution will likely fail.")
-                            initial_graph_input[graph_key] = "default_model_id_placeholder" # Example placeholder
-                        elif graph_key == "provider":
-                            self.logger.error(f"Critical key 'provider' is missing from static_state_config. Graph execution will likely fail.")
-                            initial_graph_input[graph_key] = "default_provider_placeholder" # Example placeholder
-            else:
-                self.logger.error(
-                    f"static_state_config is not set. Critical parameters like system_prompt, temperature, etc., will be missing."
-                )
-                # Set defaults for critical keys if static_state_config is missing entirely
-                initial_graph_input["system_prompt"] = ""
-                # Defaults for other keys might be needed here if the graph cannot proceed without them
-
-            # Invoke agent
-            self.logger.debug(f"Invoking agent for interaction_id: {interaction_id} with input: {initial_graph_input}") # Log the input
-            agent_response_stream = self.agent_app.astream(
-                initial_graph_input, # Use the input dict that now includes system_prompt and other params
-                config={"configurable": {"thread_id": chat_id, "agent_id": self._component_id}}
-            )
-            
-            extracted_text_content = "" # Initialize to store the final text
-            token_usage_data: Optional[TokenUsageData] = None
-            
-            self.logger.debug(f"Starting to process agent_response_stream for interaction_id: {interaction_id}")
-            async for event_part in agent_response_stream:
-                self.logger.info(f"Stream event_part: {event_part}") # DEBUG LINE
-                if isinstance(event_part, dict):
-                    # Corrected path to messages based on new logs
-                    messages_chunk = event_part.get('agent_node', {}).get('messages', [])
-                    if messages_chunk and isinstance(messages_chunk, list):
-                        for msg_item in messages_chunk:
-                            if isinstance(msg_item, AIMessage):
-                                self.logger.info(f"Processing AIMessage from stream. Current extracted_text_content='{extracted_text_content[:100]}...'. New msg_item.content='{msg_item.content[:100]}...'. Interaction ID: {interaction_id}")
-                                extracted_text_content = msg_item.content
-                                self.logger.info(f"Updated extracted_text_content to: '{extracted_text_content[:100]}...'. Interaction ID: {interaction_id}")
-                                
-                                if hasattr(msg_item, 'usage_metadata') and msg_item.usage_metadata:
-                                    usage_metadata = msg_item.usage_metadata
-                                    usage_from_msg = usage_metadata.get("token_usage") or usage_metadata.get("usage_metadata")
-                                    if usage_from_msg:
-                                        try:
-                                            token_usage_data = TokenUsageData(**usage_from_msg)
-                                            self.logger.debug(f"Token usage from AIMessage metadata: {token_usage_data}")
-                                        except Exception as e_token_msg:
-                                            self.logger.warning(f"Could not parse token_usage from AIMessage metadata: {usage_from_msg}, error: {e_token_msg}")
-                                    else:
-                                        self.logger.debug(f"usage_metadata present but does not contain all required TokenUsageData fields: {usage_metadata}")
-                    
-                    # Fallback или альтернативный способ получить token usage, если он напрямую в event_part
-                    if token_usage_data is None and "token_usage" in event_part and event_part["token_usage"]:
-                        try:
-                            token_usage_data = TokenUsageData(**event_part["token_usage"])
-                            self.logger.debug(f"Token usage data from event part: {token_usage_data}")
-                        except Exception as e_token_event:
-                            self.logger.warning(f"Could not parse token_usage from event_part: {event_part.get('token_usage')}, error: {e_token_event}")
-
-                    # Новый fallback: если есть token_usage_events (список), взять первый (или все)
-                    if token_usage_data is None and "token_usage_events" in event_part and event_part["token_usage_events"]:
-                        try:
-                            tu_event = event_part["token_usage_events"][0]
-                            if isinstance(tu_event, dict):
-                                token_usage_data = TokenUsageData(**tu_event)
-                            else:
-                                token_usage_data = tu_event
-                            self.logger.debug(f"Token usage from token_usage_events: {token_usage_data}")
-                        except Exception as e_token_event:
-                            self.logger.warning(f"Could not parse token_usage from token_usage_events: {event_part.get('token_usage_events')}, error: {e_token_event}")
-
-            self.logger.info(f"Finished processing agent_response_stream for interaction_id: {interaction_id}")
-            full_response_content = extracted_text_content # Use the extracted content
-
-            self.logger.info(f"Final extracted_text_content for interaction_id {interaction_id}: '{full_response_content}'")
-            self.logger.info(f"Agent response for interaction_id {interaction_id} (preview from full_response_content): {full_response_content[:100]}...")
-
-            await self._save_history(
-                sender_type="agent",
+            final_response_content, final_message_object = await self._send_agent(
+                history_messages_db=history_messages_db,
+                user_input=user_input,
+                user_data=user_data,
                 thread_id=chat_id,
-                content=full_response_content,
                 channel=channel,
                 interaction_id=interaction_id
             )
 
-            self.logger.info(f"token_usage_data before publish: {token_usage_data}")
-            if token_usage_data:
-                # Формируем payload для очереди token_usage
-                token_usage_payload = {
-                    "agent_id": self._component_id,
-                    "thread_id": chat_id,
-                    "interaction_id": interaction_id,
-                    "call_type": getattr(token_usage_data, "call_type", None),
-                    "model_id": getattr(token_usage_data, "model_id", None),
-                    "prompt_tokens": getattr(token_usage_data, "prompt_tokens", 0),
-                    "completion_tokens": getattr(token_usage_data, "completion_tokens", 0),
-                    "total_tokens": getattr(token_usage_data, "total_tokens", 0),
-                    "timestamp": getattr(token_usage_data, "timestamp", datetime.now(timezone.utc).isoformat())
-                }
-                # Публикуем в Redis очередь для token_usage_worker
-                await redis_cli.publish(
-                    settings.REDIS_TOKEN_USAGE_QUEUE_NAME,
-                    json.dumps(token_usage_payload)
-                )
-                self.logger.info(f"Published token usage to queue {settings.REDIS_TOKEN_USAGE_QUEUE_NAME}")
-                self.logger.info(f"Published token usage event to Redis queue: {settings.REDIS_TOKEN_USAGE_QUEUE_NAME} | Data: {token_usage_payload}")
+            await self._save_history(
+                sender_type="agent",
+                thread_id=chat_id,
+                content=final_response_content,
+                channel=channel,
+                interaction_id=interaction_id
+            )
 
-            # Publish response back to a response channel (e.g., agent_responses:{chat_id})
-            response_channel = f"agent:{self._component_id}:output"
             response_payload = {
                 "chat_id": chat_id,
-                "thread_id": chat_id, # ADDED thread_id
-                "agent_id": self._component_id,
-                "interaction_id": interaction_id,
-                "response": full_response_content,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "response": final_response_content,
+                "channel": channel
             }
 
-            await redis_cli.publish(response_channel, json.dumps(response_payload))
-            self.logger.debug(f"Published to {response_channel} response: {json.dumps(response_payload)}")
+            await redis_cli.publish(self.response_channel, json.dumps(response_payload))
+            self.logger.debug(f"Published to {self.response_channel} response: {json.dumps(response_payload)}")
 
             await self.update_last_active_time()
 
@@ -399,6 +284,54 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                     self.logger.error(f"Failed to publish error notification: {pub_err}", exc_info=True)
 
 
+    async def _send_agent(
+            self,
+            history_messages_db: List[BaseMessage],
+            user_input: str,
+            user_data: Dict[str, Any],
+            thread_id: str,
+            channel: Optional[str] = None,
+            interaction_id: Optional[str] = None
+            ) -> Tuple[str, Optional[BaseMessage]]:
+        """
+        """
+        graph_input = {
+            "messages": history_messages_db + [HumanMessage(content=user_input)],
+            "user_data": user_data,
+            "channel": channel,
+            "original_question": user_input,
+            "question": user_input,
+            "rewrite_count": 0,
+            "documents": [],
+            "current_interaction_id": interaction_id,
+            "token_usage_events": [],
+            **self.static_state_config
+        }
+        config = {"configurable": {"thread_id": str(thread_id), "agent_id": self._component_id}}
+
+        self.logger.info(f"Invoking graph for thread_id: {thread_id} (Initial history messages: {len(history_messages_db)})")
+        final_response_content = "No response generated."
+        final_message_object = None
+
+        async for output in self.agent_app.astream(graph_input, config, stream_mode="updates"):
+            if not self._running or self.needs_restart:
+                self.logger.warning("Shutdown or restart requested during graph stream.")
+                break
+
+            for key, value in output.items():
+                self.logger.debug(f"Graph node '{key}' output: {value}")
+                if key == "agent" or key == "generate":
+                    if "messages" in value and value["messages"]:
+                        last_msg = value["messages"][-1]
+                        if isinstance(last_msg, AIMessage):
+                            final_response_content = last_msg.content
+                            final_message_object = last_msg
+
+        self.logger.info(f"Graph execution finished. Final response: {final_response_content[:100]}...")
+
+        return final_response_content, final_message_object
+
+
     async def _get_history(
             self,
             thread_id: str,
@@ -419,14 +352,13 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             self.logger.error(f"Redis client not available for handling pubsub message: {e}")
             return
 
-        loaded_threads_key = f"agent_threads:{self._component_id}"
         loaded_messages: List[BaseMessage] = []
         # Загружаем историю только если включена память контекста и есть глубина
         if can_load_history and history_limit > 0:
             try:
-                is_loaded = await redis_cli.sismember(loaded_threads_key, thread_id)
+                is_loaded = await redis_cli.sismember(self.loaded_threads_key, thread_id)
                 if not is_loaded:
-                    self.logger.info(f"Thread '{thread_id}' not found in cache '{loaded_threads_key}'. Loading history from DB with depth {history_limit}.")
+                    self.logger.info(f"Thread '{thread_id}' not found in cache '{self.loaded_threads_key}'. Loading history from DB with depth {history_limit}.")
                     async with self.db_session_factory() as session:
                         history_from_db = await db_get_recent_chat_history(
                             db=session,
@@ -438,11 +370,11 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
 
                     self.logger.info(f"Loaded {len(loaded_messages)} messages from DB for thread '{thread_id}'.")
 
-                    await redis_cli.sadd(loaded_threads_key, thread_id)
-                    self.logger.info(f"Added thread '{thread_id}' to cache '{loaded_threads_key}'.")
+                    await redis_cli.sadd(self.loaded_threads_key, thread_id)
+                    self.logger.info(f"Added thread '{thread_id}' to cache '{self.loaded_threads_key}'.")
                     return loaded_messages
                 else:
-                    self.logger.info(f"Thread '{thread_id}' found in cache '{loaded_threads_key}'. Skipping DB load.")
+                    self.logger.info(f"Thread '{thread_id}' found in cache '{self.loaded_threads_key}'. Skipping DB load.")
                     return []
 
             except redis_exceptions as redis_err:
@@ -452,9 +384,9 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                 self.logger.error(f"Database error loading history for thread '{thread_id}': {db_err}. Proceeding without history.", exc_info=True)
                 return []
         else:
-            if not await redis_cli.sismember(loaded_threads_key, thread_id):
+            if not await redis_cli.sismember(self.loaded_threads_key, thread_id):
                 self.logger.warning(f"Cannot load history for thread '{thread_id}' because DB/CRUD/Models are unavailable (but memory was enabled).")
-                await redis_cli.sadd(loaded_threads_key, thread_id)
+                await redis_cli.sadd(self.loaded_threads_key, thread_id)
                 return []
 
 
@@ -550,6 +482,17 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         закрытия RedisClientManager и обновления статуса.
         """
         self.logger.info(f"AgentRunner cleanup started.")
+        
+        try:
+            redis_cli = await self.redis_client
+            try:
+                deleted_count = await redis_cli.delete(self.loaded_threads_key)
+                self.logger.info(f"Cleared loaded threads cache '{self.loaded_threads_key}' (deleted: {deleted_count}) on start/restart.")
+            except redis_exceptions.RedisError as cache_clear_err:
+                self.logger.error(f"Failed to clear loaded threads cache '{self.loaded_threads_key}': {cache_clear_err}")
+        except RuntimeError as e:
+            self.logger.error(f"Redis client not available for handling pubsub message: {e}")
+            return
         
         # self.pubsub_handler_task будет отменен в super().cleanup(), так как он был зарегистрирован.
         # Дополнительная логика отмены здесь не нужна, если только нет специфичных для AgentRunner задач,

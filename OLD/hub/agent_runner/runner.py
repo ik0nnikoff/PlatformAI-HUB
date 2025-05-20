@@ -426,10 +426,8 @@ async def redis_listener(
                             "question": user_message_content,
                             "rewrite_count": 0,
                             "documents": [],
-                            # --- НОВОЕ: Передаем interaction_id и инициализируем token_usage_events ---
                             "current_interaction_id": current_interaction_id,
-                            "token_usage_events": [], # Инициализируем пустым списком
-                            # --- КОНЕЦ НОВОГО ---
+                            "token_usage_events": [],
                             **static_state_config
                         }
                         config = {"configurable": {"thread_id": str(thread_id), "agent_id": agent_id}}
