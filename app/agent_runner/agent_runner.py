@@ -3,7 +3,6 @@ import asyncio
 import logging
 import json
 import uuid
-import time
 from typing import Dict, Optional, Any, List, Tuple
 
 import httpx
@@ -118,6 +117,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
 
         self.logger.info(f"AgentRunner for agent {self._component_id} initialized. PID: {os.getpid()}")
 
+
     async def _load_and_prepare_config(self) -> bool:
         """
         Загружает конфигурацию агента и подготавливает необходимые параметры.
@@ -138,6 +138,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         self.logger.info(f"Agent configuration loaded and prepared successfully.")
         return True
 
+
     async def _setup_langgraph_app(self) -> bool:
         """
         Создает и настраивает приложение LangGraph на основе загруженной конфигурации.
@@ -155,6 +156,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
 
         self.logger.info(f"LangGraph application created successfully.")
         return True
+
 
     async def _handle_pubsub_message(self, message_data: bytes) -> None:
         """
@@ -220,19 +222,8 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                 interaction_id=interaction_id
             )
 
-            # TODO - Засунуть это в метод _get_history
-            enable_context_memory = self.agent_config.get("enableContextMemory", True)
-            context_memory_depth = self.agent_config.get("contextMemoryDepth", 10)
 
-            if not enable_context_memory:
-                self.logger.info(f"Context memory is disabled by agent config. History will not be loaded with depth.")
-                context_memory_depth = 0
-            else:
-                self.logger.info(f"Using history limit: {context_memory_depth} (enabled: {enable_context_memory}, configured depth: {context_memory_depth})")
-                history_messages_db = await self._get_history(
-                    thread_id=chat_id,
-                    history_limit=context_memory_depth
-                )
+            history_messages_db = await self._get_history(thread_id=chat_id)
 
             final_response_content, final_message_object = await self._send_agent(
                 history_messages_db=history_messages_db,
@@ -397,8 +388,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
 
     async def _get_history(
             self,
-            thread_id: str,
-            history_limit: int = 10
+            thread_id: str
             ) -> List[BaseMessage]:
         """
         Получает историю сообщений из БД для указанного thread_id.
@@ -415,42 +405,49 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             self.logger.error(f"Redis client not available for handling pubsub message: {e}")
             return
 
-        loaded_messages: List[BaseMessage] = []
-        # Загружаем историю только если включена память контекста и есть глубина
-        if can_load_history and history_limit > 0:
-            try:
-                is_loaded = await redis_cli.sismember(self.loaded_threads_key, thread_id)
-                if not is_loaded:
-                    self.logger.info(f"Thread '{thread_id}' not found in cache '{self.loaded_threads_key}'. Loading history from DB with depth {history_limit}.")
-                    async with self.db_session_factory() as session:
-                        history_from_db = await db_get_recent_chat_history(
-                            db=session,
-                            agent_id=self._component_id,
-                            thread_id=thread_id,
-                            limit=history_limit
-                        )
-                        loaded_messages = convert_db_history_to_langchain(history_from_db, self.logger)
+        enable_context_memory = self.agent_config.get("enableContextMemory", True)
+        history_limit = self.agent_config.get("contextMemoryDepth", 10)
 
-                    self.logger.info(f"Loaded {len(loaded_messages)} messages from DB for thread '{thread_id}'.")
-
-                    await redis_cli.sadd(self.loaded_threads_key, thread_id)
-                    self.logger.info(f"Added thread '{thread_id}' to cache '{self.loaded_threads_key}'.")
-                    return loaded_messages
-                else:
-                    self.logger.info(f"Thread '{thread_id}' found in cache '{self.loaded_threads_key}'. Skipping DB load.")
-                    return []
-
-            except redis_exceptions as redis_err:
-                self.logger.error(f"Redis error checking/adding thread cache for '{thread_id}': {redis_err}. Proceeding without history.")
-                return []
-            except Exception as db_err:
-                self.logger.error(f"Database error loading history for thread '{thread_id}': {db_err}. Proceeding without history.", exc_info=True)
-                return []
+        if not enable_context_memory:
+            self.logger.info(f"Context memory is disabled by agent config. History will not be loaded with depth.")
+            context_memory_depth = 0
         else:
-            if not await redis_cli.sismember(self.loaded_threads_key, thread_id):
-                self.logger.warning(f"Cannot load history for thread '{thread_id}' because DB/CRUD/Models are unavailable (but memory was enabled).")
-                await redis_cli.sadd(self.loaded_threads_key, thread_id)
-                return []
+            self.logger.info(f"Using history limit: {history_limit} (enabled: {enable_context_memory}, configured depth: {history_limit})")
+            loaded_messages: List[BaseMessage] = []
+            if can_load_history and history_limit > 0:
+                try:
+                    is_loaded = await redis_cli.sismember(self.loaded_threads_key, thread_id)
+                    if not is_loaded:
+                        self.logger.info(f"Thread '{thread_id}' not found in cache '{self.loaded_threads_key}'. Loading history from DB with depth {history_limit}.")
+                        async with self.db_session_factory() as session:
+                            history_from_db = await db_get_recent_chat_history(
+                                db=session,
+                                agent_id=self._component_id,
+                                thread_id=thread_id,
+                                limit=history_limit
+                            )
+                            loaded_messages = convert_db_history_to_langchain(history_from_db, self.logger)
+
+                        self.logger.info(f"Loaded {len(loaded_messages)} messages from DB for thread '{thread_id}'.")
+
+                        await redis_cli.sadd(self.loaded_threads_key, thread_id)
+                        self.logger.info(f"Added thread '{thread_id}' to cache '{self.loaded_threads_key}'.")
+                        return loaded_messages
+                    else:
+                        self.logger.info(f"Thread '{thread_id}' found in cache '{self.loaded_threads_key}'. Skipping DB load.")
+                        return []
+
+                except redis_exceptions as redis_err:
+                    self.logger.error(f"Redis error checking/adding thread cache for '{thread_id}': {redis_err}. Proceeding without history.")
+                    return []
+                except Exception as db_err:
+                    self.logger.error(f"Database error loading history for thread '{thread_id}': {db_err}. Proceeding without history.", exc_info=True)
+                    return []
+            else:
+                if not await redis_cli.sismember(self.loaded_threads_key, thread_id):
+                    self.logger.warning(f"Cannot load history for thread '{thread_id}' because DB/CRUD/Models are unavailable (but memory was enabled).")
+                    await redis_cli.sadd(self.loaded_threads_key, thread_id)
+                    return []
 
 
     async def _save_history(
