@@ -319,7 +319,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                 break
 
             for key, value in output.items():
-                self.logger.info(f"Graph node '{key}' output: {value}")
+                self.logger.debug(f"Graph node '{key}' output: {value}")
                 if key == "agent" or key == "generate":
                     if "messages" in value and value["messages"]:
                         last_msg = value["messages"][-1]

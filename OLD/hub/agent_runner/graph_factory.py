@@ -105,28 +105,14 @@ def _get_llm(
         return None
 
 # --- Agent Factory Function (Refactored) ---
-def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redis) -> Tuple[Any, Dict[str, Any]]:
+def create_agent_app(agent_config: Dict, agent_id: str) -> Tuple[Any, Dict[str, Any]]:
     """
     Creates the LangGraph application and returns the compiled app and static state config.
     Nodes and edges are defined inside this function to access tools via closure.
     """
     log_adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id})
-    status_key = f"agent_status:{agent_id}"
-
-    # ... (update_status helper remains the same) ...
-    async def update_status(status: str, error_detail: Optional[str] = None):
-        """Helper to update Redis status."""
-        mapping = {"status": status, "pid": os.getpid()}
-        if error_detail:
-            mapping["error_detail"] = error_detail
-        try:
-            await redis_client.hset(status_key, mapping=mapping)
-            log_adapter.info(f"Status updated to: {status}")
-        except Exception as e:
-            log_adapter.error(f"Failed to update Redis status to {status}: {e}")
 
     log_adapter.info("Creating agent graph...")
-    # ... (config validation remains the same) ...
     if not isinstance(agent_config, dict) or "config" not in agent_config:
          log_adapter.error("Invalid agent configuration structure: 'config' key missing.")
          raise ValueError("Invalid agent configuration: 'config' key missing.")
@@ -146,13 +132,9 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
         raise ValueError("Invalid agent configuration: missing 'config.simple.settings' data")
 
     model_settings = settings_data.get("model", {}) # Get model settings from settings_data
-
-    # --- ИСПРАВЛЕНИЕ: Извлекаем systemPrompt и useContextMemory из model_settings ---
     system_prompt_template = model_settings.get("systemPrompt", "You are a helpful AI assistant.") # Get systemPrompt from model_settings
     model_id = model_settings.get("modelId", "gpt-4o-mini") # Get modelId from model_settings
     temperature = model_settings.get("temperature", 0.1) # Get temperature from model_settings
-    
-    # Updated settings extraction
     provider = model_settings.get("provider", "OpenAI")
     enable_context_memory = model_settings.get("enableContextMemory", True) # Renamed from useContextMemory
     context_memory_depth = model_settings.get("contextMemoryDepth", 10)
@@ -161,12 +143,8 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
     log_adapter.info(f"Provider: {provider}, Model: {model_id}, Temperature: {temperature}")
     log_adapter.info(f"Context Memory: {enable_context_memory}, Depth: {context_memory_depth}, Markdown: {use_markdown}")
 
-    # --- УДАЛЕНО: log_adapter.debug(f"Extracted system prompt template: '{system_prompt_template}'")
-
     # --- Configure Tools ---
     try:
-        # --- ИСПРАВЛЕНИЕ: Передаем весь agent_config в configure_tools ---
-        # configure_tools ожидает всю структуру для доступа, например, к userId
         configured_tools, safe_tools_list, datastore_tool_names, max_rewrites = configure_tools(agent_config, agent_id) # Передаем agent_config
         safe_tool_names = {t.name for t in safe_tools_list} # Get names for state config
         datastore_tools_combined = [t for t in configured_tools if t.name in datastore_tool_names]
@@ -177,7 +155,6 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
 
     # --- System Prompt Construction ---
     final_system_prompt = system_prompt_template
-    # Use model_settings directly
     if model_settings.get("limitToKnowledgeBase", False) and datastore_tool_names:
         final_system_prompt += "\nAnswer ONLY from the provided context from the knowledge base. If the answer is not in the context, say you don't know."
     if model_settings.get("answerInUserLanguage", True):
@@ -236,7 +213,6 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
             error_message = AIMessage(content=f"Sorry, an error occurred: Could not initialize LLM for provider {node_provider}.")
             return {"messages": [error_message]}
 
-
         # Use configured_tools from the outer scope
         if configured_tools:
              valid_tools_for_binding = [t for t in configured_tools if t is not None]
@@ -248,6 +224,7 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
              node_log_adapter.warning("Agent called but no tools are configured.")
 
         chain = prompt | model
+
         try:
             response = await chain.ainvoke({"messages": messages}, config=config)
             
@@ -257,25 +234,20 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
                 node_log_adapter.info(f"Agent node response_metadata: {response.response_metadata}")
             else:
                 node_log_adapter.warning("Agent node response has no attribute 'response_metadata'")
-            # --- НОВОЕ: Логирование usage_metadata ---
             if hasattr(response, 'usage_metadata'):
                 node_log_adapter.info(f"Agent node usage_metadata: {response.usage_metadata}")
             else:
                 node_log_adapter.warning("Agent node response has no attribute 'usage_metadata'")
-            # --- КОНЕЦ НОВОГО ---
 
-            # --- ИЗМЕНЕНИЕ: Обновленный сбор данных об использовании токенов ---
             token_event_data = None
             prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
             model_name_from_meta = node_model_id
 
             if hasattr(response, 'usage_metadata') and response.usage_metadata:
                 usage_meta = response.usage_metadata
-                # --- ИЗМЕНЕНИЕ: Доступ к словарю по ключам ---
                 prompt_tokens = usage_meta.get('prompt_tokens', 0) if usage_meta.get('prompt_tokens') is not None else usage_meta.get('input_tokens', 0)
                 completion_tokens = usage_meta.get('completion_tokens', 0) if usage_meta.get('completion_tokens') is not None else usage_meta.get('output_tokens', 0)
                 total_tokens = usage_meta.get('total_tokens', 0)
-                # --- КОНЕЦ ИЗМЕНЕНИЯ ---
                 node_log_adapter.info(f"Token usage from usage_metadata: P:{prompt_tokens} C:{completion_tokens} T:{total_tokens}")
                 if hasattr(response, 'response_metadata') and response.response_metadata and response.response_metadata.get('model_name'):
                     model_name_from_meta = response.response_metadata['model_name']
@@ -301,7 +273,6 @@ def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redi
                 )
                 state["token_usage_events"].append(token_event_data)
                 node_log_adapter.info(f"Token usage for agent_llm: {token_event_data.total_tokens} tokens recorded.")
-            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
             # --- ИСПРАВЛЕНИЕ: Попытка восстановить tool_calls из invalid_tool_calls ---
             if hasattr(response, 'invalid_tool_calls') and response.invalid_tool_calls and \
@@ -868,4 +839,3 @@ Rephrased Question:"""
     except Exception as e:
         log_adapter.error(f"Failed to compile agent graph: {e}", exc_info=True)
         raise
-

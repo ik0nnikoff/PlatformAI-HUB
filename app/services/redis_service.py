@@ -1,6 +1,7 @@
 import logging
 from typing import Optional
 import redis.asyncio as redis # Используем redis.asyncio
+from redis.exceptions import ConnectionError as RedisConnectionError # Добавлено
 
 from app.core.config import settings # Стало: импортируем settings
 
@@ -22,7 +23,7 @@ async def init_redis_pool() -> Optional[redis.ConnectionPool]:
         await client.close() # Закрываем тестовый клиент, пул остается
         logger.info("Redis connection pool initialized successfully.")
         return _redis_pool
-    except redis.exceptions.ConnectionError as e:
+    except RedisConnectionError as e: # Изменено: используется импортированный RedisConnectionError
         logger.error(f"Failed to connect to Redis: {e}", exc_info=True)
         _redis_pool = None # Сбрасываем пул в случае ошибки
         # В реальном приложении здесь может быть более строгая обработка,

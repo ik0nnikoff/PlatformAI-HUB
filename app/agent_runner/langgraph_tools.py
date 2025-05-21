@@ -1,25 +1,17 @@
-# filepath: app/agent_runner/langgraph_tools.py
-import os
 import logging
 import requests
 import json
 from typing import Annotated, Dict, List, Tuple, Set, Optional, Any
 from functools import partial
-
 from langchain_core.tools import tool, BaseTool, Tool
-from langchain_openai import OpenAIEmbeddings # Assuming OpenAI for embeddings
-from qdrant_client import QdrantClient, models as qdrant_models # Alias to avoid conflict if 'models' is used locally
+from langgraph.prebuilt import InjectedState
+from langchain_openai import OpenAIEmbeddings
+from qdrant_client import QdrantClient, models
 from langchain_qdrant import QdrantVectorStore
 from langchain.tools.retriever import create_retriever_tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 
-# Assuming AgentState will be in langgraph_models.py in the same directory
-# For InjectedState, it's part of langgraph.prebuilt, but we might not need it directly in this file
-# if configure_tools passes the state correctly.
-from langgraph.prebuilt import InjectedState
-
-# Assuming config will be handled by the runner or a core module
-from app.core.config import settings as app_settings # For QDRANT_URL etc.
+from app.core.config import settings as app_settings
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +20,7 @@ logger = logging.getLogger(__name__)
 @tool
 def auth_tool() -> str:
     """
-    Call authorization function.
+    Сall authorization function
 
     Returns:
         str: Trigger to call external authorization function.
@@ -38,7 +30,7 @@ def auth_tool() -> str:
 @tool
 def get_bonus_points(state: Annotated[dict, InjectedState]) -> str:
     """
-    Getting the user's bonus points balance.
+    Getting the user's bonus points balance
 
     Args:
         state (user_data): user data (phone number).
@@ -46,24 +38,30 @@ def get_bonus_points(state: Annotated[dict, InjectedState]) -> str:
     Returns:
         str: The number of bonus points on the user's balance that can be spent or accumulated.
     """
+    # Get logger adapter from state if passed, otherwise use default logger
+    # Try getting agent_id from config first for consistency
     agent_id = state.get('config', {}).get('configurable', {}).get('agent_id', 'unknown_agent')
     log_adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id})
 
     user_data = state.get("user_data", {})
     if user_data.get("is_authenticated"):
         user_phone = user_data.get("phone_number")
+        # Ensure phone number format if necessary
         if not user_phone:
             return "Номер телефона пользователя не найден для проверки баллов."
         try:
-            # TODO: Make this URL configurable, perhaps via agent_config or global settings
+            # Consider making URL configurable
             url = f"http://airsoft-rus.ru/obmen_rus/bals.php?type=info&tel={user_phone}"
-            response = requests.get(url, timeout=10)
+            response = requests.get(url, timeout=10) # Add timeout
             response.raise_for_status()
+            # Basic check if response looks like a number
             if response.text.strip().isdigit():
                  return f"Количество бонусных баллов на балансе: {response.text}"
             else:
+                 # Handle cases where the API might return error messages as text
                  log_adapter.warning(f"Bonus points API returned non-numeric text: {response.text}")
                  return f"Не удалось получить баланс бонусных баллов. Ответ API: {response.text}"
+
         except requests.exceptions.Timeout:
              log_adapter.error("Timeout error fetching bonus points.")
              return "Ошибка: Не удалось связаться с сервисом бонусных баллов (таймаут)."
@@ -87,7 +85,7 @@ def get_user_info_tool(state: Annotated[dict, InjectedState]) -> str:
         dict: information about the user.
     """
     agent_id = state.get('config', {}).get('configurable', {}).get('agent_id', 'unknown_agent')
-    log_adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id})
+    log_adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id}) # Use agent_id from config
 
     channel = state.get("channel", "unknown")
     user_data = state.get("user_data", {})
@@ -108,218 +106,258 @@ def get_user_info_tool(state: Annotated[dict, InjectedState]) -> str:
 
 # --- Generic API Request Function ---
 def make_api_request(
-    input_args: Optional[Dict[str, Any]] = None, # Passed from LLM if tool has input schema
-    api_config: Dict[str, Any] = None, # Bound from tool configuration
-    agent_state: Optional[Dict[str, Any]] = None, # Full agent state injected
+    # Arguments passed from the LLM call (tool input) - currently not used with this config structure
+    input_args: Optional[Dict[str, Any]] = None,
+    # Arguments bound from the tool configuration using functools.partial
+    api_config: Dict[str, Any] = None,
+    agent_state: Optional[Dict[str, Any]] = None, # Access to agent state if needed
     log_adapter: Optional[logging.LoggerAdapter] = None
 ) -> str:
     """
-    Makes an HTTP request based on the provided API configuration.
-    Placeholders in URL and params (like {phone_number}) are replaced from agent_state.user_data.
+    Makes an HTTP request based on the provided API configuration and input arguments.
+    Handles simple key-value parameters and placeholder replacement from agent_state.
     """
     if not api_config:
         return "Error: API tool called without configuration."
-    
+    # Use default logger if adapter not provided (should be passed via partial)
     effective_logger = log_adapter if log_adapter else logger
 
-    url_template = api_config.get("apiUrl")
-    method = api_config.get("method", "GET").upper()
+    url = api_config.get("apiUrl") # Use apiUrl from config
+    method = api_config.get("method", "GET").upper() # Assume GET if not specified
     headers = api_config.get("headers", {})
-    params_config = api_config.get("params", [])
+    params_config = api_config.get("params", []) # Config for expected params (list of dicts)
+    # body_config = api_config.get("body", {}) # Not used with current config structure
 
-    if not url_template:
+    if not url:
         return f"Error: API configuration for tool '{api_config.get('name', 'unnamed')}' is missing 'apiUrl'."
 
-    user_data = agent_state.get("user_data", {}) if agent_state else {}
-
-    # Replace placeholders in URL
-    url = url_template
-    for key, value in user_data.items():
-        url = url.replace(f"{{{key}}}", str(value))
-    
+    # Ensure URL starts with http:// or https://
     if not url.startswith("http://") and not url.startswith("https://"):
-        url = "http://" + url
+        url = "http://" + url # Assume http if scheme is missing
 
     effective_logger.info(f"Executing API tool '{api_config.get('name', 'unnamed')}'")
-    effective_logger.debug(f"Method: {method}, URL: {url}")
-    effective_logger.debug(f"API Config (partial): { {k:v for k,v in api_config.items() if k != 'params'} }")
-    # effective_logger.debug(f"Agent State (user_data): {user_data}")
+    effective_logger.debug(f"API Config: {api_config}")
+    effective_logger.debug(f"Agent State (partial): { {k: v for k, v in agent_state.items() if k != 'messages'} }") # Log state without messages
 
     query_params = {}
+    request_body = None
+    request_files = None # For file uploads, if needed later
+
+    # --- Prepare Headers ---
+    # Example: Add authentication from agent state if needed
+    # if agent_state and agent_state.get("user_data", {}).get("api_key"):
+    #     headers["Authorization"] = f"Bearer {agent_state['user_data']['api_key']}"
+
+    # --- Prepare Query Parameters ---
+    user_data = agent_state.get("user_data", {}) if agent_state else {}
+
     for param_conf in params_config:
         param_key = param_conf.get("key")
         param_value_template = param_conf.get("value")
+
         if param_key and param_value_template is not None:
-            param_value = param_value_template
-            for uk, uv in user_data.items(): # Replace placeholders from user_data
-                param_value = param_value.replace(f"{{{uk}}}", str(uv))
-            
-            # If LLM provides input_args, they can override/supplement user_data placeholders
-            if input_args:
-                 for ik, iv in input_args.items():
-                    param_value = param_value.replace(f"{{{ik}}}", str(iv))
+            # Replace placeholders like {phone_number}
+            try:
+                # Simple replacement for known placeholders in user_data
+                param_value = param_value_template
+                if "{phone_number}" in param_value and "phone_number" in user_data:
+                    param_value = param_value.replace("{phone_number}", str(user_data["phone_number"]))
+                if "{user_id}" in param_value and "user_id" in user_data:
+                    param_value = param_value.replace("{user_id}", str(user_data["user_id"]))
+                # Add more placeholder replacements as needed
 
-            if "{" in param_value and "}" in param_value: # Check for unresolved placeholders
-                 effective_logger.warning(f"Unresolved placeholder in API param '{param_key}': {param_value}. Skipping param.")
-                 continue
-            query_params[param_key] = param_value
+                # Check if any placeholders remain
+                if "{" in param_value and "}" in param_value:
+                     effective_logger.warning(f"Unresolved placeholder in API param '{param_key}': {param_value}")
+                     # Decide whether to skip the parameter or send it as is
+                     # return f"Error: Could not resolve placeholder in parameter '{param_key}' for API tool '{api_config.get('name', 'unnamed')}'."
+                     continue # Skip this parameter if placeholder is unresolved
+
+                query_params[param_key] = param_value
+            except Exception as e:
+                effective_logger.error(f"Error processing parameter '{param_key}' with value '{param_value_template}': {e}")
+                return f"Error processing parameter '{param_key}' for API tool '{api_config.get('name', 'unnamed')}'."
         else:
-            effective_logger.warning(f"Skipping invalid parameter config in API tool: {param_conf}")
+            effective_logger.warning(f"Skipping invalid parameter config: {param_conf}")
 
-    effective_logger.debug(f"Headers: {headers}, Query Params: {query_params}")
 
+    # --- Make Request ---
     try:
+        effective_logger.info(f"Making {method} request to {url}")
+        effective_logger.debug(f"Headers: {headers}")
+        effective_logger.debug(f"Query Params: {query_params}")
+        # effective_logger.debug(f"Request Body: {request_body}") # Not used
+
         response = requests.request(
             method=method,
             url=url,
             headers=headers,
             params=query_params,
-            timeout=api_config.get("timeout", 15) # Allow timeout to be configured
+            # json=request_body if headers.get("Content-Type") == "application/json" else None, # Not used
+            # data=request_body if headers.get("Content-Type") != "application/json" else None, # Not used
+            # files=request_files, # Add files if needed
+            timeout=15 # Add a reasonable timeout
         )
-        response.raise_for_status()
+        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+
+        # Try to return JSON response if possible, otherwise text
         try:
             json_response = response.json()
+            # Convert JSON to string for Langchain tool output
             return json.dumps(json_response, ensure_ascii=False, indent=2)
         except json.JSONDecodeError:
-            return response.text
+            return response.text # Return raw text if not JSON
+
     except requests.exceptions.Timeout:
-        effective_logger.error(f"Timeout for {method} {url}")
-        return f"Error: API request timed out for '{api_config.get('name')}'."
+        effective_logger.error(f"Timeout error making {method} request to {url}")
+        return f"Error: API request timed out for tool '{api_config.get('name', 'unnamed')}'."
     except requests.exceptions.HTTPError as e:
-         effective_logger.error(f"HTTP error for {method} {url}: {e.response.status_code} {e.response.text}")
-         return f"Error: API request for '{api_config.get('name')}' failed with status {e.response.status_code}. Details: {e.response.text[:200]}"
+         effective_logger.error(f"HTTP error making {method} request to {url}: {e.response.status_code} {e.response.text}")
+         return f"Error: API request failed for tool '{api_config.get('name', 'unnamed')}' with status {e.response.status_code}. Response: {e.response.text}"
     except requests.exceptions.RequestException as e:
-        effective_logger.error(f"Request exception for {method} {url}: {e}")
-        return f"Error: Failed API request for '{api_config.get('name')}': {e}."
+        effective_logger.error(f"Request exception making {method} request to {url}: {e}")
+        return f"Error: Failed to make API request for tool '{api_config.get('name', 'unnamed')}': {e}."
     except Exception as e:
-        effective_logger.error(f"Unexpected error in API tool '{api_config.get('name')}': {e}", exc_info=True)
-        return f"Error: Unexpected error in API tool '{api_config.get('name')}': {e}."
+        effective_logger.error(f"Unexpected error in API tool '{api_config.get('name', 'unnamed')}': {e}", exc_info=True)
+        return f"Error: An unexpected error occurred in API tool '{api_config.get('name', 'unnamed')}': {e}."
+
 
 # --- Tool Configuration Logic ---
-def configure_tools(agent_config_payload: Dict, agent_id: str) -> Tuple[List[BaseTool], List[BaseTool], Set[str], int]:
+
+def configure_tools(agent_config: Dict, agent_id: str) -> Tuple[List[BaseTool], List[BaseTool], Set[str], int]:
     """
-    Configures tools based on the agent configuration payload.
-    Assumes agent_config_payload is the direct configuration dict for the agent.
+    Configures tools based on the agent configuration (simple structure).
+
+    Args:
+        agent_config: The agent's configuration dictionary (expects simple structure).
+        agent_id: The ID of the agent for logging context.
+
+    Returns:
+        A tuple containing:
+        - List of all configured tools (instances of BaseTool).
+        - List of safe tools (non-retriever).
+        - Set of datastore tool names (strings).
+        - Maximum number of rewrite attempts configured (int).
     """
     log_adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id})
 
-    # The payload IS the agent_config (e.g., from DB or API)
-    # Example structure from previous context: agent_config_payload["config"]["simple"]["settings"]["tools"]
-    try:
-        tool_settings_list = agent_config_payload.get("config", {}).get("simple", {}).get("settings", {}).get("tools", [])
-        # Max rewrites could be at a higher level or per KB tool. For now, let's look for it in KB settings.
-        # Default max_rewrites, can be overridden by KB tool config.
-        max_rewrites_default = agent_config_payload.get("config", {}).get("simple", {}).get("settings", {}).get("rewriteAttempts", 3)
-    except AttributeError as e:
-        log_adapter.error(f"Error accessing tool configurations in agent_config_payload: {e}. Payload: {json.dumps(agent_config_payload)[:500]}")
-        return [], [], set(), 3 # Default if structure is not as expected
+    # --- Access configuration using the provided structure ---
+    config_simple = agent_config.get("config", {}).get("simple", {})
+    if not config_simple:
+        log_adapter.warning("Agent configuration missing 'config.simple' structure. No tools will be configured.")
+        return [], [], set(), 3 # Return defaults
 
-    if not tool_settings_list:
-        log_adapter.info("No tools found in agent configuration.")
+    settings = config_simple.get("settings", {})
+    if not settings:
+        log_adapter.warning("Agent configuration missing 'config.simple.settings'. No tools will be configured.")
+        return [], [], set(), 3 # Return defaults
+
+    tool_settings = settings.get("tools", []) # List of tool configs
+    if not tool_settings:
+        log_adapter.info("No tools found in 'config.simple.settings.tools'.")
+        # Still return predefined tools below
 
     configured_tools: List[BaseTool] = []
     safe_tools_list: List[BaseTool] = []
     datastore_tool_list: List[BaseTool] = []
     datastore_tool_names: Set[str] = set()
-    current_max_rewrites = max_rewrites_default
+    max_rewrites = 3 # Default
 
     # --- Knowledge Base / Retriever Tools ---
-    kb_configs = [t for t in tool_settings_list if t.get("type") == "knowledgeBase"]
+    kb_configs = [t for t in tool_settings if t.get("type") == "knowledgeBase"]
     if kb_configs:
         log_adapter.info(f"Configuring {len(kb_configs)} Knowledge Base tool(s)...")
         qdrant_url = app_settings.QDRANT_URL
-        qdrant_api_key = app_settings.QDRANT_API_KEY.get_secret_value() if app_settings.QDRANT_API_KEY else None
-        # Collection name might be dynamic or from settings; for now, assume a primary one
-        qdrant_collection = app_settings.QDRANT_COLLECTION 
+        qdrant_collection = app_settings.QDRANT_COLLECTION
 
         if not qdrant_url or not qdrant_collection:
-             log_adapter.warning("QDRANT_URL or QDRANT_COLLECTION not set in app_settings. Knowledge base tools disabled.")
+             log_adapter.warning("QDRANT_URL or QDRANT_COLLECTION not set. Knowledge base tools disabled.")
         else:
             try:
-                # TODO: Embedding model should be configurable
-                embeddings = OpenAIEmbeddings(api_key=app_settings.OPENAI_API_KEY.get_secret_value() if app_settings.OPENAI_API_KEY else None)
-                qdrant_client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+                embeddings = OpenAIEmbeddings()
+                qdrant_client = QdrantClient(qdrant_url)
                 vectorstore = QdrantVectorStore(
                     client=qdrant_client,
                     collection_name=qdrant_collection,
                     embedding=embeddings,
                 )
-                log_adapter.info(f"Connected to Qdrant: {qdrant_url}, collection: {qdrant_collection}")
+                log_adapter.info(f"Connected to Qdrant at {qdrant_url}, collection: {qdrant_collection}")
 
-                client_id = agent_config_payload.get("userId") # userId from the root of agent config
+                # Get client_id from the top level of agent_config
+                client_id = agent_config.get("userId")
                 if not client_id:
-                    log_adapter.warning("Missing 'userId' in agent_config_payload, cannot filter KB by client.")
+                    log_adapter.warning("Missing 'userId' in agent_config, cannot filter KB by client.")
+                    # Decide if KB should be disabled or proceed without client filter
 
                 for kb_config in kb_configs:
                     kb_settings = kb_config.get("settings", {})
-                    kb_ids = kb_settings.get("knowledgeBaseIds", [])
-                    search_limit = kb_settings.get("retrievalLimit", 4)
-                    # Update max_rewrites if specified in this KB tool's settings
-                    current_max_rewrites = kb_settings.get("rewriteAttempts", current_max_rewrites)
-                    
-                    tool_id = kb_config.get("id", f"kb_retriever_{'_'.join(map(str, kb_ids)) if kb_ids else 'all'}")
-                    tool_name = kb_config.get("name", "Knowledge Base Search")
-                    tool_description = kb_settings.get("description", "Searches the knowledge base for relevant documents.")
+                    kb_ids = kb_settings.get("knowledgeBaseIds", []) # List of datasource IDs
+                    search_limit = kb_settings.get("retrievalLimit", 4) # Use retrievalLimit
+                    # Use rewriteAttempts from the *last* KB tool config found? Or first? Let's use last.
+                    max_rewrites = kb_settings.get("rewriteAttempts", max_rewrites)
+                    tool_id = kb_config.get("id", f"kb_retriever_{'_'.join([str(kb_id) for kb_id in kb_ids])}") # Generate ID if missing
+                    tool_name = kb_config.get("name", "Knowledge Base Search") # Name for LLM
 
                     if not kb_ids:
-                        log_adapter.warning(f"KB tool '{tool_id}' has no knowledgeBaseIds. It will search all accessible documents for client_id if specified, or all documents otherwise.")
+                        log_adapter.warning(f"KnowledgeBase tool '{tool_id}' configured but no knowledgeBaseIds provided. Skipping.")
+                        continue
 
                     must_conditions = []
+                    # Add client_id filter if available
                     if client_id:
                          must_conditions.append(
-                             qdrant_models.FieldCondition(key="metadata.client_id", match=qdrant_models.MatchValue(value=client_id))
+                             models.FieldCondition(key="metadata.client_id", match=models.MatchValue(value=client_id))
                          )
-                    if kb_ids: # Only add datasource_id filter if kb_ids are provided
-                        must_conditions.append(
-                            qdrant_models.FieldCondition(
-                                key="metadata.datasource_id",
-                                match=qdrant_models.MatchAny(any=[str(kb_id) for kb_id in kb_ids])
-                            )
+                    # Add datasource_id filter using MatchAny
+                    must_conditions.append(
+                        models.FieldCondition(
+                            key="metadata.datasource_id",
+                            match=models.MatchAny(any=[str(kb_id) for kb_id in kb_ids]) # Use MatchAny for list of IDs
                         )
-                    
-                    qdrant_filter = qdrant_models.Filter(must=must_conditions) if must_conditions else None
+                    )
+
+                    qdrant_filter = models.Filter(must=must_conditions)
                     retriever = vectorstore.as_retriever(
                         search_kwargs={"k": search_limit, "filter": qdrant_filter}
                     )
                     retriever_tool = create_retriever_tool(
                         retriever,
-                        name=tool_id, # tool_id используется как имя инструмента
-                        description=tool_description, # tool_description используется как описание инструмента
-                        document_separator="\n---RETRIEVER_DOC---\n"
+                        tool_id, # Use ID from config
+                        tool_name, # Use name from config
+                        document_separator="\n---RETRIEVER_DOC---\n",
                     )
                     datastore_tool_list.append(retriever_tool)
-                    datastore_tool_names.add(tool_id)
-                    log_adapter.info(f"Configured KB tool '{tool_name}' (ID: {tool_id}) for datasources: {kb_ids if kb_ids else 'ALL'}, client_id: {client_id}")
+                    datastore_tool_names.add(tool_id) # Use ID as the internal name
+                    log_adapter.info(f"Configured Knowledge Base tool '{tool_name}' (ID: {tool_id}) for datasources: {kb_ids}")
 
             except Exception as e:
                 log_adapter.error(f"Failed to initialize Qdrant/Retriever tool: {e}", exc_info=True)
 
-    log_adapter.info(f"Effective max_rewrites for graph: {current_max_rewrites}")
+    log_adapter.info(f"Using max_rewrites: {max_rewrites}")
 
     # --- Web Search Tool ---
-    web_search_configs = [t for t in tool_settings_list if t.get("type") == "webSearch"]
+    web_search_configs = [t for t in tool_settings if t.get("type") == "webSearch"]
     if web_search_configs:
-        ws_config = web_search_configs[0] # Assuming one web search tool for now
+        ws_config = web_search_configs[0] # Assume one web search tool
         ws_settings = ws_config.get("settings", {})
-        ws_id = ws_config.get("id", "web_search")
-        ws_name = ws_config.get("name", "Web Search")
-        ws_description = ws_settings.get("description", "Performs a web search for recent information.")
+        ws_id = ws_config.get("id", "web_search") # Use ID from config
+        ws_name = ws_config.get("name", "Web Search") # Name for LLM
+        ws_description = ws_settings.get("description", "Performs a web search for recent information.") # Use description from config if available
         search_limit = ws_settings.get("searchLimit", 3)
         include_domains = ws_settings.get("include_domains", [])
         exclude_domains = ws_settings.get("excludeDomains", [])
 
-        tavily_api_key = app_settings.TAVILY_API_KEY.get_secret_value() if app_settings.TAVILY_API_KEY else None
+        tavily_api_key = app_settings.TAVILY_API_KEY
         if not tavily_api_key:
             log_adapter.warning("TAVILY_API_KEY not set. Web search tool disabled.")
         else:
             try:
                 web_search_tool = TavilySearchResults(
                     max_results=int(search_limit),
-                    name=ws_id, 
-                    description=ws_description,
-                    include_domains=include_domains,
+                    name=ws_id, # Use ID from config
+                    description=ws_description, # Use description from config
+                    include_domains=include_domains, # Use domainLimit from config
                     exclude_domains=exclude_domains,
-                    api_key=tavily_api_key
                 )
                 safe_tools_list.append(web_search_tool)
                 log_adapter.info(f"Configured Web Search tool '{ws_name}' (ID: {ws_id})")
@@ -327,60 +365,78 @@ def configure_tools(agent_config_payload: Dict, agent_id: str) -> Tuple[List[Bas
                 log_adapter.error(f"Failed to create Web Search tool: {e}", exc_info=True)
 
     # --- Dynamic API Request Tools ---
-    api_request_configs = [t for t in tool_settings_list if t.get("type") == "apiRequest"]
+    api_request_configs = [t for t in tool_settings if t.get("type") == "apiRequest"]
     for api_config_entry in api_request_configs:
         tool_id = api_config_entry.get("id")
-        api_settings = api_config_entry.get("settings", {})
-        tool_name_for_llm = api_settings.get("name") # This is the user-facing name (e.g., "Получить ББ")
-        tool_description_for_llm = api_settings.get("description", f"Calls the {tool_name_for_llm} API.")
+        # tool_config_name = api_config_entry.get("name") # The name of the config entry itself
+        api_settings = api_config_entry.get("settings", {}) # URL, method, params etc. are here
+        tool_name = api_settings.get("name") # This is the user-facing name (e.g., "Получить ББ")
+        tool_description = api_settings.get("description", f"Calls the {tool_name} API.") # Use settings.description
         api_url = api_settings.get("apiUrl")
-        
-        if not tool_id or not tool_name_for_llm or not api_url:
-            log_adapter.warning(f"Skipping apiRequest tool due to missing id, settings.name, or settings.apiUrl: {json.dumps(api_config_entry)[:200]}")
+        api_params = api_settings.get("params", [])
+
+        if not tool_id or not tool_name or not api_url:
+            log_adapter.warning(f"Skipping apiRequest tool due to missing id, settings.name, or settings.apiUrl: {api_config_entry}")
             continue
 
-        # api_settings already contains apiUrl, params, method, headers, etc.
-        # We pass the whole api_settings dict to make_api_request via partial.
+        # --- Create the partial function ---
+        # Pass the necessary parts of api_settings to make_api_request
+        bound_api_config = {
+            "name": tool_name,
+            "description": tool_description,
+            "apiUrl": api_url,
+            "params": api_params,
+            # Add method, headers if they become configurable
+        }
+        # Bind the state using InjectedState for placeholder replacement
         configured_request_func = partial(
             make_api_request,
-            api_config=api_settings, # Pass the full settings dict for this tool
+            api_config=bound_api_config,
             log_adapter=log_adapter,
-            agent_state=InjectedState() # Inject the full agent state
+            agent_state=InjectedState() # Inject the full state
         )
-        
-        # Input schema for LLM can be defined in api_settings if needed, e.g., api_settings.get("args_schema")
-        # For now, assuming no specific input schema from LLM beyond the general query.
-        args_schema_pydantic = None # Placeholder if you want to generate Pydantic models later
 
+        # --- Define input schema (optional but recommended) ---
+        # Since the current config doesn't define input args for the LLM, we don't need args_schema
+        args_schema = None
+
+        # --- Create the Langchain Tool ---
         try:
+            # Use the config 'id' as the internal tool name for LangGraph routing
             api_tool = Tool.from_function(
                 func=configured_request_func,
-                name=tool_id, # Use the unique ID from config for LangGraph routing
-                description=tool_description_for_llm, # Use settings.description for LLM
-                args_schema=args_schema_pydantic, # Pass Pydantic model if defined
+                name=tool_id, # Use ID from config entry
+                description=tool_description, # Use settings.description for LLM
+                args_schema=args_schema,
             )
             safe_tools_list.append(api_tool)
-            log_adapter.info(f"Configured dynamic API tool '{tool_name_for_llm}' (ID: {tool_id})")
+            log_adapter.info(f"Configured dynamic API tool '{tool_name}' (ID: {tool_id})")
         except Exception as e:
-            log_adapter.error(f"Failed to create dynamic API tool '{tool_name_for_llm}' (ID: {tool_id}): {e}", exc_info=True)
+            log_adapter.error(f"Failed to create dynamic API tool '{tool_name}' (ID: {tool_id}): {e}", exc_info=True)
 
-    # --- Add Predefined Tools (if not overridden by dynamic config with same ID) ---
-    predefined_tools_map = {
+    # --- Add Predefined Tools (if not dynamically configured) ---
+    predefined_safe_tools_map = {
         "auth_tool": auth_tool,
         "get_user_info_tool": get_user_info_tool,
-        "get_bonus_points": get_bonus_points 
+        "get_bonus_points": get_bonus_points # Keep predefined as fallback/alternative
     }
-    configured_dynamic_ids = {t.name for t in safe_tools_list} # Names of dynamically configured tools are their IDs
+    # Get IDs of dynamically configured tools
+    configured_dynamic_ids = {t.name for t in safe_tools_list if isinstance(t, Tool) or isinstance(t, TavilySearchResults)}
 
-    for predefined_id, tool_instance in predefined_tools_map.items():
-        if predefined_id not in configured_dynamic_ids:
-            safe_tools_list.append(tool_instance)
-            log_adapter.info(f"Added predefined tool: {predefined_id} (Name: {tool_instance.name})")
+    for tool_key, tool_instance in predefined_safe_tools_map.items():
+        # Check if a dynamic tool with the *same ID* as the predefined tool's name exists
+        if tool_instance.name not in configured_dynamic_ids:
+             # Also check if it wasn't added via the API mapping logic (which uses the same instance)
+             is_already_added = any(t is tool_instance for t in safe_tools_list)
+             if not is_already_added:
+                 safe_tools_list.append(tool_instance)
+                 log_adapter.info(f"Added predefined tool: {tool_instance.name}")
         else:
-            log_adapter.info(f"Predefined tool ID '{predefined_id}' was already configured dynamically. Skipping duplicate.")
+             log_adapter.info(f"Predefined tool '{tool_instance.name}' was already configured dynamically with the same ID. Skipping duplicate.")
 
+    # Combine lists
     configured_tools.extend(safe_tools_list)
-    configured_tools.extend(datastore_tool_list)
+    configured_tools.extend(datastore_tool_list) # Add datastore tools last
 
-    log_adapter.info(f"Total tools: {len(configured_tools)}. Safe: {len(safe_tools_list)}, Datastore: {len(datastore_tool_list)}")
-    return configured_tools, safe_tools_list, datastore_tool_names, current_max_rewrites
+    log_adapter.info(f"Total tools configured: {len(configured_tools)}. Safe: {len(safe_tools_list)}, Datastore: {len(datastore_tool_list)}")
+    return configured_tools, safe_tools_list, datastore_tool_names, max_rewrites

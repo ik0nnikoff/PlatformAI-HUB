@@ -1,5 +1,8 @@
+import os
 import asyncio
 import logging
+from dotenv import load_dotenv
+import redis.asyncio as redis
 from pydantic import BaseModel, Field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Literal, Optional, Tuple
@@ -11,13 +14,25 @@ from langgraph.graph import END, StateGraph, START
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 
-from app.agent_runner.langgraph_models import AgentState, TokenUsageData
-from app.agent_runner.langgraph_tools import configure_tools # BaseTool is not directly used here, but by configure_tools
-from app.core.config import settings
+# Import from sibling modules
+from .models import AgentState, TokenUsageData # Добавляем TokenUsageData
+from .tools import configure_tools, BaseTool # Import BaseTool
 
-logger = logging.getLogger(__name__) # Use standard logger
+# --- Load Environment Variables ---
+# Load secrets like API keys, Qdrant URL, Redis URL etc.
+dotenv_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
+if os.path.exists(dotenv_path):
+    load_dotenv(dotenv_path=dotenv_path)
+else:
+    print(f"Warning: .env file not found at {dotenv_path}")
 
-# Global flag for graceful shutdown (if needed by runner_main that uses this factory)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(agent_id)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# Global flag for graceful shutdown
 running = True
 
 
@@ -36,6 +51,7 @@ def _get_llm(
     model_kwargs = {}
     extra_body_kwargs = {}
     
+    # Сначала проверяем, является ли модель Gemini через OpenRouter
     is_gemini = model_name.startswith("google/")
     if is_gemini and provider.lower() == "openrouter":
         log_adapter.info(f"Detected Google Gemini model: {model_name}. Disabling streaming (not supported by Gemini through OpenRouter).")
@@ -46,9 +62,9 @@ def _get_llm(
             model_kwargs["stream_options"] = {"include_usage": True}
 
     if provider.lower() == "openai":
-        api_key = settings.OPENAI_API_KEY
+        api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
-            log_adapter.error("OPENAI_API_KEY not found in settings for OpenAI provider.")
+            log_adapter.error("OPENAI_API_KEY not found in environment variables for OpenAI provider.")
             return None
         return ChatOpenAI(
             model=model_name,
@@ -58,11 +74,12 @@ def _get_llm(
             model_kwargs=model_kwargs
         )
     elif provider.lower() == "openrouter":
-        api_key = settings.OPENROUTER_API_KEY
+        api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key:
-            log_adapter.error("OPENROUTER_API_KEY not found in settings for OpenRouter provider.")
+            log_adapter.error("OPENROUTER_API_KEY not found in environment variables for OpenRouter provider.")
             return None
             
+        # Для Gemini через OpenRouter требуются особые настройки
         if is_gemini:
             log_adapter.info("Using safe configuration for Gemini through OpenRouter")
             default_safety_settings = [
@@ -71,29 +88,42 @@ def _get_llm(
                 {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
                 {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
             ]
-            extra_body_kwargs["safety_settings"] = default_safety_settings
+            extra_body_kwargs["safety_settings"] = default_safety_settings # Используем snake_case
             log_adapter.info(f"Added Gemini safety settings (using snake_case key 'safety_settings'): {extra_body_kwargs.get('safety_settings')}")
         
         return ChatOpenAI(
-            model=model_name,
+            model=model_name, # This will be the OpenRouter model string e.g. "anthropic/claude-3.5-sonnet"
             temperature=temperature,
-            streaming=streaming,
-            openai_api_key=api_key,
-            base_url="https://openrouter.ai/api/v1",
-            model_kwargs=model_kwargs,
+            streaming=streaming, # Здесь streaming уже отключен для Gemini
+            openai_api_key=api_key, # OpenRouter API Key
+            base_url="https://openrouter.ai/api/v1", # OpenRouter API Base
+            model_kwargs=model_kwargs, # Передаем model_kwargs
             extra_body=extra_body_kwargs if extra_body_kwargs else None
         )
     else:
         log_adapter.error(f"Unsupported LLM provider: {provider}")
         return None
 
-# --- Agent Factory Function ---
-def create_agent_app(agent_config: Dict, agent_id: str) -> Tuple[Any, Dict[str, Any]]:
+# --- Agent Factory Function (Refactored) ---
+def create_agent_app(agent_config: Dict, agent_id: str, redis_client: redis.Redis) -> Tuple[Any, Dict[str, Any]]:
     """
     Creates the LangGraph application and returns the compiled app and static state config.
     Nodes and edges are defined inside this function to access tools via closure.
     """
     log_adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id})
+    status_key = f"agent_status:{agent_id}"
+
+    # ... (update_status helper remains the same) ...
+    async def update_status(status: str, error_detail: Optional[str] = None):
+        """Helper to update Redis status."""
+        mapping = {"status": status, "pid": os.getpid()}
+        if error_detail:
+            mapping["error_detail"] = error_detail
+        try:
+            await redis_client.hset(status_key, mapping=mapping)
+            log_adapter.info(f"Status updated to: {status}")
+        except Exception as e:
+            log_adapter.error(f"Failed to update Redis status to {status}: {e}")
 
     log_adapter.info("Creating agent graph...")
     if not isinstance(agent_config, dict) or "config" not in agent_config:
@@ -126,8 +156,12 @@ def create_agent_app(agent_config: Dict, agent_id: str) -> Tuple[Any, Dict[str, 
     log_adapter.info(f"Provider: {provider}, Model: {model_id}, Temperature: {temperature}")
     log_adapter.info(f"Context Memory: {enable_context_memory}, Depth: {context_memory_depth}, Markdown: {use_markdown}")
 
+    # --- УДАЛЕНО: log_adapter.debug(f"Extracted system prompt template: '{system_prompt_template}'")
+
     # --- Configure Tools ---
     try:
+        # --- ИСПРАВЛЕНИЕ: Передаем весь agent_config в configure_tools ---
+        # configure_tools ожидает всю структуру для доступа, например, к userId
         configured_tools, safe_tools_list, datastore_tool_names, max_rewrites = configure_tools(agent_config, agent_id) # Передаем agent_config
         safe_tool_names = {t.name for t in safe_tools_list} # Get names for state config
         datastore_tools_combined = [t for t in configured_tools if t.name in datastore_tool_names]
@@ -138,6 +172,7 @@ def create_agent_app(agent_config: Dict, agent_id: str) -> Tuple[Any, Dict[str, 
 
     # --- System Prompt Construction ---
     final_system_prompt = system_prompt_template
+    # Use model_settings directly
     if model_settings.get("limitToKnowledgeBase", False) and datastore_tool_names:
         final_system_prompt += "\nAnswer ONLY from the provided context from the knowledge base. If the answer is not in the context, say you don't know."
     if model_settings.get("answerInUserLanguage", True):
@@ -164,7 +199,8 @@ def create_agent_app(agent_config: Dict, agent_id: str) -> Tuple[Any, Dict[str, 
     # --- Nodes Definition (Now INSIDE create_agent_app) ---
     async def agent_node(state: AgentState, config: dict):
         """Agent node accessing tools via closure."""
-        node_log_adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id})
+        node_agent_id = config.get('configurable', {}).get('agent_id', 'unknown_agent') # Use ID from config
+        node_log_adapter = logging.LoggerAdapter(logger, {'agent_id': node_agent_id})
         node_log_adapter.info("---CALL AGENT---")
 
         # Read config from state (model_id, temp, system_prompt are now in state)
@@ -172,13 +208,13 @@ def create_agent_app(agent_config: Dict, agent_id: str) -> Tuple[Any, Dict[str, 
         node_system_prompt = state["system_prompt"]
         node_temperature = state["temperature"]
         node_model_id = state["model_id"]
-        node_provider = state["provider"]
+        node_provider = state["provider"] # Read provider from state
 
-        moscow_tz = timezone(timedelta(hours=3))
+        moscow_tz = timezone(timedelta(hours=3)) # Requires 'timedelta' to be imported from 'datetime'
 
         if "{current_time}" not in node_system_prompt:
-             node_system_prompt += "\nТекущее время (Москва): {current_time}"
-        
+            node_system_prompt += "\nТекущее время (Москва): {current_time}"
+
         prompt = ChatPromptTemplate.from_messages([
             ("system", node_system_prompt),
             MessagesPlaceholder(variable_name="messages")
@@ -195,6 +231,7 @@ def create_agent_app(agent_config: Dict, agent_id: str) -> Tuple[Any, Dict[str, 
             error_message = AIMessage(content=f"Sorry, an error occurred: Could not initialize LLM for provider {node_provider}.")
             return {"messages": [error_message]}
 
+
         # Use configured_tools from the outer scope
         if configured_tools:
              valid_tools_for_binding = [t for t in configured_tools if t is not None]
@@ -206,7 +243,6 @@ def create_agent_app(agent_config: Dict, agent_id: str) -> Tuple[Any, Dict[str, 
              node_log_adapter.warning("Agent called but no tools are configured.")
 
         chain = prompt | model
-
         try:
             response = await chain.ainvoke({"messages": messages}, config=config)
             
@@ -216,20 +252,25 @@ def create_agent_app(agent_config: Dict, agent_id: str) -> Tuple[Any, Dict[str, 
                 node_log_adapter.info(f"Agent node response_metadata: {response.response_metadata}")
             else:
                 node_log_adapter.warning("Agent node response has no attribute 'response_metadata'")
+            # --- НОВОЕ: Логирование usage_metadata ---
             if hasattr(response, 'usage_metadata'):
                 node_log_adapter.info(f"Agent node usage_metadata: {response.usage_metadata}")
             else:
                 node_log_adapter.warning("Agent node response has no attribute 'usage_metadata'")
+            # --- КОНЕЦ НОВОГО ---
 
+            # --- ИЗМЕНЕНИЕ: Обновленный сбор данных об использовании токенов ---
             token_event_data = None
             prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
             model_name_from_meta = node_model_id
 
             if hasattr(response, 'usage_metadata') and response.usage_metadata:
                 usage_meta = response.usage_metadata
+                # --- ИЗМЕНЕНИЕ: Доступ к словарю по ключам ---
                 prompt_tokens = usage_meta.get('prompt_tokens', 0) if usage_meta.get('prompt_tokens') is not None else usage_meta.get('input_tokens', 0)
                 completion_tokens = usage_meta.get('completion_tokens', 0) if usage_meta.get('completion_tokens') is not None else usage_meta.get('output_tokens', 0)
                 total_tokens = usage_meta.get('total_tokens', 0)
+                # --- КОНЕЦ ИЗМЕНЕНИЯ ---
                 node_log_adapter.info(f"Token usage from usage_metadata: P:{prompt_tokens} C:{completion_tokens} T:{total_tokens}")
                 if hasattr(response, 'response_metadata') and response.response_metadata and response.response_metadata.get('model_name'):
                     model_name_from_meta = response.response_metadata['model_name']
@@ -255,6 +296,7 @@ def create_agent_app(agent_config: Dict, agent_id: str) -> Tuple[Any, Dict[str, 
                 )
                 state["token_usage_events"].append(token_event_data)
                 node_log_adapter.info(f"Token usage for agent_llm: {token_event_data.total_tokens} tokens recorded.")
+            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
             # --- ИСПРАВЛЕНИЕ: Попытка восстановить tool_calls из invalid_tool_calls ---
             if hasattr(response, 'invalid_tool_calls') and response.invalid_tool_calls and \
@@ -325,21 +367,23 @@ def create_agent_app(agent_config: Dict, agent_id: str) -> Tuple[Any, Dict[str, 
             error_message = AIMessage(content=f"Sorry, an error occurred: {e}")
             return {"messages": [error_message]}
 
-    async def grade_documents_node(state: AgentState):
+    async def grade_documents_node(state: AgentState, config: dict):
         """Grade documents node, reading config from state."""
-        node_log_adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id})
+        node_agent_id = config.get('configurable', {}).get('agent_id', 'unknown_agent')
+        node_log_adapter = logging.LoggerAdapter(logger, {'agent_id': node_agent_id})
         node_log_adapter.info("---CHECK RELEVANCE---")
 
         class grade(BaseModel):
             """Binary score for relevance check."""
             binary_score: str = Field(description="Relevance score 'yes' or 'no'")
 
+        # Read config from state
         messages = state["messages"]
         current_question = state["question"]
-        node_model_id = state["model_id"] # Could use a specific grading model from config if available
+        node_model_id = state["model_id"]
         node_datastore_tool_names = state["datastore_tool_names"]
-        node_provider = state["provider"]
-        node_temperature = 0.0
+        node_provider = state["provider"] # Read provider from state
+        node_temperature = 0.0 # Grading should be deterministic
 
         node_log_adapter.info(f"Grading documents for question: {current_question}")
 
@@ -463,9 +507,10 @@ def create_agent_app(agent_config: Dict, agent_id: str) -> Tuple[Any, Dict[str, 
         # --- КОНЕЦ НОВОГО ---
         return {"documents": filtered_docs, "question": current_question}
 
-    async def rewrite_node(state: AgentState):
+    async def rewrite_node(state: AgentState, config: dict):
         """Rewrite node, reading config from state."""
-        node_log_adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id})
+        node_agent_id = config.get('configurable', {}).get('agent_id', 'unknown_agent')
+        node_log_adapter = logging.LoggerAdapter(logger, {'agent_id': node_agent_id})
         node_log_adapter.info("---TRANSFORM QUERY---")
 
         # Read config from state
@@ -475,7 +520,7 @@ def create_agent_app(agent_config: Dict, agent_id: str) -> Tuple[Any, Dict[str, 
         node_max_rewrites = state["max_rewrites"]
         node_model_id = state["model_id"]
         node_provider = state["provider"] # Read provider from state
-        node_temperature = 0.1
+        node_temperature = 0.0 # Rewriting can be deterministic
 
         node_log_adapter.info(f"Rewrite attempt {rewrite_count + 1}/{node_max_rewrites}")
 
@@ -494,7 +539,7 @@ Original Question: {original_question}
 
 Rephrased Question:"""
             )
-        
+
             model = _get_llm(
                 provider=node_provider,
                 model_name=node_model_id, # Consider a specific model for rewriting if needed
@@ -577,9 +622,10 @@ Rephrased Question:"""
             "rewrite_count": 0 # Reset count for next turn if needed, though this branch ends
         }
 
-    async def generate_node(state: AgentState):
+    async def generate_node(state: AgentState, config: dict):
         """Generate node, reading config from state."""
-        node_log_adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id})
+        node_agent_id = config.get('configurable', {}).get('agent_id', 'unknown_agent')
+        node_log_adapter = logging.LoggerAdapter(logger, {'agent_id': node_agent_id})
         node_log_adapter.info("---GENERATE---")
 
         # Read config from state
@@ -686,9 +732,10 @@ Rephrased Question:"""
             return {"messages": [AIMessage(content="An error occurred while generating the response.")]}
 
     # --- Edges Definition (Now INSIDE create_agent_app) ---
-    async def decide_to_generate(state: AgentState) -> Literal["generate", "rewrite"]:
+    async def decide_to_generate(state: AgentState, config: dict) -> Literal["generate", "rewrite"]:
         """Decides whether to generate an answer or rewrite the question."""
-        node_log_adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id})
+        node_agent_id = config.get('configurable', {}).get('agent_id', 'unknown_agent')
+        node_log_adapter = logging.LoggerAdapter(logger, {'agent_id': node_agent_id})
         node_log_adapter.info("---ASSESS GRADED DOCUMENTS---")
 
         # Read config from state
@@ -707,9 +754,10 @@ Rephrased Question:"""
             node_log_adapter.info("---DECISION: RELEVANT DOCUMENTS FOUND, GENERATE---")
             return "generate"
 
-    def route_tools(state: AgentState) -> Literal["retrieve", "safe_tools", "__end__"]:
+    def route_tools(state: AgentState, config: dict) -> Literal["retrieve", "safe_tools", "__end__"]:
         """Routes to the appropriate tool node or ends if no tool is called."""
-        node_log_adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id})
+        node_agent_id = config.get('configurable', {}).get('agent_id', 'unknown_agent')
+        node_log_adapter = logging.LoggerAdapter(logger, {'agent_id': node_agent_id})
         node_log_adapter.info("---ROUTE TOOLS---")
 
         # Read tool names from state
@@ -740,7 +788,6 @@ Rephrased Question:"""
         else:
              node_log_adapter.warning(f"Tool call '{tool_name}' does not match any configured tool node. Ending.")
              return END
-
 
     # --- Graph Definition ---
     workflow = StateGraph(AgentState)
@@ -816,3 +863,4 @@ Rephrased Question:"""
     except Exception as e:
         log_adapter.error(f"Failed to compile agent graph: {e}", exc_info=True)
         raise
+
