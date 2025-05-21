@@ -377,7 +377,7 @@ async def redis_listener(
                             channel=channel,
                             interaction_id=current_interaction_id # Передаем user-сообщению тот же interaction_id
                         )
-# Я ТУТ
+
                         loaded_messages: List[BaseMessage] = []
                         # Загружаем историю только если включена память контекста и есть глубина
                         if can_load_history and enable_context_memory and context_memory_depth > 0:

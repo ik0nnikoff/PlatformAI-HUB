@@ -111,6 +111,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         self.loaded_threads_key = f"agent_threads:{self._component_id}"
 
         self.config_url = str
+        self.config: Optional[Dict] = None
         self.agent_config: Optional[Dict] = None
         self.agent_app: Optional[Any] = None
         self.static_state_config: Optional[Dict] = None
@@ -250,6 +251,11 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                 interaction_id=interaction_id
             )
 
+            await self._save_token_usage(
+                interaction_id=interaction_id,
+                thread_id=chat_id
+            )
+
             response_payload = {
                 "chat_id": chat_id,
                 "response": final_response_content,
@@ -284,6 +290,63 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                     self.logger.error(f"Failed to publish error notification: {pub_err}", exc_info=True)
 
 
+    async def _save_token_usage(
+            self,
+            interaction_id: str,
+            thread_id: str
+            ) -> None:
+        """
+        Сохраняет данные об использовании токенов в Redis для дальнейшей обработки.
+        Отправляет данные в очередь Redis для обработки `TokenUsageWorker`.
+        """
+        try:
+            redis_cli = await self.redis_client
+        except RuntimeError as e:
+            self.logger.error(f"Redis client not available for handling pubsub message: {e}")
+            return
+        
+        # Получение финального состояния графа ---
+        retrieved_final_state: Optional[Dict[str, Any]] = None
+        try:
+            final_graph_state_snapshot = self.agent_app.get_state(self.config)
+            if final_graph_state_snapshot:
+                retrieved_final_state = final_graph_state_snapshot.values
+                self.logger.debug(f"Retrieved final graph state snapshot for InteractionID {interaction_id}")
+            else:
+                self.logger.warning(f"self.agent_app.get_state(config) returned None for InteractionID {interaction_id}")
+        except Exception as e_get_state:
+            self.logger.error(f"Error calling self.agent_app.get_state(config) for InteractionID {interaction_id}: {e_get_state}", exc_info=True)
+
+        # Используем retrieved_final_state ---
+        if retrieved_final_state and "token_usage_events" in retrieved_final_state:
+            token_events: List[TokenUsageData] = retrieved_final_state["token_usage_events"]
+            if token_events:
+                self.logger.info(f"Found {len(token_events)} token usage events for InteractionID: {interaction_id}.")
+                for token_data in token_events:
+                    try:
+                        token_payload = {
+                            "interaction_id": interaction_id,
+                            "agent_id": self._component_id,
+                            "thread_id": thread_id,
+                            "call_type": token_data.call_type,
+                            "model_id": token_data.model_id,
+                            "prompt_tokens": token_data.prompt_tokens,
+                            "completion_tokens": token_data.completion_tokens,
+                            "total_tokens": token_data.total_tokens,
+                            "timestamp": token_data.timestamp
+                        }
+                        await redis_cli.lpush(settings.REDIS_TOKEN_USAGE_QUEUE_NAME, json.dumps(token_payload))
+                        self.logger.debug(f"Queued token usage data to '{settings.REDIS_TOKEN_USAGE_QUEUE_NAME}': {token_payload}")
+                    except redis_exceptions.RedisError as e:
+                        self.logger.error(f"Failed to queue token usage data for InteractionID {interaction_id}: {e}")
+                    except Exception as e_gen:
+                        self.logger.error(f"Unexpected error queuing token usage data for InteractionID {interaction_id}: {e_gen}", exc_info=True)
+            else:
+                self.logger.info(f"No token usage events recorded in retrieved final state for InteractionID: {interaction_id}.")
+        else:
+            self.logger.warning(f"Could not retrieve token_usage_events from final graph state for InteractionID: {interaction_id}. State: {retrieved_final_state is not None}")
+
+
     async def _send_agent(
             self,
             history_messages_db: List[BaseMessage],
@@ -307,13 +370,13 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             "token_usage_events": [],
             **self.static_state_config
         }
-        config = {"configurable": {"thread_id": str(thread_id), "agent_id": self._component_id}}
+        self.config = {"configurable": {"thread_id": str(thread_id), "agent_id": self._component_id}}
 
         self.logger.info(f"Invoking graph for thread_id: {thread_id} (Initial history messages: {len(history_messages_db)})")
         final_response_content = "No response generated."
         final_message_object = None
 
-        async for output in self.agent_app.astream(graph_input, config, stream_mode="updates"):
+        async for output in self.agent_app.astream(graph_input, self.config, stream_mode="updates"):
             if not self._running or self.needs_restart:
                 self.logger.warning("Shutdown or restart requested during graph stream.")
                 break
@@ -514,6 +577,8 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
 
         self.agent_app = None
         self.agent_config = None
+        self.config = None
+        self.config_url = None
         self.static_state_config = None
         self.pubsub_handler_task = None # Очищаем ссылку
 
