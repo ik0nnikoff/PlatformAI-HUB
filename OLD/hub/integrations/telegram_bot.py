@@ -76,8 +76,6 @@ if DATABASE_URL and crud and UserDB and AgentUserAuthorizationDB:
 else:
     logger.warning("Database URL not set or CRUD/Models not imported. Database features disabled.")
 
-# --- УДАЛЕНО: Функция get_db_session больше не нужна ---
-# --- КОНЕЦ НОВОГО ---
 
 # --- Helper Functions ---
 
@@ -125,25 +123,14 @@ async def publish_to_agent(agent_id: str, chat_id: int, platform_user_id: str, m
         logger.error(f"Unexpected error publishing message to {input_channel}: {e}", exc_info=True)
         await bot.send_message(chat_id, "❌ Произошла внутренняя ошибка при отправке сообщения.")
 
-# --- УДАЛЕНО: Старая функция get_user_data ---
-# async def get_user_data(platform_user_id: str) -> Dict[str, Any]:
-#     """
-#     Retrieves user data, checking cache first, then DB.
-#     Returns a dictionary with user details and authorization status.
-#     """
-#     # ... (старая логика) ...
-# --- КОНЕЦ УДАЛЕНИЯ ---
 
-# --- ИЗМЕНЕНИЕ: Обновляем check_user_authorization ---
 async def check_user_authorization(agent_id: str, platform_user_id: str) -> bool:
     """Checks user authorization status for a specific agent, using cache first, then DB."""
     if not redis_client:
         logger.error("Cannot check authorization: Redis client not available.")
         return False # Assume not authorized if Redis is down
 
-    # --- ИЗМЕНЕНИЕ: Ключ кэша теперь включает agent_id ---
     cache_key = f"{USER_CACHE_PREFIX}telegram:{platform_user_id}:agent:{agent_id}"
-    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     try:
         logger.debug(f"Authorization check: Attempting to get cache for key '{cache_key}'")
         cached_auth_status = await redis_client.get(cache_key)
@@ -189,7 +176,6 @@ async def check_user_authorization(agent_id: str, platform_user_id: str) -> bool
     except Exception as e:
         logger.error(f"Unexpected error during authorization check for agent {agent_id}, user {platform_user_id}: {e}", exc_info=True)
         return False # Assume not authorized on other errors
-# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
 
 # --- Redis Listener ---
