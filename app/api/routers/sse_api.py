@@ -3,40 +3,41 @@ import json
 import asyncio
 from typing import Any, AsyncGenerator, Dict, Optional
 
-import redis.asyncio as redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.redis_service import get_redis_client
+from app.core.base.redis_manager import RedisClientManager
 from app.db.session import get_db_session
 from app.db.crud import agent_crud
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+redis = RedisClientManager()
 
 # --- SSE Stream Logic ---
-async def sse_stream(agent_id: str, thread_id: str, r: redis.Redis = Depends(get_redis_client)) -> AsyncGenerator[str, None]:
+async def sse_stream(agent_id: str, thread_id: str) -> AsyncGenerator[str, None]:
     """
     Генератор для отправки данных через SSE, фильтруя по thread_id.
     Включает механизм keep-alive.
     """
+    await redis.setup()
+    redis_cli = redis._redis_client
     pubsub = None
     keep_alive_interval = 30.0  # секунды
     last_event_time = asyncio.get_event_loop().time()
 
     try:
-        # redis_client is now 'r' passed as a dependency
         output_channel = f"agent:{agent_id}:output"
-        pubsub = r.pubsub()
+        pubsub = redis_cli.pubsub()
         await pubsub.subscribe(output_channel)
 
         yield "event: connected\ndata: {\"message\": \"SSE connection established\"}\n\n" # Send structured connected event
         last_event_time = asyncio.get_event_loop().time()
 
         while True:
-            # Check connection state to break loop if Redis connection is lost
-            if not r.is_connected:
+            if not redis.is_redis_client_available:
                 logger.warning(f"SSE stream for agent {agent_id}, thread {thread_id}: Redis connection lost. Breaking loop.")
                 yield f"event: error\ndata: {json.dumps({'error': 'Redis connection lost. Stream terminated.'})}\n\n"
                 break
@@ -47,7 +48,7 @@ async def sse_stream(agent_id: str, thread_id: str, r: redis.Redis = Depends(get
             if message and message.get("type") == "message":
                 try:
                     data = json.loads(message["data"])
-                    if data.get("thread_id") == thread_id:
+                    if data.get("chat_id") == thread_id:
                         yield f"data: {json.dumps(data)}\n\n"
                         last_event_time = current_time
                 except json.JSONDecodeError:
@@ -64,7 +65,7 @@ async def sse_stream(agent_id: str, thread_id: str, r: redis.Redis = Depends(get
     except asyncio.CancelledError:
         logger.info(f"SSE connection for agent {agent_id}, thread {thread_id} closed by client.")
         raise
-    except redis.exceptions.ConnectionError as e:
+    except RedisConnectionError as e:
         logger.error(f"Redis connection error in SSE stream for agent {agent_id}, thread {thread_id}: {e}")
         try:
             yield f"event: error\ndata: {json.dumps({'error': 'Redis connection error during stream setup.'})}\n\n"
@@ -79,7 +80,7 @@ async def sse_stream(agent_id: str, thread_id: str, r: redis.Redis = Depends(get
     finally:
         if pubsub:
             try:
-                if r.is_connected: # Check connection before trying to unsubscribe
+                if redis.is_redis_client_available: # Check connection before trying to unsubscribe
                     await pubsub.unsubscribe(output_channel)
                 await pubsub.aclose() # Close pubsub object itself
                 logger.info(f"SSE stream for agent {agent_id}, thread {thread_id}: Unsubscribed and closed pubsub.")
@@ -92,19 +93,18 @@ async def sse_stream(agent_id: str, thread_id: str, r: redis.Redis = Depends(get
 async def agent_sse(
     agent_id: str,
     thread_id: str = Query(..., description="Unique identifier for the chat thread"),
-    r: redis.Redis = Depends(get_redis_client),
     db: AsyncSession = Depends(get_db_session)
 ):
     """
     Endpoint for SSE (Server-Sent Events) with filtering by thread_id.
     Streams events related to a specific agent and chat thread.
     """
-    db_agent = await agent_crud.get_agent_config(db, agent_id)
+    db_agent = await agent_crud.db_get_agent_config(db, agent_id)
     if not db_agent:
         raise HTTPException(status_code=404, detail=f"Agent with id '{agent_id}' not found")
     
     logger.info(f"SSE connection requested for agent {agent_id}, thread {thread_id}")
-    return StreamingResponse(sse_stream(agent_id, thread_id, r), media_type="text/event-stream")
+    return StreamingResponse(sse_stream(agent_id, thread_id), media_type="text/event-stream")
 
 
 # --- Send Message to Agent Endpoint (related to SSE/real-time interaction) ---
@@ -112,7 +112,6 @@ async def agent_sse(
 async def send_message_to_agent(
     agent_id: str,
     message_data: Dict[str, Any], 
-    r: redis.Redis = Depends(get_redis_client),
     db: AsyncSession = Depends(get_db_session)
 ):
     """
@@ -127,6 +126,8 @@ async def send_message_to_agent(
     - `channel`: str (defaults to 'api')
     - `user_data`: dict (any additional user-specific data)
     """
+    await redis.setup()
+    redis_cli = redis._redis_client
     thread_id = message_data.get("thread_id")
     message_content = message_data.get("message") # Renamed from 'message' to avoid conflict
     channel = message_data.get("channel", "api") # Default channel from message_data or 'api'
@@ -138,23 +139,23 @@ async def send_message_to_agent(
     if not isinstance(channel, str) or not channel:
         raise HTTPException(status_code=400, detail="Invalid or missing 'channel'. Must be a non-empty string.")
 
-    db_agent = await agent_crud.get_agent_config(db, agent_id)
+    db_agent = await agent_crud.db_get_agent_config(db, agent_id)
     if not db_agent:
         raise HTTPException(status_code=404, detail=f"Agent with id '{agent_id}' not found")
 
     payload = {
-        "message": message_content,
-        "thread_id": thread_id,
+        "text": message_content,
+        "chat_id": thread_id,
         "channel": channel,
         "user_data": message_data.get("user_data", {}) # Ensure user_data is a dict
     }
 
     input_channel = f"agent:{agent_id}:input"
     try:
-        await r.publish(input_channel, json.dumps(payload))
+        await redis_cli.publish(input_channel, json.dumps(payload))
         logger.info(f"Message published to {input_channel} for agent {agent_id}, thread {thread_id}")
         return {"status": "success", "message": "Message sent to agent."}
-    except redis.exceptions.ConnectionError as e:
+    except RedisConnectionError as e:
         logger.error(f"Redis connection error when publishing message to {input_channel}: {e}")
         raise HTTPException(status_code=503, detail="Could not connect to Redis to send message.")
     except Exception as e:

@@ -278,11 +278,11 @@ async def delete_agent(
         logger.info(f"Explicitly deleted Redis status key for agent {agent_id}")
 
         # Также нужно удалить все связанные авторизации пользователей
-        try:
-            await agent_crud.db_delete_all_authorizations_for_agent(db, agent_id)
-            logger.info(f"Deleted all user authorizations for agent {agent_id}.")
-        except Exception as auth_del_e:
-            logger.error(f"Error deleting user authorizations for agent {agent_id}: {auth_del_e}", exc_info=True)
+        # try:
+        #     await agent_crud.db_delete_all_authorizations_for_agent(db, agent_id)
+        #     logger.info(f"Deleted all user authorizations for agent {agent_id}.")
+        # except Exception as auth_del_e:
+        #     logger.error(f"Error deleting user authorizations for agent {agent_id}: {auth_del_e}", exc_info=True)
     finally:
         await pm.cleanup_manager()
 

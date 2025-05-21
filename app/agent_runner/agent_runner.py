@@ -211,7 +211,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             self.logger.debug(f"Generated InteractionID: {interaction_id} for Thread: {chat_id}")
 
             if not chat_id or user_input is None:
-                self.logger.warning(f"Missing 'message' or 'thread_id' in Redis payload: {payload}")
+                self.logger.warning(f"Missing 'text' or 'chat_id' in Redis payload: {payload}")
                 return
 
             await self._save_history(

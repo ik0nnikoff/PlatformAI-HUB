@@ -59,6 +59,8 @@ class Settings:
     MANAGER_HOST: str = os.getenv("MANAGER_HOST", "localhost")
     MANAGER_PORT: int = int(os.getenv("MANAGER_PORT", "8001"))
 
+    # Source API Configuration
+    SOURCES_API_BASE_URL: str = os.getenv("SOURCES_API_BASE_URL", "http://localhost:3001/api/v1")
     # Logging Configuration
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
     LOG_FORMAT: str = os.getenv("LOG_FORMAT", "%(asctime)s - %(levelname)s - %(name)s - %(message)s")
