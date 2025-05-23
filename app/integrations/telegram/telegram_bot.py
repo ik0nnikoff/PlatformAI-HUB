@@ -380,7 +380,7 @@ class TelegramIntegrationBot(ServiceComponentBase):
 
                 if error:
                     self.logger.error(f"Received error from agent for chat {chat_id}: {error}")
-                    await self.bot.send_message(chat_id, f"Произошла ошибка: {error}")
+                    await self.bot.send_message(chat_id, f"Произошла ошибка: {response}")
                 elif response:
                     self.logger.info(f"Received response from agent for chat {chat_id}: {response[:100]}...")
 

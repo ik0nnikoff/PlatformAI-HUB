@@ -12,8 +12,8 @@ from datetime import datetime, timezone
 
 from redis import exceptions as redis_exceptions
 
-from app.agent_runner.langgraph.factory import create_agent_app # Updated import
-from app.agent_runner.langgraph.models import TokenUsageData # Updated import
+from app.agent_runner.langgraph_factory import create_agent_app
+from app.agent_runner.langgraph_models import TokenUsageData
 from app.db.alchemy_models import ChatMessageDB, SenderType
 from app.db.crud.chat_crud import db_get_recent_chat_history
 from app.core.config import settings
@@ -148,7 +148,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         """
         self.logger.info(f"Creating LangGraph application...")
         try:
-            self.agent_app, static_state_config = create_agent_app(self.agent_config, self._component_id, self.logger)
+            self.agent_app, static_state_config = create_agent_app(self.agent_config, self._component_id)
             self.static_state_config = static_state_config # Store for use in _process_message
         except Exception as e:
             self.logger.error(f"Failed to create LangGraph application: {e}", exc_info=True)
@@ -494,12 +494,12 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
 
         if not await self._load_and_prepare_config():
             self.logger.critical(f"Failed to load or prepare agent configuration. AgentRunner cannot start.")
-            await self.mark_as_error(error_message="Failed to load agent config")
+            await self.mark_as_error(reason="Failed to load agent config")
             raise RuntimeError("Agent configuration failed to load.")
 
         if not await self._setup_langgraph_app():
             self.logger.critical(f"Failed to setup LangGraph application. AgentRunner cannot start.")
-            await self.mark_as_error(error_message="Failed to setup LangGraph app")
+            await self.mark_as_error(reason="Failed to setup LangGraph app")
             raise RuntimeError("LangGraph application setup failed.")
         
         self.logger.debug(f"AgentRunner setup completed successfully.")
@@ -582,21 +582,8 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         await super().cleanup() # Это вызовет отмену self.pubsub_handler_task и другие базовые очистки
         self.logger.info(f"AgentRunner cleanup finished.")
 
-    async def mark_as_error(self, error_message: str, error_type: str = "UnknownError"):
-        """Marks the component's status as 'error'."""
-        self.logger.error(f"Marking component as error. Error Type: {error_type}, Message: {error_message}")
-        # Removed 'reason' keyword argument, pass error_message directly
-        await self.status_updater.mark_as_error(error_message, error_type=error_type)
-
-    async def _handle_status_update_exception(self, e: Exception, phase: str):
-        """Handles exceptions during status updates, logging them and marking the component as error."""
-        error_message = f"Failed to update status during {phase}: {e}"
-        self.logger.error(error_message, exc_info=True)
-        # Ensure this call is also compatible with the updated mark_as_error
-        await self.status_updater.mark_as_error(
-            message=f"Internal error: Failed to update status during {phase}.",
-            error_type="StatusUpdateError"
-        )
+    # Removed get_restart_flag and set_restart_flag, using self.needs_restart directly
+    # The main runner loop in runner_main.py will check agent_runner.needs_restart
 
 # Helper function convert_db_history_to_langchain_static can remain as is or be moved
 # into the class if it makes more sense contextually.
