@@ -405,8 +405,8 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             self.logger.error(f"Redis client not available for handling pubsub message: {e}")
             return
 
-        enable_context_memory = self.agent_config.get("enableContextMemory", True)
-        history_limit = self.agent_config.get("contextMemoryDepth", 10)
+        enable_context_memory = self.static_state_config.get("enableContextMemory", True)
+        history_limit = self.static_state_config.get("contextMemoryDepth", 10)
 
         if not enable_context_memory:
             self.logger.info(f"Context memory is disabled by agent config. History will not be loaded with depth.")
@@ -554,10 +554,6 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             self.logger.error(f"Redis client not available for handling pubsub message: {e}")
             return
         
-        # self.pubsub_handler_task будет отменен в super().cleanup(), так как он был зарегистрирован.
-        # Дополнительная логика отмены здесь не нужна, если только нет специфичных для AgentRunner задач,
-        # которые не были зарегистрированы через _register_main_task.
-
         # LangGraph app cleanup (if any specific method exists)
         if hasattr(self.agent_app, 'cleanup'):
             try:
@@ -577,9 +573,9 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         self.config = None
         self.config_url = None
         self.static_state_config = None
-        self.pubsub_handler_task = None # Очищаем ссылку
+        self.pubsub_handler_task = None
 
-        await super().cleanup() # Это вызовет отмену self.pubsub_handler_task и другие базовые очистки
+        await super().cleanup()
         self.logger.info(f"AgentRunner cleanup finished.")
 
     async def mark_as_error(self, error_message: str, error_type: str = "UnknownError"):

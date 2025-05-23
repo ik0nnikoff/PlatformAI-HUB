@@ -17,7 +17,7 @@ async def db_add_token_usage_log(db: AsyncSession, token_usage_data: Dict[str, A
     try:
         await db.commit()
         await db.refresh(db_log_entry)
-        logger.info(f"Token usage log entry added successfully (ID: {db_log_entry.id}) for InteractionID: {db_log_entry.interaction_id}")
+        logger.debug(f"Token usage log entry added successfully (ID: {db_log_entry.id}) for InteractionID: {db_log_entry.interaction_id}")
         return db_log_entry
     except SQLAlchemyError as e:
         await db.rollback()

@@ -68,7 +68,6 @@ class GraphFactory:
         else:
             self.logger.error(f"Failed to configure main LLM: {model_name} via {provider}")
 
-
     def _create_llm_instance(
         self, 
         provider: str, 
@@ -202,6 +201,44 @@ class GraphFactory:
         self.system_prompt = final_system_prompt
         self.logger.debug(f"System prompt constructed: {self.system_prompt}")
 
+    def _get_tokens(self, state: AgentState, call_type: str, node_model_id: str, response: BaseMessage ) -> List[TokenUsageData]:
+        token_event_data = None
+        prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
+        model_name_from_meta = node_model_id
+
+        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+            usage_meta = response.usage_metadata
+            prompt_tokens = usage_meta.get('prompt_tokens', 0) if usage_meta.get('prompt_tokens') is not None else usage_meta.get('input_tokens', 0)
+            completion_tokens = usage_meta.get('completion_tokens', 0) if usage_meta.get('completion_tokens') is not None else usage_meta.get('output_tokens', 0)
+            total_tokens = usage_meta.get('total_tokens', 0)
+            self.logger.info(f"Token usage from usage_metadata: P:{prompt_tokens} C:{completion_tokens} T:{total_tokens}")
+            if hasattr(response, 'response_metadata') and response.response_metadata and response.response_metadata.get('model_name'):
+                model_name_from_meta = response.response_metadata['model_name']
+        elif hasattr(response, 'response_metadata') and response.response_metadata and 'token_usage' in response.response_metadata:
+            usage = response.response_metadata['token_usage']
+            prompt_tokens = usage.get('prompt_tokens', 0)
+            completion_tokens = usage.get('completion_tokens', 0)
+            total_tokens = usage.get('total_tokens', 0)
+            self.logger.info(f"Token usage from response_metadata['token_usage']: P:{prompt_tokens} C:{completion_tokens} T:{total_tokens}")
+            if response.response_metadata.get('model_name'):
+                model_name_from_meta = response.response_metadata['model_name']
+        else:
+            self.logger.warning("Token usage data not found in usage_metadata or response_metadata for agent_node.")
+
+        current_token_events = state.get("token_usage_events", [])
+        if total_tokens > 0 or prompt_tokens > 0 or completion_tokens > 0:
+            token_event_data = TokenUsageData(
+                call_type=call_type,
+                model_id=model_name_from_meta,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                timestamp=datetime.now(timezone.utc).isoformat()
+            )
+            self.logger.info(f"Token usage for {call_type}: {token_event_data.total_tokens} tokens recorded.")
+            current_token_events.append(token_event_data)
+            return current_token_events
+
     async def _agent_node(self, state: AgentState, config: dict):
         """Agent node logic, adapted to be a method of GraphFactory."""
         self.logger.info(f"---CALL AGENT NODE (Agent ID: {self.agent_id})---")
@@ -215,9 +252,6 @@ class GraphFactory:
         moscow_tz = timezone(timedelta(hours=3))
         current_time_str = datetime.now(moscow_tz).isoformat()
 
-        # Ensure current_time placeholder is in the system prompt
-        # This logic might be better placed when the system_prompt in state is initially set,
-        # but for now, we replicate the original node's behavior.
         if "{current_time}" not in node_system_prompt:
              node_system_prompt_with_time = node_system_prompt + "\nТекущее время (Москва): {current_time}"
         else:
@@ -228,8 +262,6 @@ class GraphFactory:
             MessagesPlaceholder(variable_name="messages")
         ]).partial(current_time=current_time_str)
 
-        # Create LLM instance for this specific call
-        # Agent node typically uses streaming=True
         model = self._create_llm_instance(
             provider=node_provider,
             model_name=node_model_id,
@@ -242,7 +274,6 @@ class GraphFactory:
             error_message = AIMessage(content=f"Sorry, an error occurred: Could not initialize LLM for provider {node_provider} in agent_node.")
             return {"messages": [error_message], "token_usage_events": state.get("token_usage_events", [])}
 
-        # Use configured_tools_list from self
         if self.configured_tools_list:
              valid_tools_for_binding = [t for t in self.configured_tools_list if t is not None]
              if valid_tools_for_binding:
@@ -254,13 +285,13 @@ class GraphFactory:
              self.logger.warning("Agent node called but no tools are configured in self.configured_tools_list.")
 
         chain = prompt | model
-        response: Optional[AIMessage] = None # Ensure response is an AIMessage or None
+
+        response: Optional[AIMessage] = None 
 
         try:
             response_raw = await chain.ainvoke({"messages": messages}, config=config)
             if not isinstance(response_raw, AIMessage):
                 self.logger.error(f"Agent node received unexpected response type: {type(response_raw)}. Content: {str(response_raw)[:200]}")
-                # Attempt to create a fallback AIMessage if possible, or handle error
                 content_str = str(response_raw) if not hasattr(response_raw, 'content') else response_raw.content
                 response = AIMessage(content=f"Error: Unexpected response structure from LLM. Raw: {content_str[:100]}")
             else:
@@ -272,41 +303,7 @@ class GraphFactory:
             if hasattr(response, 'usage_metadata'):
                 self.logger.info(f"Agent node usage_metadata: {response.usage_metadata}")
 
-            token_event_data = None
-            prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
-            model_name_from_meta = node_model_id
-
-            if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                usage_meta = response.usage_metadata
-                prompt_tokens = usage_meta.get('prompt_tokens', 0) if usage_meta.get('prompt_tokens') is not None else usage_meta.get('input_tokens', 0)
-                completion_tokens = usage_meta.get('completion_tokens', 0) if usage_meta.get('completion_tokens') is not None else usage_meta.get('output_tokens', 0)
-                total_tokens = usage_meta.get('total_tokens', 0)
-                self.logger.info(f"Token usage from usage_metadata: P:{prompt_tokens} C:{completion_tokens} T:{total_tokens}")
-                if hasattr(response, 'response_metadata') and response.response_metadata and response.response_metadata.get('model_name'):
-                    model_name_from_meta = response.response_metadata['model_name']
-            elif hasattr(response, 'response_metadata') and response.response_metadata and 'token_usage' in response.response_metadata:
-                usage = response.response_metadata['token_usage']
-                prompt_tokens = usage.get('prompt_tokens', 0)
-                completion_tokens = usage.get('completion_tokens', 0)
-                total_tokens = usage.get('total_tokens', 0)
-                self.logger.info(f"Token usage from response_metadata['token_usage']: P:{prompt_tokens} C:{completion_tokens} T:{total_tokens}")
-                if response.response_metadata.get('model_name'):
-                    model_name_from_meta = response.response_metadata['model_name']
-            else:
-                self.logger.warning("Token usage data not found in usage_metadata or response_metadata for agent_node.")
-
-            current_token_events = state.get("token_usage_events", [])
-            if total_tokens > 0 or prompt_tokens > 0 or completion_tokens > 0:
-                token_event_data = TokenUsageData(
-                    call_type="agent_llm",
-                    model_id=model_name_from_meta,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=total_tokens,
-                    timestamp=datetime.now(timezone.utc).isoformat()
-                )
-                current_token_events.append(token_event_data)
-                self.logger.info(f"Token usage for agent_llm: {token_event_data.total_tokens} tokens recorded.")
+            current_token_events = self._get_tokens(state, "agent_llm", node_model_id, response)
 
             # Tool call recovery logic from original agent_node
             if hasattr(response, 'invalid_tool_calls') and response.invalid_tool_calls and \
@@ -520,13 +517,10 @@ class GraphFactory:
         original_question = state["original_question"]
         messages = state["messages"]
         rewrite_count = state.get("rewrite_count", 0)
-        # node_max_rewrites should come from the state, which is initialized from static_state_config
-        # or from self.max_rewrites if it's guaranteed to be the same as in state.
-        # For now, let's assume it's in state as per original logic.
         node_max_rewrites = state["max_rewrites"]
         node_model_id = state["model_id"]
         node_provider = state["provider"]
-        node_temperature = 0.1 # As per original
+        node_temperature = 0.1
 
         self.logger.info(f"Rewrite attempt {rewrite_count + 1}/{node_max_rewrites} for question: '{original_question}'")
         current_token_events = state.get("token_usage_events", [])
@@ -571,38 +565,7 @@ Rephrased Question:"""
                     
                     self.logger.info(f"Rewritten question: {rewritten_question}")
 
-                    token_event_data = None
-                    prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
-                    model_name_from_meta = node_model_id
-
-                    if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                        usage_meta = response.usage_metadata
-                        prompt_tokens = usage_meta.get('prompt_tokens', 0) if usage_meta.get('prompt_tokens') is not None else usage_meta.get('input_tokens', 0)
-                        completion_tokens = usage_meta.get('completion_tokens', 0) if usage_meta.get('completion_tokens') is not None else usage_meta.get('output_tokens', 0)
-                        total_tokens = usage_meta.get('total_tokens', 0)
-                        if hasattr(response, 'response_metadata') and response.response_metadata and response.response_metadata.get('model_name'):
-                            model_name_from_meta = response.response_metadata['model_name']
-                    elif hasattr(response, 'response_metadata') and response.response_metadata and 'token_usage' in response.response_metadata:
-                        usage = response.response_metadata['token_usage']
-                        prompt_tokens = usage.get('prompt_tokens', 0)
-                        completion_tokens = usage.get('completion_tokens', 0)
-                        total_tokens = usage.get('total_tokens', 0)
-                        if response.response_metadata.get('model_name'):
-                            model_name_from_meta = response.response_metadata['model_name']
-                    else:
-                        self.logger.warning("Token usage data not found for rewrite_node.")
-                    
-                    if total_tokens > 0 or prompt_tokens > 0 or completion_tokens > 0:
-                        token_event_data = TokenUsageData(
-                            call_type="rewrite_llm",
-                            model_id=model_name_from_meta,
-                            prompt_tokens=prompt_tokens,
-                            completion_tokens=completion_tokens,
-                            total_tokens=total_tokens,
-                            timestamp=datetime.now(timezone.utc).isoformat()
-                        )
-                        current_token_events.append(token_event_data)
-                        self.logger.info(f"Token usage for rewrite_llm: {token_event_data.total_tokens} tokens recorded.")
+                    current_token_events = self._get_tokens(state, "rewrite_llm", node_model_id, response)
 
                     if not rewritten_question or rewritten_question.lower() == original_question.lower():
                         self.logger.warning("Rewriting resulted in empty or identical question. Stopping rewrite.")
@@ -691,38 +654,7 @@ Rephrased Question:"""
         try:
             response = await rag_chain.ainvoke({"context": documents_str, "question": current_question})
 
-            token_event_data = None
-            prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
-            model_name_from_meta = node_model_id
-
-            if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                usage_meta = response.usage_metadata
-                prompt_tokens = usage_meta.get('prompt_tokens', 0) if usage_meta.get('prompt_tokens') is not None else usage_meta.get('input_tokens', 0)
-                completion_tokens = usage_meta.get('completion_tokens', 0) if usage_meta.get('completion_tokens') is not None else usage_meta.get('output_tokens', 0)
-                total_tokens = usage_meta.get('total_tokens', 0)
-                if hasattr(response, 'response_metadata') and response.response_metadata and response.response_metadata.get('model_name'):
-                    model_name_from_meta = response.response_metadata['model_name']
-            elif hasattr(response, 'response_metadata') and response.response_metadata and 'token_usage' in response.response_metadata:
-                usage = response.response_metadata['token_usage']
-                prompt_tokens = usage.get('prompt_tokens', 0)
-                completion_tokens = usage.get('completion_tokens', 0)
-                total_tokens = usage.get('total_tokens', 0)
-                if response.response_metadata.get('model_name'):
-                    model_name_from_meta = response.response_metadata['model_name']
-            else:
-                self.logger.warning("Token usage data not found for generate_node.")
-
-            if total_tokens > 0 or prompt_tokens > 0 or completion_tokens > 0:
-                token_event_data = TokenUsageData(
-                    call_type="generation_llm",
-                    model_id=model_name_from_meta,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=total_tokens,
-                    timestamp=datetime.now(timezone.utc).isoformat()
-                )
-                current_token_events.append(token_event_data)
-                self.logger.info(f"Token usage for generation_llm: {token_event_data.total_tokens} tokens recorded.")
+            current_token_events = self._get_tokens(state, "generation_llm", node_model_id, response)
 
             final_response_message = response
             if not isinstance(response, BaseMessage):
