@@ -357,9 +357,9 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             "question": user_input,
             "rewrite_count": 0,
             "documents": [],
-            "current_interaction_id": interaction_id,
+            # "current_interaction_id": interaction_id,
             "token_usage_events": [],
-            **self.static_state_config
+            # **self.static_state_config
         }
         self.config = {"configurable": {"thread_id": str(thread_id), "agent_id": self._component_id}}
 

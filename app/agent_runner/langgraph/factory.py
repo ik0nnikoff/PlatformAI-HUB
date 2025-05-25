@@ -201,7 +201,8 @@ class GraphFactory:
         self.system_prompt = final_system_prompt
         self.logger.debug(f"System prompt constructed: {self.system_prompt}")
 
-    def _get_tokens(self, state: AgentState, call_type: str, node_model_id: str, response: BaseMessage ) -> List[TokenUsageData]:
+    # def _get_tokens(self, state: AgentState, call_type: str, node_model_id: str, response: BaseMessage ) -> List[TokenUsageData]:
+    def _get_tokens(self, state: AgentState, call_type: str, node_model_id: str, response: BaseMessage ) -> None:
         token_event_data = None
         prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
         model_name_from_meta = node_model_id
@@ -225,7 +226,7 @@ class GraphFactory:
         else:
             self.logger.warning("Token usage data not found in usage_metadata or response_metadata for agent_node.")
 
-        current_token_events = state.get("token_usage_events", [])
+        # current_token_events = state.get("token_usage_events", [])
         if total_tokens > 0 or prompt_tokens > 0 or completion_tokens > 0:
             token_event_data = TokenUsageData(
                 call_type=call_type,
@@ -236,18 +237,20 @@ class GraphFactory:
                 timestamp=datetime.now(timezone.utc).isoformat()
             )
             self.logger.info(f"Token usage for {call_type}: {token_event_data.total_tokens} tokens recorded.")
-            current_token_events.append(token_event_data)
-            return current_token_events
+            # state["token_usage_events"].append(token_event_data)
+            state.get("token_usage_events", []).append(token_event_data)
+            # current_token_events.append(token_event_data)
+            # return current_token_events
 
     async def _agent_node(self, state: AgentState, config: dict):
         """Agent node logic, adapted to be a method of GraphFactory."""
         self.logger.info(f"---CALL AGENT NODE (Agent ID: {self.agent_id})---")
 
         messages = state["messages"]
-        node_system_prompt = state["system_prompt"] # System prompt from state (can be dynamic)
-        node_temperature = state["temperature"]
-        node_model_id = state["model_id"]
-        node_provider = state["provider"]
+        node_system_prompt = self.static_state_config.get("system_prompt") # System prompt from state (can be dynamic)
+        node_temperature = self.static_state_config.get("temperature", 0.1) # Temperature from state
+        node_model_id = self.static_state_config.get("model_id", "gpt-4o-mini") # Model ID from state
+        node_provider = self.static_state_config.get("provider", "OpenAI") # Provider from state
 
         moscow_tz = timezone(timedelta(hours=3))
         current_time_str = datetime.now(moscow_tz).isoformat()
@@ -272,7 +275,8 @@ class GraphFactory:
 
         if not model:
             error_message = AIMessage(content=f"Sorry, an error occurred: Could not initialize LLM for provider {node_provider} in agent_node.")
-            return {"messages": [error_message], "token_usage_events": state.get("token_usage_events", [])}
+            # return {"messages": [error_message], "token_usage_events": state.get("token_usage_events", [])}
+            return {"messages": [error_message]}
 
         if self.configured_tools_list:
              valid_tools_for_binding = [t for t in self.configured_tools_list if t is not None]
@@ -303,7 +307,8 @@ class GraphFactory:
             if hasattr(response, 'usage_metadata'):
                 self.logger.info(f"Agent node usage_metadata: {response.usage_metadata}")
 
-            current_token_events = self._get_tokens(state, "agent_llm", node_model_id, response)
+            # current_token_events = self._get_tokens(state, "agent_llm", node_model_id, response)
+            self._get_tokens(state, "agent_llm", node_model_id, response)
 
             # Tool call recovery logic from original agent_node
             if hasattr(response, 'invalid_tool_calls') and response.invalid_tool_calls and \
@@ -361,11 +366,13 @@ class GraphFactory:
                     response.invalid_tool_calls = remaining_invalid_calls
                     self.logger.info(f"Successfully recovered/added {len(recovered_calls)} tool_calls. New tool_calls: {response.tool_calls}")
 
-            return {"messages": [response], "token_usage_events": current_token_events}
+            # return {"messages": [response], "token_usage_events": current_token_events}
+            return {"messages": [response]}
         except Exception as e:
             self.logger.error(f"Error invoking agent model in _agent_node: {e}", exc_info=True)
             error_message = AIMessage(content=f"Sorry, an error occurred in agent processing: {e}")
-            return {"messages": [error_message], "token_usage_events": state.get("token_usage_events", [])}
+            # return {"messages": [error_message], "token_usage_events": state.get("token_usage_events", [])}
+            return {"messages": [error_message]}
 
     async def _grade_documents_node(self, state: AgentState) -> Dict[str, Any]:
         """Grades documents for relevance to the question."""
@@ -377,9 +384,9 @@ class GraphFactory:
 
         messages = state["messages"]
         current_question = state["question"]
-        node_model_id = state["model_id"] 
-        node_datastore_tool_names = state["datastore_tool_names"] # This comes from static_state_config initially
-        node_provider = state["provider"]
+        node_model_id = self.static_state_config.get("model_id", "gpt-4o-mini") # Model ID from state
+        node_datastore_tool_names = self.static_state_config.get("datastore_tool_names", set()) # Datastore tool names from state
+        node_provider = self.static_state_config.get("provider", "OpenAI") # Provider from state
         node_temperature = 0.0 # Grading typically uses temperature 0
 
         self.logger.info(f"Grading documents for question: '{current_question}'")
@@ -391,7 +398,8 @@ class GraphFactory:
                 f"from a configured datastore tool. Last message: {type(last_message)}, name: {getattr(last_message, 'name', 'N/A')}. "
                 f"Expected one of: {node_datastore_tool_names}"
             )
-            return {"documents": [], "question": current_question, "token_usage_events": state.get("token_usage_events", [])}
+            # return {"documents": [], "question": current_question, "token_usage_events": state.get("token_usage_events", [])}
+            return {"documents": [], "question": current_question}
 
         # Assuming documents are split by a specific separator in the ToolMessage content
         # The original code used "\\n---RETRIEVER_DOC---\\n"
@@ -404,7 +412,8 @@ class GraphFactory:
             
         if not docs or all(not d.strip() for d in docs):
             self.logger.info("No documents retrieved or all documents are empty.")
-            return {"documents": [], "question": current_question, "token_usage_events": state.get("token_usage_events", [])}
+            # return {"documents": [], "question": current_question, "token_usage_events": state.get("token_usage_events", [])}
+            return {"documents": [], "question": current_question}
 
         prompt = PromptTemplate(
             template="""Вы оцениваете релевантность извлеченного документа для вопроса пользователя. \\n
@@ -425,12 +434,14 @@ class GraphFactory:
 
         if not model:
             self.logger.error(f"Could not initialize LLM for grading (provider: {node_provider}). Returning no documents.")
-            return {"documents": [], "question": current_question, "token_usage_events": state.get("token_usage_events", [])}
+            # return {"documents": [], "question": current_question, "token_usage_events": state.get("token_usage_events", [])}
+            return {"documents": [], "question": current_question}
             
         llm_with_tool = model.with_structured_output(Grade, include_raw=True)
 
         async def process_doc(doc_content: str) -> Tuple[str, str, Optional[TokenUsageData]]:
             chain = prompt | llm_with_tool
+
             token_event_for_doc = None
             try:
                 # Ensure doc_content is not empty or just whitespace
@@ -517,13 +528,13 @@ class GraphFactory:
         original_question = state["original_question"]
         messages = state["messages"]
         rewrite_count = state.get("rewrite_count", 0)
-        node_max_rewrites = state["max_rewrites"]
-        node_model_id = state["model_id"]
-        node_provider = state["provider"]
+        node_max_rewrites = self.static_state_config.get("max_rewrites", 3) # Max rewrites from state
+        node_model_id = self.static_state_config.get("model_id", "gpt-4o-mini") # Model ID from state
+        node_provider = self.static_state_config.get("provider", "OpenAI") # Provider from state
         node_temperature = 0.1
 
         self.logger.info(f"Rewrite attempt {rewrite_count + 1}/{node_max_rewrites} for question: '{original_question}'")
-        current_token_events = state.get("token_usage_events", [])
+        # current_token_events = state.get("token_usage_events", [])
 
         if rewrite_count < node_max_rewrites:
             self.logger.info(f"Rewriting original question: {original_question}")
@@ -565,7 +576,8 @@ Rephrased Question:"""
                     
                     self.logger.info(f"Rewritten question: {rewritten_question}")
 
-                    current_token_events = self._get_tokens(state, "rewrite_llm", node_model_id, response)
+                    # current_token_events = self._get_tokens(state, "rewrite_llm", node_model_id, response)
+                    self._get_tokens(state, "rewrite_llm", node_model_id, response)
 
                     if not rewritten_question or rewritten_question.lower() == original_question.lower():
                         self.logger.warning("Rewriting resulted in empty or identical question. Stopping rewrite.")
@@ -579,7 +591,7 @@ Rephrased Question:"""
                                                          # Original graph structure implies agent is called next.
                             "question": rewritten_question, 
                             "rewrite_count": rewrite_count + 1,
-                            "token_usage_events": current_token_events
+                            # "token_usage_events": current_token_events
                         }
                 except Exception as e:
                     self.logger.error(f"Error during question rewriting: {e}", exc_info=True)
@@ -591,7 +603,7 @@ Rephrased Question:"""
         return {
             "messages": [no_answer_message], # This becomes the final message.
             "rewrite_count": 0, # Reset count, though this branch likely ends the graph for this turn.
-            "token_usage_events": current_token_events
+            # "token_usage_events": current_token_events
         }
 
     async def _generate_node(self, state: AgentState) -> Dict[str, Any]:
@@ -601,10 +613,10 @@ Rephrased Question:"""
         messages = state["messages"]
         current_question = state["question"]
         documents = state["documents"]
-        node_model_id = state["model_id"]
-        node_temperature = state["temperature"]
-        node_provider = state["provider"]
-        current_token_events = state.get("token_usage_events", [])
+        node_model_id = self.static_state_config.get("model_id", "gpt-4o-mini") # Model ID from state
+        node_temperature = self.static_state_config.get("temperature", 0.1) # Temperature from state
+        node_provider = self.static_state_config.get("provider", "OpenAI") # Provider from state
+        # current_token_events = state.get("token_usage_events", [])
 
         if not documents:
             self.logger.warning("Generate node called with no relevant documents.")
@@ -612,10 +624,12 @@ Rephrased Question:"""
             if messages and isinstance(messages[-1], AIMessage) and \
                "не смог найти релевантную информацию по вашему запросу даже после его уточнения" in messages[-1].content:
                 self.logger.info("Passing through 'max rewrites reached' message from rewrite_node.")
-                return {"messages": [messages[-1]], "token_usage_events": current_token_events} # Pass existing message
+                # return {"messages": [messages[-1]], "token_usage_events": current_token_events} # Pass existing message
+                return {"messages": [messages[-1]]} # Pass existing message
             else:
                 no_docs_response = AIMessage(content="К сожалению, я не смог найти информацию по вашему запросу в доступных источниках.")
-                return {"messages": [no_docs_response], "token_usage_events": current_token_events}
+                # return {"messages": [no_docs_response], "token_usage_events": current_token_events}
+                return {"messages": [no_docs_response]}
 
         self.logger.info(f"Generating answer for question: '{current_question}' using {len(documents)} documents.")
         documents_str = "\\n\\n".join(documents)
@@ -648,24 +662,28 @@ Rephrased Question:"""
         if not llm:
             self.logger.error(f"Could not initialize LLM for generation (provider: {node_provider}).")
             error_response = AIMessage(content=f"An error occurred: Could not initialize LLM for provider {node_provider}.")
-            return {"messages": [error_response], "token_usage_events": current_token_events}
+            # return {"messages": [error_response], "token_usage_events": current_token_events}
+            return {"messages": [error_response]}
 
         rag_chain = prompt | llm
         try:
             response = await rag_chain.ainvoke({"context": documents_str, "question": current_question})
 
-            current_token_events = self._get_tokens(state, "generation_llm", node_model_id, response)
+            # current_token_events = self._get_tokens(state, "generation_llm", node_model_id, response)
+            self._get_tokens(state, "generation_llm", node_model_id, response)
 
             final_response_message = response
             if not isinstance(response, BaseMessage):
                  self.logger.warning(f"Generate node got non-BaseMessage response: {type(response)}. Converting to AIMessage.")
                  final_response_message = AIMessage(content=str(response))
                  
-            return {"messages": [final_response_message], "token_usage_events": current_token_events}
+            # return {"messages": [final_response_message], "token_usage_events": current_token_events}
+            return {"messages": [final_response_message]}
         except Exception as e:
             self.logger.error(f"Error during generation: {e}", exc_info=True)
             error_response = AIMessage(content="An error occurred while generating the response.")
-            return {"messages": [error_response], "token_usage_events": current_token_events}
+            # return {"messages": [error_response], "token_usage_events": current_token_events}
+            return {"messages": [error_response]}
 
     async def _decide_to_generate_edge(self, state: AgentState) -> Literal["generate", "rewrite"]:
         """Decides whether to generate an answer or rewrite the question."""
