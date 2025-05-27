@@ -14,6 +14,7 @@ from redis import exceptions as redis_exceptions
 
 from app.agent_runner.langgraph.factory import create_agent_app # Updated import
 from app.agent_runner.langgraph.models import TokenUsageData # Updated import
+from app.agent_runner.common.config_mixin import AgentConfigMixin # Added import
 from app.db.alchemy_models import ChatMessageDB, SenderType
 from app.db.crud.chat_crud import db_get_recent_chat_history
 from app.core.config import settings
@@ -21,7 +22,7 @@ from app.core.base.service_component import ServiceComponentBase # Added import
 
 # --- Helper Functions (some might become methods or stay as utilities) ---
 
-async def fetch_config_static(config_url: str, logger: logging.Logger) -> Optional[Dict]:
+async def fetch_config(config_url: str, logger: logging.Logger) -> Optional[Dict]:
     """Fetches agent configuration from the management service using httpx."""
     logger.info(f"Fetching configuration from: {config_url}")
     try:
@@ -42,7 +43,7 @@ async def fetch_config_static(config_url: str, logger: logging.Logger) -> Option
     return None
 
 
-def convert_db_history_to_langchain(db_messages: List[ChatMessageDB], logger: logging.Logger) -> List[BaseMessage]:
+def convert_db_to_langchain(db_messages: List[ChatMessageDB], logger: logging.Logger) -> List[BaseMessage]:
     """Converts messages from DB format (ChatMessageDB) to LangChain BaseMessage list."""
     converted = []
     if not ChatMessageDB or not SenderType:
@@ -63,7 +64,7 @@ def convert_db_history_to_langchain(db_messages: List[ChatMessageDB], logger: lo
     return converted
 
 
-class AgentRunner(ServiceComponentBase): # Changed inheritance
+class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMixin inheritance
     """
     Управляет жизненным циклом и выполнением одного экземпляра агента.
     Наследуется от ServiceComponentBase для унифицированного управления состоянием и жизненным циклом.
@@ -84,8 +85,6 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         logger (logging.LoggerAdapter): Адаптер логгера для журналирования. (Установлен в ServiceComponentBase)
         agent_config (Optional[Dict]): Загруженная конфигурация агента.
         agent_app (Optional[Any]): Экземпляр приложения LangGraph агента.
-        # pubsub_handler_task (Optional[asyncio.Task]): Задача asyncio, выполняющая прослушивание Pub/Sub. # Удалено, используется _register_main_task
-        static_state_config (Optional[Dict]): Статическая конфигурация состояния, извлеченная из конфигурации агента.
     """
 
     def __init__(self,
@@ -103,6 +102,9 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         super().__init__(component_id=agent_id,
                          status_key_prefix="agent_status:",
                          logger_adapter=logger_adapter)
+        
+        # Initialize AgentConfigMixin
+        AgentConfigMixin.__init__(self)
 
         self.db_session_factory = db_session_factory
         self._pubsub_channel = f"agent:{self._component_id}:input"
@@ -113,33 +115,32 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         self.config: Optional[Dict] = None
         self.agent_config: Optional[Dict] = None
         self.agent_app: Optional[Any] = None
-        self.static_state_config: Optional[Dict] = None
+        # Конфигурации извлекаются напрямую из agent_config по мере необходимости
 
         self.logger.info(f"AgentRunner for agent {self._component_id} initialized. PID: {os.getpid()}")
 
 
-    async def _load_and_prepare_config(self) -> bool:
+    async def _load_config(self) -> bool:
         """
-        Загружает конфигурацию агента и подготавливает необходимые параметры.
+        Загружает конфигурацию агента.
 
         Returns:
-            bool: True, если конфигурация успешно загружена и подготовлена, иначе False.
+            bool: True, если конфигурация успешно загружена, иначе False.
         """
         self.config_url = f"http://{settings.MANAGER_HOST}:{settings.MANAGER_PORT}{settings.API_V1_STR}/agents/{self._component_id}/config"
 
         self.logger.info(f"Fetching configuration from {self.config_url}...")
-        self.agent_config = await fetch_config_static(self.config_url, self.logger)
+        self.agent_config = await fetch_config(self.config_url, self.logger)
         if not self.agent_config:
             self.logger.error(f"Failed to fetch or invalid configuration from {self.config_url}.")
             return False
 
-        # Extract static state config if available
-        self.static_state_config = {}
+        # Extract any additional config if needed in future
         self.logger.info(f"Agent configuration loaded and prepared successfully.")
         return True
 
 
-    async def _setup_langgraph_app(self) -> bool:
+    async def _setup_app(self) -> bool:
         """
         Создает и настраивает приложение LangGraph на основе загруженной конфигурации.
 
@@ -148,8 +149,8 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         """
         self.logger.info(f"Creating LangGraph application...")
         try:
-            self.agent_app, static_state_config = create_agent_app(self.agent_config, self._component_id, self.logger)
-            self.static_state_config = static_state_config # Store for use in _process_message
+            self.agent_app = create_agent_app(self.agent_config, self._component_id, self.logger)
+            # Больше не используется static_state_config, конфигурации извлекаются напрямую из agent_config
         except Exception as e:
             self.logger.error(f"Failed to create LangGraph application: {e}", exc_info=True)
             return False
@@ -169,7 +170,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         4. Определяет глубину истории контекста на основе конфигурации агента.
         5. Если включена работа с БД, сохраняет сообщение пользователя в БД.
         6. Формирует входные данные для графа LangGraph, включая пользовательский ввод и статические параметры
-           (system_prompt, temperature, model_id, provider) из `self.static_state_config`.
+           (system_prompt, temperature, model_id, provider), которые извлекаются из конфигурации агента.
         7. Асинхронно вызывает основной поток (stream) агента `self.agent_app.astream`.
         8. Обрабатывает поток событий от агента:
             - Извлекает текстовое содержимое ответа агента (AIMessage).
@@ -201,33 +202,33 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             payload = json.loads(data_str)
             self.logger.info(f"Processing message for chat_id: {payload.get('chat_id')}")
 
-            user_input = payload.get("text")
+            user_text = payload.get("text")
             chat_id = payload.get("chat_id")
             user_data = payload.get("user_data", {})
             channel = payload.get("channel", "unknown")
-            platform_user_id = payload.get("platform_user_id")
+            platform_id = payload.get("platform_user_id")
 
             interaction_id = str(uuid.uuid4())
             self.logger.debug(f"Generated InteractionID: {interaction_id} for Thread: {chat_id}")
 
-            if not chat_id or user_input is None:
+            if not chat_id or user_text is None:
                 self.logger.warning(f"Missing 'text' or 'chat_id' in Redis payload: {payload}")
                 return
 
             await self._save_history(
                 sender_type="user",
                 thread_id=chat_id,
-                content=user_input,
+                content=user_text,
                 channel=channel,
                 interaction_id=interaction_id
             )
 
 
-            history_messages_db = await self._get_history(thread_id=chat_id)
+            history_db = await self._get_history(thread_id=chat_id)
 
-            final_response_content, final_message_object = await self._send_agent(
-                history_messages_db=history_messages_db,
-                user_input=user_input,
+            response_content, final_message = await self._invoke_agent(
+                history_db=history_db,
+                user_input=user_text,
                 user_data=user_data,
                 thread_id=chat_id,
                 channel=channel,
@@ -237,19 +238,19 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             await self._save_history(
                 sender_type="agent",
                 thread_id=chat_id,
-                content=final_response_content,
+                content=response_content,
                 channel=channel,
                 interaction_id=interaction_id
             )
 
-            await self._save_token_usage(
+            await self._save_tokens(
                 interaction_id=interaction_id,
                 thread_id=chat_id
             )
 
             response_payload = {
                 "chat_id": chat_id,
-                "response": final_response_content,
+                "response": response_content,
                 "channel": channel
             }
 
@@ -264,8 +265,8 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             self.logger.error(f"Error processing PubSub message: {e}", exc_info=True)
             # Optionally, publish an error response
             if 'payload' in locals() and 'chat_id' in payload and 'interaction_id' in payload:
-                error_response_channel = f"agent_responses:{payload['chat_id']}"
-                error_payload = {
+                error_channel = f"agent_responses:{payload['chat_id']}"
+                error_data = {
                     "chat_id": payload['chat_id'],
                     "agent_id": self._component_id,
                     "interaction_id": payload['interaction_id'],
@@ -275,13 +276,13 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
 
                 try:
                     # Changed from rpush to publish
-                    await redis_cli.publish(error_response_channel, json.dumps(error_payload).encode('utf-8'))
-                    self.logger.info(f"Published error notification to {error_response_channel}")
+                    await redis_cli.publish(error_channel, json.dumps(error_data).encode('utf-8'))
+                    self.logger.info(f"Published error notification to {error_channel}")
                 except Exception as pub_err:
                     self.logger.error(f"Failed to publish error notification: {pub_err}", exc_info=True)
 
 
-    async def _save_token_usage(
+    async def _save_tokens(
             self,
             interaction_id: str,
             thread_id: str
@@ -297,20 +298,20 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             return
         
         # Получение финального состояния графа ---
-        retrieved_final_state: Optional[Dict[str, Any]] = None
+        final_state: Optional[Dict[str, Any]] = None
         try:
-            final_graph_state_snapshot = self.agent_app.get_state(self.config)
-            if final_graph_state_snapshot:
-                retrieved_final_state = final_graph_state_snapshot.values
+            graph_state = self.agent_app.get_state(self.config)
+            if graph_state:
+                final_state = graph_state.values
                 self.logger.debug(f"Retrieved final graph state snapshot for InteractionID {interaction_id}")
             else:
                 self.logger.warning(f"self.agent_app.get_state(config) returned None for InteractionID {interaction_id}")
         except Exception as e_get_state:
             self.logger.error(f"Error calling self.agent_app.get_state(config) for InteractionID {interaction_id}: {e_get_state}", exc_info=True)
 
-        # Используем retrieved_final_state ---
-        if retrieved_final_state and "token_usage_events" in retrieved_final_state:
-            token_events: List[TokenUsageData] = retrieved_final_state["token_usage_events"]
+        # Используем final_state ---
+        if final_state and "token_usage_events" in final_state:
+            token_events: List[TokenUsageData] = final_state["token_usage_events"]
             if token_events:
                 self.logger.info(f"Found {len(token_events)} token usage events for InteractionID: {interaction_id}.")
                 for token_data in token_events:
@@ -335,12 +336,12 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             else:
                 self.logger.info(f"No token usage events recorded in retrieved final state for InteractionID: {interaction_id}.")
         else:
-            self.logger.warning(f"Could not retrieve token_usage_events from final graph state for InteractionID: {interaction_id}. State: {retrieved_final_state is not None}")
+            self.logger.warning(f"Could not retrieve token_usage_events from final graph state for InteractionID: {interaction_id}. State: {final_state is not None}")
 
 
-    async def _send_agent(
+    async def _invoke_agent(
             self,
-            history_messages_db: List[BaseMessage],
+            history_db: List[BaseMessage],
             user_input: str,
             user_data: Dict[str, Any],
             thread_id: str,
@@ -350,22 +351,22 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         """
         """
         graph_input = {
-            "messages": history_messages_db + [HumanMessage(content=user_input)],
+            "messages": history_db + [HumanMessage(content=user_input)],
             "user_data": user_data,
             "channel": channel,
             "original_question": user_input,
             "question": user_input,
             "rewrite_count": 0,
             "documents": [],
-            # "current_interaction_id": interaction_id,
+            # "interaction_id": interaction_id,
             "token_usage_events": [],
-            # **self.static_state_config
+            # Конфигурация извлекается напрямую из agent_config
         }
         self.config = {"configurable": {"thread_id": str(thread_id), "agent_id": self._component_id}}
 
-        self.logger.info(f"Invoking graph for thread_id: {thread_id} (Initial history messages: {len(history_messages_db)})")
-        final_response_content = "No response generated."
-        final_message_object = None
+        self.logger.info(f"Invoking graph for thread_id: {thread_id} (Initial history messages: {len(history_db)})")
+        response_content = "No response generated."
+        final_message = None
 
         async for output in self.agent_app.astream(graph_input, self.config, stream_mode="updates"):
             if not self._running or self.needs_restart:
@@ -378,12 +379,12 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                     if "messages" in value and value["messages"]:
                         last_msg = value["messages"][-1]
                         if isinstance(last_msg, AIMessage):
-                            final_response_content = last_msg.content
-                            final_message_object = last_msg
+                            response_content = last_msg.content
+                            final_message = last_msg
 
-        self.logger.info(f"Graph execution finished. Final response: {final_response_content[:100]}...")
+        self.logger.info(f"Graph execution finished. Final response: {response_content[:100]}...")
 
-        return final_response_content, final_message_object
+        return response_content, final_message
 
 
     async def _get_history(
@@ -395,8 +396,8 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         Возвращает список сообщений в формате LangChain BaseMessage.
         Если история не найдена, возвращает пустой список.
         """
-        can_load_history = db_get_recent_chat_history is not None and self.db_session_factory is not None and ChatMessageDB is not None and SenderType is not None
-        if not can_load_history:
+        can_load = db_get_recent_chat_history is not None and self.db_session_factory is not None and ChatMessageDB is not None and SenderType is not None
+        if not can_load:
             self.logger.warning("Database history loading is disabled (CRUD, DB session factory, ChatMessageDB, or SenderType not available).")
 
         try:
@@ -405,16 +406,18 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             self.logger.error(f"Redis client not available for handling pubsub message: {e}")
             return
 
-        enable_context_memory = self.static_state_config.get("enableContextMemory", True)
-        history_limit = self.static_state_config.get("contextMemoryDepth", 10)
+        # Use centralized configuration method
+        model_config = self._get_model_config()
+        enable_memory = model_config["enable_context_memory"]
+        history_limit = model_config["context_memory_depth"]
 
-        if not enable_context_memory:
+        if not enable_memory:
             self.logger.info(f"Context memory is disabled by agent config. History will not be loaded with depth.")
-            context_memory_depth = 0
+            memory_depth = 0
         else:
-            self.logger.info(f"Using history limit: {history_limit} (enabled: {enable_context_memory}, configured depth: {history_limit})")
-            loaded_messages: List[BaseMessage] = []
-            if can_load_history and history_limit > 0:
+            self.logger.info(f"Using history limit: {history_limit} (enabled: {enable_memory}, configured depth: {history_limit})")
+            loaded_msgs: List[BaseMessage] = []
+            if can_load and history_limit > 0:
                 try:
                     is_loaded = await redis_cli.sismember(self.loaded_threads_key, thread_id)
                     if not is_loaded:
@@ -426,13 +429,13 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
                                 thread_id=thread_id,
                                 limit=history_limit
                             )
-                            loaded_messages = convert_db_history_to_langchain(history_from_db, self.logger)
+                            loaded_msgs = convert_db_to_langchain(history_from_db, self.logger)
 
-                        self.logger.info(f"Loaded {len(loaded_messages)} messages from DB for thread '{thread_id}'.")
+                        self.logger.info(f"Loaded {len(loaded_msgs)} messages from DB for thread '{thread_id}'.")
 
                         await redis_cli.sadd(self.loaded_threads_key, thread_id)
                         self.logger.info(f"Added thread '{thread_id}' to cache '{self.loaded_threads_key}'.")
-                        return loaded_messages
+                        return loaded_msgs
                     else:
                         self.logger.info(f"Thread '{thread_id}' found in cache '{self.loaded_threads_key}'. Skipping DB load.")
                         return []
@@ -465,7 +468,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             self.logger.error(f"Redis client not available for handling pubsub message: {e}")
             return
         
-        message_to_save = {
+        message_data = {
             "agent_id": self._component_id,
             "thread_id": thread_id,
             "sender_type": sender_type,
@@ -475,7 +478,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             "interaction_id": interaction_id
         }
         try:
-            await redis_cli.lpush(settings.REDIS_HISTORY_QUEUE_NAME, json.dumps(message_to_save))
+            await redis_cli.lpush(settings.REDIS_HISTORY_QUEUE_NAME, json.dumps(message_data))
             self.logger.info(f"Queued {sender_type} message for history (Thread: {thread_id}, InteractionID: {interaction_id})")
         except redis_exceptions.RedisError as e:
             self.logger.error(f"Failed to queue message for history (Thread: {thread_id}): {e}", exc_info=True)
@@ -492,12 +495,12 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         self.logger.info(f"AgentRunner setup started.")
         await super().setup() # This calls ServiceComponentBase.setup() which handles StatusUpdater, Redis init, and clears needs_restart and _main_tasks
 
-        if not await self._load_and_prepare_config():
+        if not await self._load_config():
             self.logger.critical(f"Failed to load or prepare agent configuration. AgentRunner cannot start.")
             await self.mark_as_error(error_message="Failed to load agent config")
             raise RuntimeError("Agent configuration failed to load.")
 
-        if not await self._setup_langgraph_app():
+        if not await self._setup_app():
             self.logger.critical(f"Failed to setup LangGraph application. AgentRunner cannot start.")
             await self.mark_as_error(error_message="Failed to setup LangGraph app")
             raise RuntimeError("LangGraph application setup failed.")
@@ -572,7 +575,7 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
         self.agent_config = None
         self.config = None
         self.config_url = None
-        self.static_state_config = None
+        # Сброс состояния агента (конфигурация извлекается напрямую из agent_config)
         self.pubsub_handler_task = None
 
         await super().cleanup()
@@ -594,9 +597,4 @@ class AgentRunner(ServiceComponentBase): # Changed inheritance
             error_type="StatusUpdateError"
         )
 
-# Helper function convert_db_history_to_langchain_static can remain as is or be moved
-# into the class if it makes more sense contextually.
-# For now, it's kept as a static helper.
 
-# Removed _run_signal_handler, as shutdown is handled by RunnableComponent.initiate_shutdown()
-# The main `run` method from RunnableComponent (via ServiceComponentBase) orchestrates setup, run_loop, cleanup.

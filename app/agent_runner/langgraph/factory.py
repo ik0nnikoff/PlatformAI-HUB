@@ -14,27 +14,32 @@ from langgraph.checkpoint.memory import MemorySaver
 from .models import AgentState, TokenUsageData
 from .tools import configure_tools
 from app.core.config import settings
+from app.agent_runner.common.config_mixin import AgentConfigMixin
 
 # Global flag for graceful shutdown (if needed by runner_main that uses this factory)
 # This might be re-evaluated if it's better managed by the AgentRunner instance
 running = True 
 
-class GraphFactory:
+class GraphFactory(AgentConfigMixin):
+    """
+    Фабрика для создания и настройки графа агента с использованием LangGraph.
+    Наследует от AgentConfigMixin для централизованного доступа к конфигурации.
+    """
     def __init__(self, agent_config: Dict, agent_id: str, logger: logging.LoggerAdapter):
+        super().__init__()  # Initialize AgentConfigMixin
         self.agent_config = agent_config
         self.agent_id = agent_id
         self.logger = logger
         
         # Эти атрибуты будут инициализированы в соответствующих методах
         self.llm: Optional[ChatOpenAI] = None
-        self.configured_tools_list: list = []
-        self.safe_tools_list: list = []
-        self.datastore_tool_list: list = []
-        self.datastore_tool_names: set = set()
+        self.tools: list = []
+        self.safe_tools: list = []
+        self.datastore_tools: list = []
+        self.datastore_names: set = set()
         self.safe_tool_names: set = set()
         self.max_rewrites: int = 3
         self.system_prompt: str = ""
-        self.static_state_config: dict = {}
 
         # Configure the main LLM instance upon initialization
         self._configure_main_llm()
@@ -45,28 +50,19 @@ class GraphFactory:
         This is typically called once during factory initialization.
         Nodes requiring LLMs with different parameters should use _create_llm_instance.
         """
-        config_data = self.agent_config.get("config", {})
-        simple_config = config_data.get("simple", {})
-        settings_data = simple_config.get("settings", {})
-        model_settings = settings_data.get("model", {})
-
-        provider = model_settings.get("provider", "OpenAI")
-        model_name = model_settings.get("modelId", "gpt-4o-mini")
-        temperature = model_settings.get("temperature", 0.1)
-        # Streaming for the main LLM can be a default, or configured if needed.
-        # For now, let's assume the main agent LLM might use streaming.
-        streaming = model_settings.get("streaming", True) 
+        # Use centralized configuration method
+        model_config = self._get_model_config()
 
         self.llm = self._create_llm_instance(
-            provider=provider,
-            model_name=model_name,
-            temperature=temperature,
-            streaming=streaming # Pass streaming to the creator method
+            provider=model_config["provider"],
+            model_name=model_config["model_id"],
+            temperature=model_config["temperature"],
+            streaming=model_config["streaming"]
         )
         if self.llm:
-            self.logger.info(f"Main LLM configured: {model_name} via {provider}")
+            self.logger.info(f"Main LLM configured: {model_config['model_id']} via {model_config['provider']}")
         else:
-            self.logger.error(f"Failed to configure main LLM: {model_name} via {provider}")
+            self.logger.error(f"Failed to configure main LLM: {model_config['model_id']} via {model_config['provider']}")
 
     def _create_llm_instance(
         self, 
@@ -117,13 +113,13 @@ class GraphFactory:
             
             if is_gemini:
                 logger_to_use.info("Applying safety settings for Gemini model via OpenRouter.")
-                default_safety_settings = [
+                safety_settings = [
                     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
                     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
                     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
                     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
                 ]
-                extra_body_kwargs["safety_settings"] = default_safety_settings
+                extra_body_kwargs["safety_settings"] = safety_settings
                 logger_to_use.info(f"Added Gemini safety settings (using snake_case key 'safety_settings'): {extra_body_kwargs.get('safety_settings')}")
 
             return ChatOpenAI(
@@ -146,27 +142,27 @@ class GraphFactory:
         """
         try:
             (
-                self.configured_tools_list,
-                self.safe_tools_list,
-                self.datastore_tool_list, # Added to capture this specific list
+                self.tools,
+                self.safe_tools,
+                self.datastore_tools, # Added to capture this specific list
                 self.datastore_tool_names,
                 self.max_rewrites,
             ) = configure_tools(self.agent_config, self.agent_id)
             
-            self.safe_tool_names = {t.name for t in self.safe_tools_list if t} # Ensure t is not None
+            self.safe_tool_names = {t.name for t in self.safe_tools if t} # Ensure t is not None
             self.logger.info(
-                f"Tools configured: {len(self.configured_tools_list)} total, "
-                f"{len(self.safe_tools_list)} safe, "
-                f"{len(self.datastore_tool_list)} datastore tools. "
+                f"Tools configured: {len(self.tools)} total, "
+                f"{len(self.safe_tools)} safe, "
+                f"{len(self.datastore_tools)} datastore tools. "
                 f"Max rewrites: {self.max_rewrites}."
             )
         except Exception as e:
             self.logger.error(f"Failed during tool configuration: {e}", exc_info=True)
             # Reset tool-related attributes to safe defaults
-            self.configured_tools_list = []
-            self.safe_tools_list = []
-            self.datastore_tool_list = []
-            self.datastore_tool_names = set()
+            self.tools = []
+            self.safe_tools = []
+            self.datastore_tools = []
+            self.datastore_names = set()
             self.safe_tool_names = set()
             # self.max_rewrites can retain its default or be set to a safe value like 0
             # raise ValueError(f"Failed during tool configuration: {e}") # Optionally re-raise
@@ -176,36 +172,43 @@ class GraphFactory:
         Constructs the system prompt based on agent_config and configured tools.
         The final prompt is stored in self.system_prompt.
         """
-        config_data = self.agent_config.get("config", {})
-        simple_config = config_data.get("simple", {})
-        settings_data = simple_config.get("settings", {})
-        model_settings = settings_data.get("model", {})
+        # Use centralized configuration method
+        model_config = self._get_model_config()
 
-        system_prompt_template = model_settings.get("systemPrompt", "You are a helpful AI assistant.")
-        limit_to_kb = model_settings.get("limitToKnowledgeBase", False)
-        answer_in_user_lang = model_settings.get("answerInUserLanguage", True)
-        use_markdown = model_settings.get("useMarkdown", True)
+        prompt_template = model_config["system_prompt"]
+        limit_to_kb = model_config["limit_to_kb"]
+        answer_in_user_lang = model_config["answer_in_user_lang"]
+        use_markdown = model_config["use_markdown"]
 
-        final_system_prompt = system_prompt_template
+        final_prompt = prompt_template
 
         # self.datastore_tool_names should be populated by _configure_tools before this method is called
-        if limit_to_kb and self.datastore_tool_names:
-            final_system_prompt += "\nAnswer ONLY from the provided context from the knowledge base. If the answer is not in the context, say you don't know."
+        if limit_to_kb and self.datastore_names:
+            final_prompt += "\nAnswer ONLY from the provided context from the knowledge base. If the answer is not in the context, say you don't know."
         
         if answer_in_user_lang:
-            final_system_prompt += "\nAnswer in the same language as the user's question."
+            final_prompt += "\nAnswer in the same language as the user's question."
         
         if use_markdown:
-            final_system_prompt += "\nFormat your responses using Markdown syntax where appropriate. If you include code blocks, specify the language."
+            final_prompt += "\nFormat your responses using Markdown syntax where appropriate. If you include code blocks, specify the language."
         
-        self.system_prompt = final_system_prompt
+        self.system_prompt = final_prompt
         self.logger.debug(f"System prompt constructed: {self.system_prompt}")
 
-    # def _get_tokens(self, state: AgentState, call_type: str, node_model_id: str, response: BaseMessage ) -> List[TokenUsageData]:
-    def _get_tokens(self, state: AgentState, call_type: str, node_model_id: str, response: BaseMessage ) -> None:
-        token_event_data = None
+    def _extract_token_data(self, response: BaseMessage, call_type: str, node_model_id: str) -> Optional[TokenUsageData]:
+        """
+        Извлекает данные об использовании токенов из ответа модели и возвращает TokenUsageData объект.
+        
+        Args:
+            response: Ответ от модели (BaseMessage)
+            call_type: Тип вызова для логирования
+            node_model_id: ID модели по умолчанию
+            
+        Returns:
+            TokenUsageData объект или None если токены не найдены
+        """
         prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
-        model_name_from_meta = node_model_id
+        model_meta = node_model_id
 
         if hasattr(response, 'usage_metadata') and response.usage_metadata:
             usage_meta = response.usage_metadata
@@ -214,7 +217,7 @@ class GraphFactory:
             total_tokens = usage_meta.get('total_tokens', 0)
             self.logger.info(f"Token usage from usage_metadata: P:{prompt_tokens} C:{completion_tokens} T:{total_tokens}")
             if hasattr(response, 'response_metadata') and response.response_metadata and response.response_metadata.get('model_name'):
-                model_name_from_meta = response.response_metadata['model_name']
+                model_meta = response.response_metadata['model_name']
         elif hasattr(response, 'response_metadata') and response.response_metadata and 'token_usage' in response.response_metadata:
             usage = response.response_metadata['token_usage']
             prompt_tokens = usage.get('prompt_tokens', 0)
@@ -222,72 +225,50 @@ class GraphFactory:
             total_tokens = usage.get('total_tokens', 0)
             self.logger.info(f"Token usage from response_metadata['token_usage']: P:{prompt_tokens} C:{completion_tokens} T:{total_tokens}")
             if response.response_metadata.get('model_name'):
-                model_name_from_meta = response.response_metadata['model_name']
+                model_meta = response.response_metadata['model_name']
         else:
-            self.logger.warning("Token usage data not found in usage_metadata or response_metadata for agent_node.")
+            self.logger.warning(f"Token usage data not found in usage_metadata or response_metadata for {call_type}.")
+            return None
 
-        # current_token_events = state.get("token_usage_events", [])
         if total_tokens > 0 or prompt_tokens > 0 or completion_tokens > 0:
-            token_event_data = TokenUsageData(
+            return TokenUsageData(
                 call_type=call_type,
-                model_id=model_name_from_meta,
+                model_id=model_meta,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=total_tokens,
                 timestamp=datetime.now(timezone.utc).isoformat()
             )
+        return None
+
+    def _get_tokens(self, state: AgentState, call_type: str, node_model_id: str, response: BaseMessage ) -> None:
+        """
+        Извлекает данные об использовании токенов и добавляет их в state.
+        """
+        token_event_data = self._extract_token_data(response, call_type, node_model_id)
+        if token_event_data:
             self.logger.info(f"Token usage for {call_type}: {token_event_data.total_tokens} tokens recorded.")
-            # state["token_usage_events"].append(token_event_data)
             state.get("token_usage_events", []).append(token_event_data)
-            # current_token_events.append(token_event_data)
-            # return current_token_events
 
     async def _agent_node(self, state: AgentState, config: dict):
         """Agent node logic, adapted to be a method of GraphFactory."""
         self.logger.info(f"---CALL AGENT NODE (Agent ID: {self.agent_id})---")
 
-        messages = state["messages"]
-        node_system_prompt = self.static_state_config.get("system_prompt") # System prompt from state (can be dynamic)
-        node_temperature = self.static_state_config.get("temperature", 0.1) # Temperature from state
-        node_model_id = self.static_state_config.get("model_id", "gpt-4o-mini") # Model ID from state
-        node_provider = self.static_state_config.get("provider", "OpenAI") # Provider from state
+        messages = state["messages"]        
+        # Используем централизованные методы для получения конфигурации
+        llm_config = self._get_node_config("agent")
+        node_model_id = llm_config.get("model_name", "gpt-4o-mini")
+        node_system_prompt = self.system_prompt # System prompt from factory
 
-        moscow_tz = timezone(timedelta(hours=3))
-        current_time_str = datetime.now(moscow_tz).isoformat()
-
-        if "{current_time}" not in node_system_prompt:
-             node_system_prompt_with_time = node_system_prompt + "\nТекущее время (Москва): {current_time}"
-        else:
-            node_system_prompt_with_time = node_system_prompt
-        
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", node_system_prompt_with_time),
-            MessagesPlaceholder(variable_name="messages")
-        ]).partial(current_time=current_time_str)
-
-        model = self._create_llm_instance(
-            provider=node_provider,
-            model_name=node_model_id,
-            temperature=node_temperature,
-            streaming=True, 
-            log_adapter_override=self.logger # Use the factory's logger
-        )
+        # Используем централизованные методы для создания промпта и модели
+        prompt = self._create_prompt_with_time(node_system_prompt)
+        model = self._create_node_llm("agent")
 
         if not model:
-            error_message = AIMessage(content=f"Sorry, an error occurred: Could not initialize LLM for provider {node_provider} in agent_node.")
-            # return {"messages": [error_message], "token_usage_events": state.get("token_usage_events", [])}
+            error_message = self._handle_llm_error("agent", llm_config.get("provider", "OpenAI"))
             return {"messages": [error_message]}
 
-        if self.configured_tools_list:
-             valid_tools_for_binding = [t for t in self.configured_tools_list if t is not None]
-             if valid_tools_for_binding:
-                 model = model.bind_tools(valid_tools_for_binding)
-                 self.logger.info(f"Agent model bound to {len(valid_tools_for_binding)} tools.")
-             else:
-                  self.logger.warning("Agent node called but no valid tools were configured after filtering.")
-        else:
-             self.logger.warning("Agent node called but no tools are configured in self.configured_tools_list.")
-
+        model = self._bind_tools_to_model(model)
         chain = prompt | model
 
         response: Optional[AIMessage] = None 
@@ -307,7 +288,7 @@ class GraphFactory:
             if hasattr(response, 'usage_metadata'):
                 self.logger.info(f"Agent node usage_metadata: {response.usage_metadata}")
 
-            # current_token_events = self._get_tokens(state, "agent_llm", node_model_id, response)
+            # Используем централизованный метод учета токенов
             self._get_tokens(state, "agent_llm", node_model_id, response)
 
             # Tool call recovery logic from original agent_node
@@ -316,7 +297,7 @@ class GraphFactory:
                 
                 self.logger.warning(f"Response has invalid_tool_calls but no valid tool_calls. Attempting recovery. Invalid: {response.invalid_tool_calls}")
                 recovered_calls = []
-                remaining_invalid_calls = []
+                remaining_invalid = []
                 for itc_obj in response.invalid_tool_calls:
                     error_value = None
                     itc_dict = {}
@@ -334,7 +315,7 @@ class GraphFactory:
                         }
                     else:
                         self.logger.warning(f"Skipping unrecognized invalid_tool_call object: {itc_obj}")
-                        remaining_invalid_calls.append(itc_obj)
+                        remaining_invalid.append(itc_obj)
                         continue
                     
                     if error_value is None:
@@ -354,16 +335,16 @@ class GraphFactory:
                             self.logger.info(f"Recovered tool call: {call_to_add}")
                         else:
                             self.logger.warning(f"Could not fully recover tool call, missing name or id: {itc_dict}")
-                            remaining_invalid_calls.append(itc_obj)
+                            remaining_invalid.append(itc_obj)
                     else:
-                        remaining_invalid_calls.append(itc_obj)
+                        remaining_invalid.append(itc_obj)
                 
                 if recovered_calls:
                     if not hasattr(response, 'tool_calls') or response.tool_calls is None:
                         response.tool_calls = []
                     
                     response.tool_calls.extend(recovered_calls)
-                    response.invalid_tool_calls = remaining_invalid_calls
+                    response.invalid_tool_calls = remaining_invalid
                     self.logger.info(f"Successfully recovered/added {len(recovered_calls)} tool_calls. New tool_calls: {response.tool_calls}")
 
             # return {"messages": [response], "token_usage_events": current_token_events}
@@ -374,35 +355,31 @@ class GraphFactory:
             # return {"messages": [error_message], "token_usage_events": state.get("token_usage_events", [])}
             return {"messages": [error_message]}
 
-    async def _grade_documents_node(self, state: AgentState) -> Dict[str, Any]:
+    async def _grade_docs_node(self, state: AgentState) -> Dict[str, Any]:
         """Grades documents for relevance to the question."""
         self.logger.info(f"---CHECK RELEVANCE (Agent ID: {self.agent_id})---")
 
-        class Grade(BaseModel): # Renamed from 'grade' to 'Grade' to follow CapWords convention
+        class Grade(BaseModel):
             """Binary score for relevance check."""
             binary_score: str = Field(description="Relevance score 'yes' or 'no'")
 
         messages = state["messages"]
         current_question = state["question"]
-        node_model_id = self.static_state_config.get("model_id", "gpt-4o-mini") # Model ID from state
-        node_datastore_tool_names = self.static_state_config.get("datastore_tool_names", set()) # Datastore tool names from state
-        node_provider = self.static_state_config.get("provider", "OpenAI") # Provider from state
-        node_temperature = 0.0 # Grading typically uses temperature 0
+        llm_config = self._get_node_config("grading")
+        node_model_id = llm_config.get("model_name", "gpt-4o-mini")  # Получаем model_id из конфига
 
         self.logger.info(f"Grading documents for question: '{current_question}'")
 
         last_message = messages[-1] if messages else None
-        if not isinstance(last_message, ToolMessage) or not last_message.name or last_message.name not in node_datastore_tool_names:
+        if not isinstance(last_message, ToolMessage) or not last_message.name or last_message.name not in self.datastore_names:
             self.logger.warning(
                 f"Grade documents called, but last message is not a valid ToolMessage "
                 f"from a configured datastore tool. Last message: {type(last_message)}, name: {getattr(last_message, 'name', 'N/A')}. "
-                f"Expected one of: {node_datastore_tool_names}"
+                f"Expected one of: {self.datastore_tool_names}"
             )
-            # return {"documents": [], "question": current_question, "token_usage_events": state.get("token_usage_events", [])}
             return {"documents": [], "question": current_question}
 
-        # Assuming documents are split by a specific separator in the ToolMessage content
-        # The original code used "\\n---RETRIEVER_DOC---\\n"
+        # Парсим документы из ToolMessage
         docs_content = last_message.content
         if not isinstance(docs_content, str):
             self.logger.warning(f"ToolMessage content is not a string: {type(docs_content)}. Cannot split into documents.")
@@ -412,42 +389,25 @@ class GraphFactory:
             
         if not docs or all(not d.strip() for d in docs):
             self.logger.info("No documents retrieved or all documents are empty.")
-            # return {"documents": [], "question": current_question, "token_usage_events": state.get("token_usage_events", [])}
             return {"documents": [], "question": current_question}
 
-        prompt = PromptTemplate(
-            template="""Вы оцениваете релевантность извлеченного документа для вопроса пользователя. \\n
-                    Вот извлеченный документ: \\n\\n {context} \\n\\n
-                    Вот вопрос пользователя: {question} \\n
-                    Если документ содержит ключевые слова или семантическое значение, связанные с вопросом пользователя, оцените его как релевантный. \\n
-                    Дайте двоичную оценку 'yes' или 'no', чтобы указать, соответствует ли документ вопросу.""",
-            input_variables=["context", "question"],
-        )
-        
-        model = self._create_llm_instance(
-            provider=node_provider,
-            model_name=node_model_id, # Consider a specific, cheaper/faster model for grading
-            temperature=node_temperature,
-            streaming=False, # Grading doesn't need streaming
-            log_adapter_override=self.logger
-        )
+        # Создаем модель и промпт используя централизованные методы
+        prompt = self._create_grading_prompt()
+        model = self._create_node_llm("grading")
 
         if not model:
-            self.logger.error(f"Could not initialize LLM for grading (provider: {node_provider}). Returning no documents.")
-            # return {"documents": [], "question": current_question, "token_usage_events": state.get("token_usage_events", [])}
             return {"documents": [], "question": current_question}
             
         llm_with_tool = model.with_structured_output(Grade, include_raw=True)
 
-        async def process_doc(doc_content: str) -> Tuple[str, str, Optional[TokenUsageData]]:
+        async def process_doc(doc_content: str) -> Tuple[str, str]:
             chain = prompt | llm_with_tool
 
-            token_event_for_doc = None
             try:
                 # Ensure doc_content is not empty or just whitespace
                 if not doc_content.strip():
                     self.logger.debug(f"Skipping empty document content for grading.")
-                    return doc_content, "no", None
+                    return doc_content, "no"
 
                 invocation_result = await chain.ainvoke({"question": current_question, "context": doc_content})
                 
@@ -464,53 +424,33 @@ class GraphFactory:
                     self.logger.debug(f"Grading raw AIMessage metadata: {raw_ai_message.response_metadata}")
                     self.logger.debug(f"Grading raw AIMessage usage_metadata: {raw_ai_message.usage_metadata}")
 
-                    prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
-                    model_name_from_meta = node_model_id
-
-                    if hasattr(raw_ai_message, 'usage_metadata') and raw_ai_message.usage_metadata:
-                        usage_meta = raw_ai_message.usage_metadata
-                        prompt_tokens = usage_meta.get('prompt_tokens', 0) if usage_meta.get('prompt_tokens') is not None else usage_meta.get('input_tokens', 0)
-                        completion_tokens = usage_meta.get('completion_tokens', 0) if usage_meta.get('completion_tokens') is not None else usage_meta.get('output_tokens', 0)
-                        total_tokens = usage_meta.get('total_tokens', 0)
-                        if hasattr(raw_ai_message, 'response_metadata') and raw_ai_message.response_metadata and raw_ai_message.response_metadata.get('model_name'):
-                            model_name_from_meta = raw_ai_message.response_metadata['model_name']
-                    elif hasattr(raw_ai_message, 'response_metadata') and raw_ai_message.response_metadata and 'token_usage' in raw_ai_message.response_metadata:
-                        usage = raw_ai_message.response_metadata['token_usage']
-                        prompt_tokens = usage.get('prompt_tokens', 0)
-                        completion_tokens = usage.get('completion_tokens', 0)
-                        total_tokens = usage.get('total_tokens', 0)
-                        if raw_ai_message.response_metadata.get('model_name'):
-                            model_name_from_meta = raw_ai_message.response_metadata['model_name']
+                    # Используем централизованный метод _extract_token_data через _get_tokens
+                    # Создаем временное состояние для сбора токенов
+                    temp_state = {"token_usage_events": []}
+                    self._get_tokens(temp_state, "grading_llm", node_model_id, raw_ai_message)
                     
-                    if total_tokens > 0 or prompt_tokens > 0 or completion_tokens > 0:
-                        token_event_for_doc = TokenUsageData(
-                            call_type="grading_llm",
-                            model_id=model_name_from_meta,
-                            prompt_tokens=prompt_tokens,
-                            completion_tokens=completion_tokens,
-                            total_tokens=total_tokens,
-                            timestamp=datetime.now(timezone.utc).isoformat()
-                        )
+                    # Добавляем токены в основное состояние
+                    if temp_state["token_usage_events"]:
+                        current_token_events.extend(temp_state["token_usage_events"])
                 else:
                     self.logger.warning(f"Grading raw AIMessage not found or not AIMessage type in invocation_result for doc: '{doc_content[:100]}...'")
                 
-                return doc_content, binary_score, token_event_for_doc
+                return doc_content, binary_score
             except Exception as e:
                 self.logger.error(f"Error processing document for grading ('{doc_content[:100]}...'): {e}", exc_info=True)
-                return doc_content, "no", None
+                return doc_content, "no"
 
-        filtered_docs_content: List[str] = [] # Explicitly type
+        filtered_docs: List[str] = [] # Explicitly type
         tasks = [process_doc(d) for d in docs if d.strip()] # Process only non-empty docs
         
         current_token_events = state.get("token_usage_events", [])
         if tasks: # Only run gather if there are tasks
             results = await asyncio.gather(*tasks)
-            for doc_content, score, token_event_data_item in results:
+            for doc_content, score in results:
                 if score == "yes":
-                    filtered_docs_content.append(doc_content)
-                if token_event_data_item:
-                    current_token_events.append(token_event_data_item)
+                    filtered_docs.append(doc_content)
         
+            # Токены уже добавлены в current_token_events через _get_tokens в process_doc
             if any(evt.call_type == "grading_llm" for evt in current_token_events): # Log only if grading tokens were added
                 total_grading_tokens = sum(evt.total_tokens for evt in current_token_events if evt.call_type == "grading_llm")
                 self.logger.info(f"Total token usage for grading_llm batch: {total_grading_tokens} tokens.")
@@ -518,8 +458,8 @@ class GraphFactory:
             self.logger.info("No valid documents to grade after filtering.")
 
 
-        self.logger.info(f"Found {len(filtered_docs_content)} relevant documents out of {len(docs)} initial (after split).")
-        return {"documents": filtered_docs_content, "question": current_question, "token_usage_events": current_token_events}
+        self.logger.info(f"Found {len(filtered_docs)} relevant documents out of {len(docs)} initial (after split).")
+        return {"documents": filtered_docs, "question": current_question, "token_usage_events": current_token_events}
 
     async def _rewrite_node(self, state: AgentState) -> Dict[str, Any]:
         """Rewrites the question if no relevant documents are found, up to a max limit."""
@@ -528,46 +468,27 @@ class GraphFactory:
         original_question = state["original_question"]
         messages = state["messages"]
         rewrite_count = state.get("rewrite_count", 0)
-        node_max_rewrites = self.static_state_config.get("max_rewrites", 3) # Max rewrites from state
-        node_model_id = self.static_state_config.get("model_id", "gpt-4o-mini") # Model ID from state
-        node_provider = self.static_state_config.get("provider", "OpenAI") # Provider from state
-        node_temperature = 0.1
+        node_max_rewrites = self.max_rewrites # Max rewrites from factory
+        
+        # Используем централизованные методы для получения конфигурации
+        llm_config = self._get_node_config("rewrite")
+        node_model_id = llm_config.get("model_name", "gpt-4o-mini")
 
         self.logger.info(f"Rewrite attempt {rewrite_count + 1}/{node_max_rewrites} for question: '{original_question}'")
-        # current_token_events = state.get("token_usage_events", [])
 
         if rewrite_count < node_max_rewrites:
             self.logger.info(f"Rewriting original question: {original_question}")
-            # Original prompt used `log_adapter.info` which is not available here directly.
-            # The prompt itself is fine.
-            prompt_msg = HumanMessage(
-                content=f"""You are an expert at rephrasing questions for better retrieval.
-Look at the original question and the chat history. The previous retrieval attempt failed to find relevant documents.
-Rephrase the original question to be more specific or clearer, considering the context of the conversation.
-Do not add conversational filler, just output the rephrased question.
-
-Chat History:
-{messages}
-
-Original Question: {original_question}
-
-Rephrased Question:"""
-            )
+            prompt_msg = self._create_rewrite_prompt(original_question, messages)
         
-            model = self._create_llm_instance(
-                provider=node_provider,
-                model_name=node_model_id,
-                temperature=node_temperature,
-                streaming=False, # Rewriting doesn't need streaming
-                log_adapter_override=self.logger
-            )
+            # Используем централизованный метод создания LLM
+            model = self._create_node_llm("rewrite")
 
             if not model:
-                self.logger.error(f"Could not initialize LLM for rewriting (provider: {node_provider}). Falling through to no answer.")
+                self.logger.error(f"Could not initialize LLM for rewriting. Falling through to no answer.")
                 # Fall through to "no answer" case by not returning early
             else:
                 try:
-                    response = await model.ainvoke([prompt_msg]) # Original was model.ainvoke([prompt_msg])
+                    response = await model.ainvoke([prompt_msg])
                     if not isinstance(response, AIMessage):
                         self.logger.error(f"Rewrite node received unexpected response type: {type(response)}")
                         rewritten_question = ""
@@ -576,22 +497,18 @@ Rephrased Question:"""
                     
                     self.logger.info(f"Rewritten question: {rewritten_question}")
 
-                    # current_token_events = self._get_tokens(state, "rewrite_llm", node_model_id, response)
+                    # Используем централизованный метод учета токенов
                     self._get_tokens(state, "rewrite_llm", node_model_id, response)
 
                     if not rewritten_question or rewritten_question.lower() == original_question.lower():
                         self.logger.warning("Rewriting resulted in empty or identical question. Stopping rewrite.")
                         # Fall through to "no answer" case below
                     else:
-                        # The original code created a HumanMessage here, which seems to be intended
-                        # to be the *new* input to the agent node after rewrite.
                         trigger_message = HumanMessage(content=f"Переформулируй запрос так: {rewritten_question}")
                         return {
-                            "messages": [trigger_message], # This replaces the history, which might be intentional or not.
-                                                         # Original graph structure implies agent is called next.
+                            "messages": [trigger_message],
                             "question": rewritten_question, 
                             "rewrite_count": rewrite_count + 1,
-                            # "token_usage_events": current_token_events
                         }
                 except Exception as e:
                     self.logger.error(f"Error during question rewriting: {e}", exc_info=True)
@@ -601,9 +518,8 @@ Rephrased Question:"""
         self.logger.warning(f"Max rewrites ({node_max_rewrites}) reached or rewrite failed for original question: '{original_question}'")
         no_answer_message = AIMessage(content="К сожалению, я не смог найти релевантную информацию по вашему запросу даже после его уточнения. Попробуйте задать вопрос по-другому.")
         return {
-            "messages": [no_answer_message], # This becomes the final message.
-            "rewrite_count": 0, # Reset count, though this branch likely ends the graph for this turn.
-            # "token_usage_events": current_token_events
+            "messages": [no_answer_message],
+            "rewrite_count": 0,
         }
 
     async def _generate_node(self, state: AgentState) -> Dict[str, Any]:
@@ -613,10 +529,10 @@ Rephrased Question:"""
         messages = state["messages"]
         current_question = state["question"]
         documents = state["documents"]
-        node_model_id = self.static_state_config.get("model_id", "gpt-4o-mini") # Model ID from state
-        node_temperature = self.static_state_config.get("temperature", 0.1) # Temperature from state
-        node_provider = self.static_state_config.get("provider", "OpenAI") # Provider from state
-        # current_token_events = state.get("token_usage_events", [])
+        
+        # Используем централизованные методы для получения конфигурации
+        llm_config = self._get_node_config("generate")
+        node_model_id = llm_config.get("model_name", "gpt-4o-mini")
 
         if not documents:
             self.logger.warning("Generate node called with no relevant documents.")
@@ -624,65 +540,39 @@ Rephrased Question:"""
             if messages and isinstance(messages[-1], AIMessage) and \
                "не смог найти релевантную информацию по вашему запросу даже после его уточнения" in messages[-1].content:
                 self.logger.info("Passing through 'max rewrites reached' message from rewrite_node.")
-                # return {"messages": [messages[-1]], "token_usage_events": current_token_events} # Pass existing message
-                return {"messages": [messages[-1]]} # Pass existing message
+                return {"messages": [messages[-1]]}
             else:
                 no_docs_response = AIMessage(content="К сожалению, я не смог найти информацию по вашему запросу в доступных источниках.")
-                # return {"messages": [no_docs_response], "token_usage_events": current_token_events}
                 return {"messages": [no_docs_response]}
 
         self.logger.info(f"Generating answer for question: '{current_question}' using {len(documents)} documents.")
         documents_str = "\\n\\n".join(documents)
 
-        moscow_tz = timezone(timedelta(hours=3))
-        current_time_str = datetime.now(moscow_tz).isoformat()
-        
-        # Original prompt template with current_time included
-        prompt_template_str = """Ты помощник для задач с ответами на вопросы. Используйте следующие фрагменты извлеченного контекста, чтобы ответить на вопрос.
-            Если у тебя нет ответа на вопрос, просто скажи что у тебя нет данных для ответа на этот вопрос, предложи переформулировать фопрос.
-            Старайся отвечать кратко и содержательно.\\n
-                Текущее время (по Москве): {current_time}\\n
-                Вопрос: {question} \\n
-                Контекст: {context} \\n
-                Ответ:"""
-        
-        prompt = PromptTemplate(
-            template=prompt_template_str,
-            input_variables=["context", "question", "current_time"],
-        ).partial(current_time=current_time_str)
-
-        llm = self._create_llm_instance(
-            provider=node_provider,
-            model_name=node_model_id,
-            temperature=node_temperature,
-            streaming=True, # Generation can be streaming as per original
-            log_adapter_override=self.logger
-        )
+        # Используем централизованные методы
+        prompt = self._create_rag_prompt_template()
+        llm = self._create_node_llm("generate")
 
         if not llm:
-            self.logger.error(f"Could not initialize LLM for generation (provider: {node_provider}).")
-            error_response = AIMessage(content=f"An error occurred: Could not initialize LLM for provider {node_provider}.")
-            # return {"messages": [error_response], "token_usage_events": current_token_events}
+            self.logger.error(f"Could not initialize LLM for generation.")
+            error_response = AIMessage(content=f"An error occurred: Could not initialize LLM for generation.")
             return {"messages": [error_response]}
 
         rag_chain = prompt | llm
         try:
             response = await rag_chain.ainvoke({"context": documents_str, "question": current_question})
 
-            # current_token_events = self._get_tokens(state, "generation_llm", node_model_id, response)
+            # Используем централизованный метод учета токенов
             self._get_tokens(state, "generation_llm", node_model_id, response)
 
-            final_response_message = response
+            final_msg = response
             if not isinstance(response, BaseMessage):
                  self.logger.warning(f"Generate node got non-BaseMessage response: {type(response)}. Converting to AIMessage.")
-                 final_response_message = AIMessage(content=str(response))
+                 final_msg = AIMessage(content=str(response))
                  
-            # return {"messages": [final_response_message], "token_usage_events": current_token_events}
-            return {"messages": [final_response_message]}
+            return {"messages": [final_msg]}
         except Exception as e:
             self.logger.error(f"Error during generation: {e}", exc_info=True)
             error_response = AIMessage(content="An error occurred while generating the response.")
-            # return {"messages": [error_response], "token_usage_events": current_token_events}
             return {"messages": [error_response]}
 
     async def _decide_to_generate_edge(self, state: AgentState) -> Literal["generate", "rewrite"]:
@@ -691,9 +581,8 @@ Rephrased Question:"""
 
         filtered_documents = state["documents"]
         rewrite_count = state.get("rewrite_count", 0)
-        # Ensure max_rewrites is available, e.g., from self.static_state_config or passed in state
-        # For now, assuming it's on self, set during __init__ or _configure_tools
-        node_max_rewrites = self.max_rewrites # Or state["max_rewrites"] if passed in static_state_config
+        # Use max_rewrites directly from factory configuration
+        node_max_rewrites = self.max_rewrites # Direct access to factory configuration
 
         if not filtered_documents:
             if rewrite_count < node_max_rewrites:
@@ -711,8 +600,8 @@ Rephrased Question:"""
         self.logger.info("---ROUTE TOOLS---")
 
         # Tool names should be available on self, set during _configure_tools
-        node_datastore_tool_names = self.datastore_tool_names
-        node_safe_tool_names = self.safe_tool_names
+        node_datastore_names = self.datastore_names
+        node_safe_names = self.safe_tool_names
 
         next_node = tools_condition(state) # langgraph.prebuilt.tools_condition
         if next_node == END:
@@ -740,46 +629,196 @@ Rephrased Question:"""
         tool_name = first_tool_call["name"]
         self.logger.info(f"Tool call detected: {tool_name}")
 
-        if tool_name in node_datastore_tool_names:
+        if tool_name in node_datastore_names:
             self.logger.info(f"---DECISION: ROUTE TO RETRIEVE ({tool_name})---")
             return "retrieve"
-        elif tool_name in node_safe_tool_names:
+        elif tool_name in node_safe_names:
             self.logger.info(f"---DECISION: ROUTE TO SAFE TOOLS ({tool_name})---")
             return "safe_tools"
         else:
             self.logger.warning(f"Tool call '{tool_name}' does not match any configured tool node. Ending.")
             return END
 
-    def create_graph(self) -> Tuple[Any, Dict[str, Any]]:
+    # ===== CENTRALIZED HELPER METHODS FOR NODE OPERATIONS =====
+
+    def _get_node_config(self, node_type: str = "default") -> Dict[str, Any]:
         """
-        Creates the LangGraph application and returns the compiled app and static state config.
+        Получает конфигурацию LLM для узлов с возможностью 
+        специфических настроек для разных типов узлов.
+        """
+        # Use centralized configuration method
+        model_config = self._get_model_config()
+        
+        # Базовые настройки
+        base_config = {
+            "model_id": model_config["model_id"],
+            "provider": model_config["provider"],
+            "temperature": model_config["temperature"]
+        }
+        
+        # Специфические настройки для разных типов узлов
+        node_specific_overrides = {
+            "agent": {
+                "streaming": True,
+                "temperature": base_config["temperature"]
+            },
+            "grading": {
+                "streaming": False,
+                "temperature": 0.0  # Grading должен быть детерминистическим
+            },
+            "rewrite": {
+                "streaming": False,
+                "temperature": 0.1
+            },
+            "generate": {
+                "streaming": True,
+                "temperature": base_config["temperature"]
+            }
+        }
+        
+        # Применяем специфические настройки если они есть
+        if node_type in node_specific_overrides:
+            base_config.update(node_specific_overrides[node_type])
+        else:
+            base_config["streaming"] = True  # По умолчанию включаем стриминг
+            
+        return base_config
+
+    def _create_node_llm(self, node_type: str = "default") -> Optional[ChatOpenAI]:
+        """
+        Создает экземпляр LLM для узла с соответствующей конфигурацией.
+        
+        Args:
+            node_type: Тип узла ("agent", "grading", "rewrite", "generate")
+        
+        Returns:
+            ChatOpenAI instance или None при ошибке
+        """
+        config = self._get_node_config(node_type)
+        
+        model = self._create_llm_instance(
+            provider=config["provider"],
+            model_name=config["model_id"],
+            temperature=config["temperature"],
+            streaming=config["streaming"],
+            log_adapter_override=self.logger
+        )
+        
+        if model:
+            self.logger.info(f"Created {node_type} LLM: {config['model_id']} via {config['provider']}")
+        else:
+            self.logger.error(f"Failed to create {node_type} LLM: {config['model_id']} via {config['provider']}")
+            
+        return model
+
+    def _get_moscow_time(self) -> str:
+        """Возвращает текущее время в московском часовом поясе в формате ISO."""
+        moscow_tz = timezone(timedelta(hours=3))
+        return datetime.now(moscow_tz).isoformat()
+
+    def _create_prompt_with_time(self, system_prompt: str) -> ChatPromptTemplate:
+        """
+        Создает базовый ChatPromptTemplate с временной меткой для агента.
+        """
+        time_str = self._get_moscow_time()
+        
+        if "{current_time}" not in system_prompt:
+            prompt_with_time = system_prompt + "\nТекущее время (Москва): {current_time}"
+        else:
+            prompt_with_time = system_prompt
+        
+        return ChatPromptTemplate.from_messages([
+            ("system", prompt_with_time),
+            MessagesPlaceholder(variable_name="messages")
+        ]).partial(current_time=time_str)
+
+    def _create_rag_template(self) -> PromptTemplate:
+        """Создает стандартный PromptTemplate для RAG генерации."""
+        time_str = self._get_moscow_time()
+        
+        template = """Ты помощник для задач с ответами на вопросы. Используйте следующие фрагменты извлеченного контекста, чтобы ответить на вопрос.
+            Если у тебя нет ответа на вопрос, просто скажи что у тебя нет данных для ответа на этот вопрос, предложи переформулировать фопрос.
+            Старайся отвечать кратко и содержательно.\n
+                Текущее время (по Москве): {current_time}\n
+                Вопрос: {question} \n
+                Контекст: {context} \n
+                Ответ:"""
+        
+        return PromptTemplate(
+            template=template,
+            input_variables=["context", "question", "current_time"],
+        ).partial(current_time=time_str)
+
+    def _create_grading_template(self) -> PromptTemplate:
+        """Создает стандартный PromptTemplate для оценки релевантности документов."""
+        return PromptTemplate(
+            template="""Вы оцениваете релевантность извлеченного документа для вопроса пользователя. \n
+                    Вот извлеченный документ: \n\n {context} \n\n
+                    Вот вопрос пользователя: {question} \n
+                    Если документ содержит ключевые слова или семантическое значение, связанные с вопросом пользователя, оцените его как релевантный. \n
+                    Дайте двоичную оценку 'yes' или 'no', чтобы указать, соответствует ли документ вопросу.""",
+            input_variables=["context", "question"],
+        )
+
+    def _create_rewrite_prompt(self, original_question: str, messages: List[BaseMessage]) -> HumanMessage:
+        """Создает сообщение для переформулирования вопроса."""
+        return HumanMessage(
+            content=f"""You are an expert at rephrasing questions for better retrieval.
+Look at the original question and the chat history. The previous retrieval attempt failed to find relevant documents.
+Rephrase the original question to be more specific or clearer, considering the context of the conversation.
+Do not add conversational filler, just output the rephrased question.
+
+Chat History:
+{messages}
+
+Original Question: {original_question}
+
+Rephrased Question:"""
+        )
+
+    def _handle_llm_error(self, node_type: str, provider: str, error_message: str = None) -> AIMessage:
+        """
+        Создает стандартное сообщение об ошибке для узлов при неудачной инициализации LLM.
+        """
+        if error_message:
+            content = f"An error occurred: {error_message}"
+        else:
+            content = f"Sorry, an error occurred: Could not initialize LLM for provider {provider} in {node_type}_node."
+        
+        self.logger.error(f"{node_type} node error: {content}")
+        return AIMessage(content=content)
+
+    def _bind_tools_to_model(self, model: ChatOpenAI) -> ChatOpenAI:
+        """
+        Привязывает инструменты к модели с проверкой валидности.
+        """
+        if self.tools:
+            valid_tools_for_binding = [t for t in self.tools if t is not None]
+            if valid_tools_for_binding:
+                model = model.bind_tools(valid_tools_for_binding)
+                self.logger.info(f"Model bound to {len(valid_tools_for_binding)} tools.")
+            else:
+                self.logger.warning("No valid tools were configured after filtering.")
+        else:
+            self.logger.warning("No tools are configured in self.tools.")
+        
+        return model
+
+    # ===== END CENTRALIZED HELPER METHODS =====
+
+    def create_graph(self) -> Any:
+        """
+        Creates the LangGraph application and returns the compiled app.
         """
         self.logger.info("Creating agent graph in GraphFactory...")
 
         self._configure_tools()
         self._build_system_prompt()
 
-        # Prepare static_state_config
-        # This should largely come from self.agent_config and processed values
-        model_settings = self.agent_config.get("config", {}).get("simple", {}).get("settings", {}).get("model", {})
-        
-        self.static_state_config = {
-            "model_id": model_settings.get("modelId", "gpt-4o-mini"),
-            "temperature": model_settings.get("temperature", 0.1),
-            "system_prompt": self.system_prompt,
-            "safe_tool_names": self.safe_tool_names, # from _configure_tools
-            "datastore_tool_names": self.datastore_tool_names, # from _configure_tools
-            "max_rewrites": self.max_rewrites, # from _configure_tools
-            "provider": model_settings.get("provider", "OpenAI"),
-            "enableContextMemory": model_settings.get("enableContextMemory", True),
-            "contextMemoryDepth": model_settings.get("contextMemoryDepth", 10),
-            "token_usage_events": [],
-            "original_question": "", # Will be set per invocation
-            "question": "", # Will be set per invocation
-            "documents": [], # Will be populated during RAG
-            "rewrite_count": 0, # Will be managed by rewrite logic
-        }
-        self.logger.info(f"Initial static_state_config: {self.static_state_config}")
+        # Configure memory settings for later use
+        model_config = self._get_model_config()
+        self.enable_context_memory = model_config["enable_context_memory"]
+        self.logger.info(f"Context memory enabled: {self.enable_context_memory}")
 
 
         # Initialize StateGraph
@@ -790,10 +829,10 @@ Rephrased Question:"""
         self.logger.info("Added node: agent")
 
         if self.datastore_tool_names:
-            if self.datastore_tool_list: # Check if tools were actually created
-                retrieve_node = ToolNode(self.datastore_tool_list, name="retrieve_node")
+            if self.datastore_tools: # Check if tools were actually created
+                retrieve_node = ToolNode(self.datastore_tools, name="retrieve_node")
                 workflow.add_node("retrieve", retrieve_node)
-                workflow.add_node("grade_documents", self._grade_documents_node)
+                workflow.add_node("grade_documents", self._grade_docs_node)
                 workflow.add_node("rewrite", self._rewrite_node)
                 workflow.add_node("generate", self._generate_node)
                 self.logger.info("Added RAG nodes: retrieve, grade_documents, rewrite, generate")
@@ -803,8 +842,8 @@ Rephrased Question:"""
             self.logger.info("No datastore tools configured. RAG nodes skipped.")
 
         if self.safe_tool_names:
-            if self.safe_tools_list: # Check if tools were actually created
-                safe_tools_node = ToolNode(self.safe_tools_list, name="safe_tools_node")
+            if self.safe_tools: # Check if tools were actually created
+                safe_tools_node = ToolNode(self.safe_tools, name="safe_tools_node")
                 workflow.add_node("safe_tools", safe_tools_node)
                 self.logger.info("Added node: safe_tools")
             else:
@@ -854,15 +893,15 @@ Rephrased Question:"""
 
         # Compile the graph
         memory_saver_instance = None
-        if self.static_state_config.get("enableContextMemory", False): # Check from static_state_config
+        if self.enable_context_memory: # Use the configured setting
             memory_saver_instance = MemorySaver()
         
         app = workflow.compile(checkpointer=memory_saver_instance)
         self.logger.info(f"Agent graph compiled successfully in GraphFactory. Checkpointer: {'Enabled' if memory_saver_instance else 'Disabled'}")
 
-        return app, self.static_state_config
+        return app
 
-def create_agent_app(agent_config: Dict, agent_id: str, logger: logging.LoggerAdapter) -> Tuple[Any, Dict[str, Any]]:
+def create_agent_app(agent_config: Dict, agent_id: str, logger: logging.LoggerAdapter) -> Any:
     """
     Creates and configures an agent graph using the GraphFactory.
     """
@@ -874,9 +913,9 @@ def create_agent_app(agent_config: Dict, agent_id: str, logger: logging.LoggerAd
 
     try:
         factory = GraphFactory(agent_config, agent_id, logger)
-        app, static_config = factory.create_graph() # create_graph handles its internal configurations
+        app = factory.create_graph() # create_graph handles its internal configurations
         logger.info(f"GraphFactory successfully created graph for agent_id: {agent_id}.")
-        return app, static_config
+        return app
     except Exception as e:
         logger.error(f"Error creating graph with GraphFactory for agent_id: {agent_id}: {e}", exc_info=True)
         # Re-raise the exception so it's caught by the agent_runner, which will then handle marking status.

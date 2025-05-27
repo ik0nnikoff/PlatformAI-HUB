@@ -31,14 +31,14 @@ class AgentState(TypedDict):
         system_prompt: str
         configured_tools: List[BaseTool]
         safe_tool_names: Set[str]
-        datastore_tool_names: Set[str]
-        max_rewrites: int
-        provider: str
-        enableContextMemory: bool
-        contextMemoryDepth: int
-        
-        # Token usage tracking
-        current_interaction_id: Optional[str]
+    datastore_names: Set[str]
+    max_rewrites: int
+    provider: str
+    enable_memory: bool
+    memory_depth: int
+    
+    # Token usage tracking
+    interaction_id: Optional[str]
         token_usage_events: List[TokenUsageData]
     """
     messages: Annotated[Sequence[BaseMessage], add_messages]
@@ -55,12 +55,12 @@ class AgentState(TypedDict):
     system_prompt: str
     configured_tools: List[BaseTool]
     safe_tool_names: Set[str]
-    datastore_tool_names: Set[str]
+    datastore_names: Set[str]
     max_rewrites: int
     provider: str
-    enableContextMemory: bool
-    contextMemoryDepth: int
+    enable_memory: bool
+    memory_depth: int
 
     # New fields for token usage tracking
-    current_interaction_id: Optional[str] = None 
+    interaction_id: Optional[str] = None 
     token_usage_events: List[TokenUsageData] = Field(default_factory=list)
