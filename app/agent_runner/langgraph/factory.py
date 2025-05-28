@@ -145,9 +145,9 @@ class GraphFactory(AgentConfigMixin):
                 self.tools,
                 self.safe_tools,
                 self.datastore_tools, # Added to capture this specific list
-                self.datastore_tool_names,
+                self.datastore_names,
                 self.max_rewrites,
-            ) = configure_tools(self.agent_config, self.agent_id)
+            ) = configure_tools(self.agent_config, self.agent_id, self.logger)
             
             self.safe_tool_names = {t.name for t in self.safe_tools if t} # Ensure t is not None
             self.logger.info(
@@ -182,7 +182,7 @@ class GraphFactory(AgentConfigMixin):
 
         final_prompt = prompt_template
 
-        # self.datastore_tool_names should be populated by _configure_tools before this method is called
+        # self.datastore_names should be populated by _configure_tools before this method is called
         if limit_to_kb and self.datastore_names:
             final_prompt += "\nAnswer ONLY from the provided context from the knowledge base. If the answer is not in the context, say you don't know."
         
@@ -375,7 +375,7 @@ class GraphFactory(AgentConfigMixin):
             self.logger.warning(
                 f"Grade documents called, but last message is not a valid ToolMessage "
                 f"from a configured datastore tool. Last message: {type(last_message)}, name: {getattr(last_message, 'name', 'N/A')}. "
-                f"Expected one of: {self.datastore_tool_names}"
+                f"Expected one of: {self.datastore_names}"
             )
             return {"documents": [], "question": current_question}
 
@@ -392,7 +392,7 @@ class GraphFactory(AgentConfigMixin):
             return {"documents": [], "question": current_question}
 
         # Создаем модель и промпт используя централизованные методы
-        prompt = self._create_grading_prompt()
+        prompt = self._create_grading_template()
         model = self._create_node_llm("grading")
 
         if not model:
@@ -417,6 +417,7 @@ class GraphFactory(AgentConfigMixin):
                 binary_score = "no"
                 if parsed_grade and isinstance(parsed_grade, Grade): # Check type
                     binary_score = parsed_grade.binary_score
+                    # self.logger.info(f"Grading result: {binary_score} for document starting with: {doc_content[:100]}...")
                 else:
                     self.logger.warning(f"Grading failed to parse output or got unexpected type for doc: '{doc_content[:100]}...'. Parsed: {parsed_grade}")
 
@@ -549,7 +550,7 @@ class GraphFactory(AgentConfigMixin):
         documents_str = "\\n\\n".join(documents)
 
         # Используем централизованные методы
-        prompt = self._create_rag_prompt_template()
+        prompt = self._create_rag_template()
         llm = self._create_node_llm("generate")
 
         if not llm:
@@ -828,7 +829,7 @@ Rephrased Question:"""
         workflow.add_node("agent", self._agent_node)
         self.logger.info("Added node: agent")
 
-        if self.datastore_tool_names:
+        if self.datastore_names:
             if self.datastore_tools: # Check if tools were actually created
                 retrieve_node = ToolNode(self.datastore_tools, name="retrieve_node")
                 workflow.add_node("retrieve", retrieve_node)

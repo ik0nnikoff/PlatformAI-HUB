@@ -23,7 +23,7 @@ from app.agent_runner.common.tools_registry import (
     configure_tools_centralized
 )
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 # --- NOTE: Predefined tools are now imported from centralized tools_registry ---
 # auth_tool, get_user_info_tool, get_bonus_points are imported from tools_registry
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # --- Tool Configuration Logic ---
 # NOTE: make_api_request is now imported from centralized tools_registry
 
-def configure_tools(agent_config: Dict, agent_id: str) -> Tuple[List[BaseTool], List[BaseTool], List[BaseTool], Set[str], int]:
+def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[BaseTool], List[BaseTool], List[BaseTool], Set[str], int]:
     """
     Configures tools based on the agent configuration (simple structure).
     
@@ -52,22 +52,22 @@ def configure_tools(agent_config: Dict, agent_id: str) -> Tuple[List[BaseTool], 
         - Set of datastore tool names (strings).
         - Maximum number of rewrite attempts configured (int).
     """
-    log_adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id})
+    # logger = logging.LoggerAdapter(logger, {'agent_id': agent_id})
 
     # --- Access configuration using the provided structure ---
     config_simple = agent_config.get("config", {}).get("simple", {})
     if not config_simple:
-        log_adapter.warning("Agent configuration 'config.simple' not found. No tools will be configured.")
+        logger.warning("Agent configuration 'config.simple' not found. No tools will be configured.")
         return [], [], [], set(), 3 # Default max_rewrites
 
     settings = config_simple.get("settings", {})
     if not settings:
-        log_adapter.warning("Agent configuration 'config.simple.settings' not found. No tools will be configured.")
+        logger.warning("Agent configuration 'config.simple.settings' not found. No tools will be configured.")
         return [], [], [], set(), 3
 
     tool_settings = settings.get("tools", []) # List of tool configs
     if not tool_settings:
-        log_adapter.info("No tools specified in 'config.simple.settings.tools'.")
+        logger.info("No tools specified in 'config.simple.settings.tools'.")
         return [], [], [], set(), 3
     
     tools_list: List[BaseTool] = []
@@ -91,10 +91,10 @@ def configure_tools(agent_config: Dict, agent_id: str) -> Tuple[List[BaseTool], 
         safe_tools.extend(centralized_safe)
         # Note: centralized_api_tools are already included in centralized_safe_tools
         
-        log_adapter.info(f"Added {len(centralized_safe)} tools from centralized registry")
+        logger.info(f"Added {len(centralized_safe)} tools from centralized registry")
         
     except Exception as e:
-        log_adapter.error(f"Failed to configure centralized tools: {e}", exc_info=True)
+        logger.error(f"Failed to configure centralized tools: {e}", exc_info=True)
         # Continue with local configuration as fallback 
         
         # Fallback: Add predefined tools manually if centralized configuration fails
@@ -105,18 +105,18 @@ def configure_tools(agent_config: Dict, agent_id: str) -> Tuple[List[BaseTool], 
         }
         for tool_name, tool_instance in predefined_tools_map.items():
             safe_tools.append(tool_instance)
-            log_adapter.info(f"Added predefined tool (fallback): {tool_name}")
+            logger.info(f"Added predefined tool (fallback): {tool_name}")
 
 
     # --- Knowledge Base / Retriever Tools ---
     kb_configs = [t for t in tool_settings if t.get("type") == "knowledgeBase"]
     if kb_configs:
-        log_adapter.info(f"Configuring {len(kb_configs)} Knowledge Base tool(s)...")
+        logger.info(f"Configuring {len(kb_configs)} Knowledge Base tool(s)...")
         qdrant_url = app_settings.QDRANT_URL
         qdrant_collection = app_settings.QDRANT_COLLECTION
         
         if not qdrant_url or not qdrant_collection:
-             log_adapter.warning("QDRANT_URL or QDRANT_COLLECTION not set. Knowledge base tools disabled.")
+             logger.warning("QDRANT_URL or QDRANT_COLLECTION not set. Knowledge base tools disabled.")
         else:
             try:
                 embeddings = OpenAIEmbeddings()
@@ -129,21 +129,34 @@ def configure_tools(agent_config: Dict, agent_id: str) -> Tuple[List[BaseTool], 
                     collection_name=qdrant_collection,
                     embedding=embeddings,
                 )
-                log_adapter.info(f"Connected to Qdrant at {qdrant_url}, collection: {qdrant_collection}")
+                logger.info(f"Connected to Qdrant at {qdrant_url}, collection: {qdrant_collection}")
+
+                # Get client_id from the top level of agent_config
+                client_id = agent_config.get("ownerId")
+                if not client_id:
+                    logger.warning("Missing 'ownerId' in agent_config, cannot filter KB by client.")
+                    # Decide if KB should be disabled or proceed without client filter
 
                 for kb_config in kb_configs:
                     kb_settings = kb_config.get("settings", {})
                     kb_ids = kb_settings.get("knowledgeBaseIds", []) # List of datasource IDs
                     search_limit = kb_settings.get("retrievalLimit", 4) # Use retrievalLimit
                     max_rewrites = kb_settings.get("rewriteAttempts", max_rewrites)
-                    kb_id = kb_config.get("id", f"kb_retriever_{'_'.join([str(kb_id) for kb_id in kb_ids])}") # Generate ID if missing
+                    tool_id = kb_config.get("id", f"kb_retriever_{'_'.join([str(kb_id) for kb_id in kb_ids])}") # Generate ID if missing
+                    tool_name = kb_config.get("name", "Knowledge Base Search") # Name for LLM
                     kb_description = kb_config.get("description", f"Searches and returns information from the {qdrant_collection} knowledge base.")
 
                     if not kb_ids:
-                        log_adapter.warning(f"KnowledgeBase tool '{kb_id}' configured but no knowledgeBaseIds provided. Skipping.")
+                        logger.warning(f"KnowledgeBase tool '{tool_id}' configured but no knowledgeBaseIds provided. Skipping.")
                         continue
                     
                     must_conditions = []
+                    # Add client_id filter if available
+                    if client_id:
+                         must_conditions.append(
+                             models.FieldCondition(key="metadata.client_id", match=models.MatchValue(value=str(client_id)))
+                         )
+                    # Add datasource_id filter using MatchAny
                     must_conditions.append(
                         models.FieldCondition(
                             key="metadata.datasource_id",
@@ -159,21 +172,21 @@ def configure_tools(agent_config: Dict, agent_id: str) -> Tuple[List[BaseTool], 
                     
                     retriever_tool = create_retriever_tool(
                         retriever,
-                        kb_id,
-                        kb_description,
+                        tool_id, # Use tool_id instead of kb_id
+                        kb_description, # Use kb_description for LLM to understand the tool purpose
                         document_separator="\n---RETRIEVER_DOC---\n",
                     )
                     datastore_tools.append(retriever_tool)
-                    datastore_names.add(kb_id)
-                    log_adapter.info(f"Configured Knowledge Base tool: {kb_id} for collection {qdrant_collection}")
+                    datastore_names.add(tool_id) # Use tool_id instead of kb_id
+                    logger.info(f"Configured Knowledge Base tool '{tool_name}' (ID: {tool_id}) for datasources: {kb_ids}")
 
             except Exception as e:
-                log_adapter.error(f"Failed to configure Knowledge Base tools: {e}", exc_info=True)
+                logger.error(f"Failed to configure Knowledge Base tools: {e}", exc_info=True)
     else:
-        log_adapter.info("No Knowledge Base tools configured.")
+        logger.info("No Knowledge Base tools configured.")
 
 
-    log_adapter.info(f"Using max_rewrites: {max_rewrites}")
+    logger.info(f"Using max_rewrites: {max_rewrites}")
 
     # --- Web Search Tool ---
     web_search_configs = [t for t in tool_settings if t.get("type") == "webSearch"]
@@ -189,7 +202,7 @@ def configure_tools(agent_config: Dict, agent_id: str) -> Tuple[List[BaseTool], 
 
         tavily_api_key = app_settings.TAVILY_API_KEY
         if not tavily_api_key:
-            log_adapter.warning("TAVILY_API_KEY not set. Web search tool disabled.")
+            logger.warning("TAVILY_API_KEY not set. Web search tool disabled.")
         else:
             try:
                 web_search_tool = TavilySearchResults(
@@ -200,9 +213,9 @@ def configure_tools(agent_config: Dict, agent_id: str) -> Tuple[List[BaseTool], 
                     exclude_domains=exclude_domains,
                 )
                 safe_tools.append(web_search_tool)
-                log_adapter.info(f"Configured Web Search tool '{ws_name}' (ID: {ws_id})")
+                logger.info(f"Configured Web Search tool '{ws_name}' (ID: {ws_id})")
             except Exception as e:
-                log_adapter.error(f"Failed to create Web Search tool: {e}", exc_info=True)
+                logger.error(f"Failed to create Web Search tool: {e}", exc_info=True)
 
 
     # --- Dynamic API Request Tools ---
@@ -211,11 +224,11 @@ def configure_tools(agent_config: Dict, agent_id: str) -> Tuple[List[BaseTool], 
     # might not be covered by the centralized approach.
     api_request_configs = [t for t in tool_settings if t.get("type") == "apiRequest"]
     if api_request_configs:
-        log_adapter.info(f"Found {len(api_request_configs)} additional API request configurations")
+        logger.info(f"Found {len(api_request_configs)} additional API request configurations")
         # Additional specialized API handling can be added here if needed
         # For now, rely on centralized configuration
     else:
-        log_adapter.debug("No additional API request tools to configure")
+        logger.debug("No additional API request tools to configure")
 
 
     # --- Predefined tools are now handled by centralized configuration above ---
@@ -227,5 +240,5 @@ def configure_tools(agent_config: Dict, agent_id: str) -> Tuple[List[BaseTool], 
     tools_list.extend(safe_tools)
     tools_list.extend(datastore_tools) 
 
-    log_adapter.info(f"Total tools configured: {len(tools_list)} ({len(safe_tools)} safe, {len(datastore_tools)} datastore).")
+    logger.info(f"Total tools configured: {len(tools_list)} ({len(safe_tools)} safe, {len(datastore_tools)} datastore).")
     return tools_list, safe_tools, datastore_tools, datastore_names, max_rewrites

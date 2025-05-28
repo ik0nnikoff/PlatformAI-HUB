@@ -129,7 +129,6 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         """
         self.config_url = f"http://{settings.MANAGER_HOST}:{settings.MANAGER_PORT}{settings.API_V1_STR}/agents/{self._component_id}/config"
 
-        self.logger.info(f"Fetching configuration from {self.config_url}...")
         self.agent_config = await fetch_config(self.config_url, self.logger)
         if not self.agent_config:
             self.logger.error(f"Failed to fetch or invalid configuration from {self.config_url}.")
