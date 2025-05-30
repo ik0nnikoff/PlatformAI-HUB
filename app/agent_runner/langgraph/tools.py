@@ -17,21 +17,10 @@ from app.agent_runner.common.config_mixin import AgentConfigMixin
 from app.agent_runner.common.tools_registry import (
     auth_tool,
     get_user_info_tool, 
-    # get_bonus_points,
-    make_api_request,
     ToolsRegistry,
     configure_tools_centralized
 )
 
-# logger = logging.getLogger(__name__)
-
-# --- NOTE: Predefined tools are now imported from centralized tools_registry ---
-# auth_tool, get_user_info_tool, get_bonus_points are imported from tools_registry
-# make_api_request is also imported from tools_registry with enhanced error handling
-
-
-# --- Tool Configuration Logic ---
-# NOTE: make_api_request is now imported from centralized tools_registry
 
 def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[BaseTool], List[BaseTool], List[BaseTool], Set[str], int]:
     """
@@ -101,7 +90,6 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
         predefined_tools_map = {
             "auth_tool": auth_tool,
             "get_user_info_tool": get_user_info_tool,
-            # "get_bonus_points": get_bonus_points
         }
         for tool_name, tool_instance in predefined_tools_map.items():
             safe_tools.append(tool_instance)
@@ -143,8 +131,8 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
                     search_limit = kb_settings.get("retrievalLimit", 4) # Use retrievalLimit
                     max_rewrites = kb_settings.get("rewriteAttempts", max_rewrites)
                     tool_id = kb_config.get("id", f"kb_retriever_{'_'.join([str(kb_id) for kb_id in kb_ids])}") # Generate ID if missing
-                    tool_name = kb_config.get("name", "Knowledge Base Search") # Name for LLM
-                    kb_description = kb_config.get("description", f"Searches and returns information from the {qdrant_collection} knowledge base.")
+                    tool_name = kb_settings.get("name", "Knowledge Base Search") # Name for LLM
+                    kb_description = kb_settings.get("description", f"Searches and returns information from the {qdrant_collection} knowledge base.")
                     
                     # New configuration fields
                     return_to_agent = kb_settings.get("returnToAgent", True)
@@ -188,7 +176,7 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
                     )
                     datastore_tools.append(retriever_tool)
                     datastore_names.add(tool_id) # Use tool_id instead of kb_id
-                    logger.info(f"Configured Knowledge Base tool '{tool_name}' (ID: {tool_id}) for datasources: {kb_ids}")
+                    logger.info(f"Configured Knowledge Base tool '{tool_name}' (ID: {tool_id}) for datasources: {kb_ids} with description: {kb_description}")
 
             except Exception as e:
                 logger.error(f"Failed to configure Knowledge Base tools: {e}", exc_info=True)
@@ -204,7 +192,7 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
         ws_config = web_search_configs[0] # Assume one web search tool
         ws_settings = ws_config.get("settings", {})
         ws_id = ws_config.get("id", "web_search") # Use ID from config
-        ws_name = ws_config.get("name", "Web Search") # Name for LLM
+        ws_name = ws_settings.get("name", "Web Search") # Name for LLM
         ws_description = ws_settings.get("description", "Performs a web search for recent information.") # Use description from config if available
         ws_enabled = ws_config.get("enabled", True)
         search_limit = ws_settings.get("searchLimit", 3)
@@ -227,7 +215,7 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
                         exclude_domains=exclude_domains,
                     )
                     safe_tools.append(web_search_tool)
-                    logger.info(f"Configured Web Search tool '{ws_name}' (ID: {ws_id})")
+                    logger.info(f"Configured Web Search tool '{ws_name}' (ID: {ws_id}) with description: {ws_description}")
                 except Exception as e:
                     logger.error(f"Failed to create Web Search tool: {e}", exc_info=True)
 

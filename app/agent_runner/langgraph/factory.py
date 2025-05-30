@@ -505,7 +505,7 @@ class GraphFactory(AgentConfigMixin):
                         self.logger.warning("Rewriting resulted in empty or identical question. Stopping rewrite.")
                         # Fall through to "no answer" case below
                     else:
-                        trigger_message = HumanMessage(content=f"Переформулируй запрос так: {rewritten_question}")
+                        trigger_message = HumanMessage(content=f"Произведи поиск в базе данных заново: {rewritten_question}")
                         return {
                             "messages": [trigger_message],
                             "question": rewritten_question, 
@@ -738,7 +738,7 @@ class GraphFactory(AgentConfigMixin):
         time_str = self._get_moscow_time()
         
         template = """Ты помощник для задач с ответами на вопросы. Используйте следующие фрагменты извлеченного контекста, чтобы ответить на вопрос.
-            Если у тебя нет ответа на вопрос, просто скажи что у тебя нет данных для ответа на этот вопрос, предложи переформулировать фопрос.
+            Если у тебя нет ответа на вопрос, просто скажи что у тебя нет данных для ответа на этот вопрос, предложи переформулировать вопрос.
             Старайся отвечать кратко и содержательно.\n
                 Текущее время (по Москве): {current_time}\n
                 Вопрос: {question} \n
@@ -862,8 +862,10 @@ Rephrased Question:"""
         if "retrieve" in workflow.nodes: # This implies grade_documents, rewrite, generate are also there if configured correctly
             workflow.add_edge("retrieve", "grade_documents")
             workflow.add_edge("rewrite", "agent") # After rewriting, go back to agent for new tool call with rewritten query
-            workflow.add_edge("generate", END)
-            self.logger.info("Added RAG edges: retrieve->grade, rewrite->agent, generate->END")
+            # workflow.add_edge("generate", END)
+            workflow.add_edge("generate", "agent") # After generation, go back to agent for final output
+            # self.logger.info("Added RAG edges: retrieve->grade, rewrite->agent, generate->END")
+            self.logger.info("Added RAG edges: retrieve->grade, rewrite->agent, generate->agent")
 
             workflow.add_conditional_edges(
                 "grade_documents",

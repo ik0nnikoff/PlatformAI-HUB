@@ -511,7 +511,7 @@ def configure_tools_centralized(
                     log_adapter=log_adapter
                 )
                 api_tools.append(api_tool)
-                log_adapter.info(f"Configured API tool: {complete_api_config['id']} ({complete_api_config['name']}) (method: {complete_api_config['method']})")
+                log_adapter.info(f"Configured API tool: {complete_api_config['id']} ({complete_api_config['name']}) (method: {complete_api_config['method']}) wirh description: {complete_api_config['description']})")
             except Exception as e:
                 log_adapter.error(f"Failed to configure API tool {api_config_entry.get('id', 'unnamed')}: {e}")
     
