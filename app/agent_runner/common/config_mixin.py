@@ -3,7 +3,7 @@
 Обеспечивает единообразный доступ к настройкам модели и агента.
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -207,3 +207,130 @@ class AgentConfigMixin:
         finally:
             # Restore original config
             self.agent_config = temp_config
+    
+    def _extract_kb_ids_from_tool_message(self, tool_message) -> List[str]:
+        """
+        Извлекает Knowledge Base IDs из ToolMessage.
+        
+        Args:
+            tool_message: ToolMessage объект из LangChain
+            
+        Returns:
+            List[str]: Список KB IDs, связанных с этим инструментом
+        """
+        if not hasattr(tool_message, 'name') or not tool_message.name:
+            logger.debug("ToolMessage has no name attribute")
+            return []
+            
+        tool_name = tool_message.name
+        tools_settings = self._get_tools_settings()
+        
+        logger.debug(f"Looking for tool with name: {tool_name}")
+        logger.debug(f"Available tools: {[t.get('id') + ' (' + t.get('type', 'unknown') + ')' for t in tools_settings]}")
+        
+        # Ищем инструмент Knowledge Base с соответствующим ID
+        for tool in tools_settings:
+            tool_type = tool.get("type")
+            tool_id = tool.get("id")
+            logger.debug(f"Checking tool: id={tool_id}, type={tool_type}")
+            
+            # Поддерживаем различные типы KB инструментов
+            if tool_type in ["knowledgeBase", "simple_rag"] and tool_id == tool_name:
+                tool_settings = tool.get("settings", {})
+                kb_ids = tool_settings.get("knowledgeBaseIds", [])
+                logger.debug(f"Found matching tool! KB IDs: {kb_ids}")
+                return kb_ids
+        
+        logger.debug("No matching tool found")
+        return []
+
+    def _get_knowledge_base_model_config(self, kb_ids: List[str]) -> Optional[Dict[str, Any]]:
+        """
+        Получает конфигурацию модели для указанных KB ID.
+        
+        Args:
+            kb_ids: Список ID баз знаний
+            
+        Returns:
+            Optional[Dict[str, Any]]: Конфигурация модели или None
+        """
+        if not kb_ids:
+            return None
+            
+        tools_settings = self._get_tools_settings()
+        
+        for tool in tools_settings:
+            tool_type = tool.get("type")
+            # Поддерживаем различные типы KB инструментов
+            if tool_type in ["knowledgeBase", "simple_rag"]:
+                tool_settings = tool.get("settings", {})
+                tool_kb_ids = tool_settings.get("knowledgeBaseIds", [])
+                
+                # Проверяем, есть ли пересечение между запрашиваемыми KB ID и настроенными
+                if any(kb_id in tool_kb_ids for kb_id in kb_ids):
+                    # Проверяем, есть ли специфичная конфигурация модели
+                    if any(key in tool_settings for key in ["modelId", "provider", "temperature"]):
+                        return {
+                            "model_id": tool_settings.get("modelId"),
+                            "provider": tool_settings.get("provider"),
+                            "temperature": tool_settings.get("temperature")
+                        }
+        
+        return None
+    
+    def _get_kb_specific_node_config(self, node_type: str, kb_ids: List[str] = None) -> Dict[str, Any]:
+        """
+        Получает конфигурацию узла с учетом настроек базы знаний.
+        
+        Args:
+            node_type: Тип узла ("grading", "rewrite", "generate")
+            kb_ids: Список ID баз знаний
+            
+        Returns:
+            Dict[str, Any]: Конфигурация узла
+        """
+        # Получаем базовую конфигурацию
+        base_config = self._get_model_config()
+        
+        # Специфические настройки для разных типов узлов
+        node_specific_overrides = {
+            "grading": {
+                "streaming": False,
+                "temperature": 0.0  # Grading должен быть детерминистическим
+            },
+            "rewrite": {
+                "streaming": False,
+                "temperature": 0.0  # Rewrite тоже должен быть детерминистическим
+            },
+            "generate": {
+                "streaming": True,
+                "temperature": base_config["temperature"]
+            }
+        }
+        
+        # Применяем специфические настройки узла
+        config = {
+            "model_id": base_config["model_id"],
+            "provider": base_config["provider"],
+            "temperature": base_config["temperature"],
+            "streaming": True  # По умолчанию
+        }
+        
+        if node_type in node_specific_overrides:
+            config.update(node_specific_overrides[node_type])
+        
+        # Если указаны KB IDs, проверяем специфичную конфигурацию модели
+        if kb_ids:
+            kb_model_config = self._get_knowledge_base_model_config(kb_ids)
+            if kb_model_config:
+                # Обновляем только те параметры, которые заданы в KB конфигурации
+                if kb_model_config.get("model_id"):
+                    config["model_id"] = kb_model_config["model_id"]
+                if kb_model_config.get("provider"):
+                    config["provider"] = kb_model_config["provider"]
+                if kb_model_config.get("temperature") is not None:
+                    # Для grading и rewrite сохраняем специфичную температуру узла
+                    if node_type not in ["grading", "rewrite"]:
+                        config["temperature"] = kb_model_config["temperature"]
+        
+        return config

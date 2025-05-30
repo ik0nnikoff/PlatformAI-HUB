@@ -32,6 +32,11 @@ class AgentConfigSimpleToolSettings(BaseModel):
     returnToAgent: Optional[bool] = False
     rewriteQuery: Optional[bool] = True
     
+    # Knowledge Base model configuration (новые поля для поддержки специфичных моделей)
+    modelId: Optional[str] = None  # Модель для RAG операций этой базы знаний
+    provider: Optional[str] = None  # Провайдер модели для RAG операций
+    temperature: Optional[float] = None  # Температура для RAG операций
+    
     # Web Search tool settings
     searchLimit: Optional[int] = 3
     include_domains: Optional[List[str]] = None

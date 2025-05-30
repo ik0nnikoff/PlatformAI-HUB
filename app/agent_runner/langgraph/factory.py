@@ -365,8 +365,6 @@ class GraphFactory(AgentConfigMixin):
 
         messages = state["messages"]
         current_question = state["question"]
-        llm_config = self._get_node_config("grading")
-        node_model_id = llm_config.get("model_name", "gpt-4o-mini")  # Получаем model_id из конфига
 
         self.logger.info(f"Grading documents for question: '{current_question}'")
 
@@ -378,6 +376,16 @@ class GraphFactory(AgentConfigMixin):
                 f"Expected one of: {self.datastore_names}"
             )
             return {"documents": [], "question": current_question}
+
+        # Извлекаем KB IDs из ToolMessage для получения KB-специфичной конфигурации
+        kb_ids = self._extract_kb_ids_from_tool_message(last_message)
+        llm_config = self._get_node_config("grading", kb_ids)
+        node_model_id = llm_config.get("model_id", "gpt-4o-mini")  # Используем правильный ключ model_id
+        
+        if kb_ids:
+            self.logger.info(f"Using KB-specific model configuration for KB IDs: {kb_ids}")
+        else:
+            self.logger.info("No KB IDs found, using default grading configuration")
 
         # Парсим документы из ToolMessage
         docs_content = last_message.content
@@ -391,9 +399,9 @@ class GraphFactory(AgentConfigMixin):
             self.logger.info("No documents retrieved or all documents are empty.")
             return {"documents": [], "question": current_question}
 
-        # Создаем модель и промпт используя централизованные методы
+        # Создаем модель и промпт используя централизованные методы с KB-специфичной конфигурацией
         prompt = self._create_grading_template()
-        model = self._create_node_llm("grading")
+        model = self._create_node_llm("grading", kb_ids)
 
         if not model:
             return {"documents": [], "question": current_question}
@@ -471,9 +479,26 @@ class GraphFactory(AgentConfigMixin):
         rewrite_count = state.get("rewrite_count", 0)
         node_max_rewrites = self.max_rewrites # Max rewrites from factory
         
-        # Используем централизованные методы для получения конфигурации
-        llm_config = self._get_node_config("rewrite")
-        node_model_id = llm_config.get("model_name", "gpt-4o-mini")
+        # Ищем последнее ToolMessage от datastore tool для извлечения KB IDs
+        last_datastore_tool_message = None
+        for message in reversed(messages):
+            if isinstance(message, ToolMessage) and message.name in self.datastore_names:
+                last_datastore_tool_message = message
+                break
+        
+        # Извлекаем KB IDs для получения KB-специфичной конфигурации
+        kb_ids = []
+        if last_datastore_tool_message:
+            kb_ids = self._extract_kb_ids_from_tool_message(last_datastore_tool_message)
+        
+        # Используем централизованные методы для получения конфигурации с KB IDs
+        llm_config = self._get_node_config("rewrite", kb_ids)
+        node_model_id = llm_config.get("model_id", "gpt-4o-mini")  # Используем правильный ключ model_id
+        
+        if kb_ids:
+            self.logger.info(f"Using KB-specific model configuration for rewrite. KB IDs: {kb_ids}")
+        else:
+            self.logger.info("No KB IDs found, using default rewrite configuration")
 
         self.logger.info(f"Rewrite attempt {rewrite_count + 1}/{node_max_rewrites} for question: '{original_question}'")
 
@@ -481,8 +506,8 @@ class GraphFactory(AgentConfigMixin):
             self.logger.info(f"Rewriting original question: {original_question}")
             prompt_msg = self._create_rewrite_prompt(original_question, messages)
         
-            # Используем централизованный метод создания LLM
-            model = self._create_node_llm("rewrite")
+            # Используем централизованный метод создания LLM с KB-специфичной конфигурацией
+            model = self._create_node_llm("rewrite", kb_ids)
 
             if not model:
                 self.logger.error(f"Could not initialize LLM for rewriting. Falling through to no answer.")
@@ -531,9 +556,26 @@ class GraphFactory(AgentConfigMixin):
         current_question = state["question"]
         documents = state["documents"]
         
-        # Используем централизованные методы для получения конфигурации
-        llm_config = self._get_node_config("generate")
-        node_model_id = llm_config.get("model_name", "gpt-4o-mini")
+        # Ищем последнее ToolMessage от datastore tool для извлечения KB IDs
+        last_datastore_tool_message = None
+        for message in reversed(messages):
+            if isinstance(message, ToolMessage) and message.name in self.datastore_names:
+                last_datastore_tool_message = message
+                break
+        
+        # Извлекаем KB IDs для получения KB-специфичной конфигурации
+        kb_ids = []
+        if last_datastore_tool_message:
+            kb_ids = self._extract_kb_ids_from_tool_message(last_datastore_tool_message)
+        
+        # Используем централизованные методы для получения конфигурации с KB IDs
+        llm_config = self._get_node_config("generate", kb_ids)
+        node_model_id = llm_config.get("model_id", "gpt-4o-mini")  # Используем правильный ключ model_id
+        
+        if kb_ids:
+            self.logger.info(f"Using KB-specific model configuration for generation. KB IDs: {kb_ids}")
+        else:
+            self.logger.info("No KB IDs found, using default generation configuration")
 
         if not documents:
             self.logger.warning("Generate node called with no relevant documents.")
@@ -549,9 +591,9 @@ class GraphFactory(AgentConfigMixin):
         self.logger.info(f"Generating answer for question: '{current_question}' using {len(documents)} documents.")
         documents_str = "\\n\\n".join(documents)
 
-        # Используем централизованные методы
+        # Используем централизованные методы с KB-специфичной конфигурацией
         prompt = self._create_rag_template()
-        llm = self._create_node_llm("generate")
+        llm = self._create_node_llm("generate", kb_ids)
 
         if not llm:
             self.logger.error(f"Could not initialize LLM for generation.")
@@ -642,60 +684,49 @@ class GraphFactory(AgentConfigMixin):
 
     # ===== CENTRALIZED HELPER METHODS FOR NODE OPERATIONS =====
 
-    def _get_node_config(self, node_type: str = "default") -> Dict[str, Any]:
+    def _get_node_config(self, node_type: str = "default", kb_ids: List[str] = None) -> Dict[str, Any]:
         """
         Получает конфигурацию LLM для узлов с возможностью 
-        специфических настроек для разных типов узлов.
+        специфических настроек для разных типов узлов и баз знаний.
+        
+        Args:
+            node_type: Тип узла ("agent", "grading", "rewrite", "generate")
+            kb_ids: Список ID баз знаний для RAG операций
         """
-        # Use centralized configuration method
-        model_config = self._get_model_config()
-        
-        # Базовые настройки
-        base_config = {
-            "model_id": model_config["model_id"],
-            "provider": model_config["provider"],
-            "temperature": model_config["temperature"]
-        }
-        
-        # Специфические настройки для разных типов узлов
-        node_specific_overrides = {
-            "agent": {
-                "streaming": True,
-                "temperature": base_config["temperature"]
-            },
-            "grading": {
-                "streaming": False,
-                "temperature": 0.0  # Grading должен быть детерминистическим
-            },
-            "rewrite": {
-                "streaming": False,
-                "temperature": 0.1
-            },
-            "generate": {
-                "streaming": True,
-                "temperature": base_config["temperature"]
+        if node_type == "agent":
+            # Для агента используем стандартную конфигурацию
+            model_config = self._get_model_config()
+            return {
+                "model_id": model_config["model_id"],
+                "provider": model_config["provider"],
+                "temperature": model_config["temperature"],
+                "streaming": True
             }
-        }
-        
-        # Применяем специфические настройки если они есть
-        if node_type in node_specific_overrides:
-            base_config.update(node_specific_overrides[node_type])
+        elif node_type in ["grading", "rewrite", "generate"]:
+            # Для RAG узлов используем новую логику с поддержкой KB-специфичных моделей
+            return self._get_kb_specific_node_config(node_type, kb_ids)
         else:
-            base_config["streaming"] = True  # По умолчанию включаем стриминг
-            
-        return base_config
+            # Fallback для других типов узлов
+            model_config = self._get_model_config()
+            return {
+                "model_id": model_config["model_id"],
+                "provider": model_config["provider"],
+                "temperature": model_config["temperature"],
+                "streaming": True
+            }
 
-    def _create_node_llm(self, node_type: str = "default") -> Optional[ChatOpenAI]:
+    def _create_node_llm(self, node_type: str = "default", kb_ids: List[str] = None) -> Optional[ChatOpenAI]:
         """
         Создает экземпляр LLM для узла с соответствующей конфигурацией.
         
         Args:
             node_type: Тип узла ("agent", "grading", "rewrite", "generate")
+            kb_ids: Список ID баз знаний для RAG операций
         
         Returns:
             ChatOpenAI instance или None при ошибке
         """
-        config = self._get_node_config(node_type)
+        config = self._get_node_config(node_type, kb_ids)
         
         model = self._create_llm_instance(
             provider=config["provider"],
@@ -706,9 +737,11 @@ class GraphFactory(AgentConfigMixin):
         )
         
         if model:
-            self.logger.info(f"Created {node_type} LLM: {config['model_id']} via {config['provider']}")
+            kb_info = f" for KB {kb_ids}" if kb_ids else ""
+            self.logger.info(f"Created {node_type} LLM{kb_info}: {config['model_id']} via {config['provider']}")
         else:
-            self.logger.error(f"Failed to create {node_type} LLM: {config['model_id']} via {config['provider']}")
+            kb_info = f" for KB {kb_ids}" if kb_ids else ""
+            self.logger.error(f"Failed to create {node_type} LLM{kb_info}: {config['model_id']} via {config['provider']}")
             
         return model
 
@@ -753,11 +786,18 @@ class GraphFactory(AgentConfigMixin):
     def _create_grading_template(self) -> PromptTemplate:
         """Создает стандартный PromptTemplate для оценки релевантности документов."""
         return PromptTemplate(
-            template="""Вы оцениваете релевантность извлеченного документа для вопроса пользователя. \n
-                    Вот извлеченный документ: \n\n {context} \n\n
-                    Вот вопрос пользователя: {question} \n
-                    Если документ содержит ключевые слова или семантическое значение, связанные с вопросом пользователя, оцените его как релевантный. \n
-                    Дайте двоичную оценку 'yes' или 'no', чтобы указать, соответствует ли документ вопросу.""",
+            template="""You are assessing the relevance of a retrieved document to a user question.
+                    
+                    Retrieved document: 
+                    {context}
+                    
+                    User question: {question}
+                    
+                    If the document contains keywords or semantic meaning related to the user question, grade it as relevant.
+                    It does not need to be a stringent test. The goal is to filter out erroneous retrievals.
+                    
+                    Give a binary score 'yes' or 'no' to indicate whether the document is relevant to the question.
+                    You must respond ONLY with 'yes' or 'no'.""",
             input_variables=["context", "question"],
         )
 
