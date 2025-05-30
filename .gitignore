@@ -1,8 +1,11 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
+*.log
 build/
 dist/
+logs/
+tests/
 wheels/
 *.egg-info
 
@@ -10,3 +13,4 @@ wheels/
 .venv
 .vscode
 docker-PAI/data
+logs/app.log

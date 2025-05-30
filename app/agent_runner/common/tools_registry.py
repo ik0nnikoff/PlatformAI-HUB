@@ -19,6 +19,7 @@ This replaces multiple duplicated implementations found in:
 
 import logging
 import requests
+import cloudscraper
 import json
 from typing import Annotated, Dict, List, Tuple, Set, Optional, Any, Union
 from functools import partial
@@ -131,30 +132,28 @@ Authorization status: Не авторизован
 # =============================================================================
 
 def make_api_request(
-    # Arguments passed from the LLM call (tool input) - currently not used with this config structure
-    input_args: Optional[Dict[str, Any]] = None,
     # Arguments bound from the tool configuration using functools.partial
     api_config: Dict[str, Any] = None,
-    agent_state: Optional[Dict[str, Any]] = None, # Access to agent state if needed
-    log_adapter: Optional[logging.LoggerAdapter] = None
+    log_adapter: Optional[logging.LoggerAdapter] = None,
+    # LangGraph state injection - provides access to current runtime state
+    state: Annotated[dict, InjectedState] = None
 ) -> str:
     """
     Makes an HTTP request based on the provided API configuration and input arguments.
-    Handles simple key-value parameters and placeholder replacement from agent_state.
+    Handles simple key-value parameters and placeholder replacement from LangGraph state.
     
     This is a centralized implementation that replaces multiple duplicated versions
     found across different tool files.
     
     Args:
-        input_args: Arguments passed from the LLM call (currently not used)
         api_config: Configuration dictionary containing:
             - apiUrl: The API endpoint URL
             - method: HTTP method (GET, POST, etc.)
             - headers: Request headers
             - params: List of parameter configurations with placeholders
             - name: Tool name for logging
-        agent_state: Current agent state for placeholder resolution
         log_adapter: Logger adapter for consistent logging
+        state: LangGraph injected state for placeholder resolution
         
     Returns:
         str: API response as JSON string or plain text, or error message
@@ -206,21 +205,35 @@ def make_api_request(
         headers = {}  # Force to empty dict for safety
 
     effective_logger.info(f"Executing API tool '{tool_name}'")
+    # effective_logger.info(f"Function parameters: api_config={api_config is not None}, log_adapter={log_adapter is not None}, state={state is not None}")
+    
+    # Early debug logging
+    try:
+        # effective_logger.info(f"State type: {type(state)}")
+        if state:
+            # effective_logger.info(f"State keys: {list(state.keys())}")
+            user_data = state.get("user_data", {})
+            # effective_logger.info(f"User data extracted: {user_data}")
+        else:
+            # effective_logger.info("State is None or empty")
+            user_data = {}
+    except Exception as e:
+        effective_logger.error(f"Error accessing state: {e}", exc_info=True)
+        user_data = {}
+    
     effective_logger.debug(f"API Config: {api_config}")
-    if agent_state:
+    if state:
         # Log state without messages to avoid verbose output
-        state_summary = {k: v for k, v in agent_state.items() if k != 'messages'}
+        state_summary = {k: v for k, v in state.items() if k != 'messages'}
         effective_logger.debug(f"Agent State (partial): {state_summary}")
 
     query_params = {}
 
     # --- Prepare Query Parameters with Placeholder Replacement ---
-    user_data = agent_state.get("user_data", {}) if agent_state else {}
-
-    # Убрать потом
-    # user_data = state.get("user_data", {})
-    log_adapter.info(f"agent_state: {agent_state}")
-    log_adapter.info(f"User data for API tool '{tool_name}': {user_data}")
+    # user_data already extracted above
+    
+    # Debug logging
+    effective_logger.debug(f"Final user_data for API tool '{tool_name}': {user_data}")
 
     for param_conf in params_config:
         param_key = param_conf.get("key")
@@ -257,40 +270,100 @@ def make_api_request(
         else:
             effective_logger.warning(f"Skipping invalid parameter config: {param_conf}")
 
-    # --- Make Request ---
+    # --- Make Request with Cloudflare Bypass ---
     try:
         effective_logger.info(f"Making {method} request to {url}")
-        effective_logger.info(f"Headers type: {type(headers)}, value: {headers}")
-        effective_logger.info(f"Query Params: {query_params}")
+        effective_logger.debug(f"Headers type: {type(headers)}, value: {headers}")
+        effective_logger.debug(f"Query Params: {query_params}")
 
         # Final safety check before making request
         if not isinstance(headers, dict):
             effective_logger.error(f"CRITICAL ERROR: Headers is not a dict before request! Type: {type(headers)}")
             headers = {}  # Force to empty dict
 
-        response = requests.request(
-            method=method,
-            url=url,
-            headers=headers,
-            params=query_params,
-            timeout=15  # Reasonable timeout
-        )
+        # Try cloudscraper first (for Cloudflare bypass)
+        try:
+            effective_logger.info(f"Attempting Cloudflare bypass with cloudscraper for {url}")
+            scraper = cloudscraper.create_scraper(
+                browser={
+                    'browser': 'chrome',
+                    'platform': 'windows',
+                    'desktop': True
+                }
+            )
+            
+            # Update headers to include realistic browser headers if not already present
+            if not headers.get('User-Agent'):
+                headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            
+            response = scraper.request(
+                method=method,
+                url=url,
+                headers=headers,
+                params=query_params,
+                timeout=15
+            )
+            effective_logger.debug(f"Cloudscraper request successful with status {response.status_code}")
+            
+        except Exception as cloudscraper_error:
+            effective_logger.warning(f"Cloudscraper failed for {url}: {cloudscraper_error}")
+            effective_logger.info(f"Falling back to standard requests library")
+            
+            # Fallback to standard requests if cloudscraper fails
+            response = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                params=query_params,
+                timeout=15
+            )
+
         response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+        
+        # Log response details for debugging
+        effective_logger.debug(f"API Response Status: {response.status_code}")
+        effective_logger.debug(f"API Response Headers: {dict(response.headers)}")
+        effective_logger.debug(f"API Response Content-Type: {response.headers.get('content-type', 'Not specified')}")
+        effective_logger.debug(f"API Response Content Length: {len(response.content)} bytes")
+        effective_logger.debug(f"API Response Encoding: {response.encoding}")
+        
+        # Get properly decoded text content (handles compression automatically)
+        try:
+            # Use response.text which automatically handles decompression and encoding
+            decoded_content = response.text
+            # effective_logger.info(f"Decoded content: {decoded_content[:100]}... (truncated for preview)")
+            effective_logger.debug(f"Successfully got decoded text content, encoding: {response.encoding}")
+        except Exception as e:
+            effective_logger.warning(f"Failed to get response.text: {e}")
+            # Fallback: manually decode content if response.text fails
+            try:
+                decoded_content = response.content.decode(response.encoding or 'utf-8')
+                effective_logger.debug(f"Successfully manually decoded content")
+            except Exception as e2:
+                effective_logger.error(f"Manual decoding also failed: {e2}")
+                decoded_content = str(response.content)
+
+        # Log first 1000 characters of decoded content for debugging
+        response_preview = decoded_content[:50] if len(decoded_content) > 50 else decoded_content
+        effective_logger.info(f"API Response Content Preview (first 50 chars): {response_preview}")
 
         # Try to return JSON response if possible, otherwise text
         try:
-            json_response = response.json()
+            json_response = json.loads(decoded_content)
+            # effective_logger.debug(f"Successfully parsed JSON response with {len(json_response)} top-level items")
             # Convert JSON to string for Langchain tool output
             return json.dumps(json_response, ensure_ascii=False, indent=2)
-        except json.JSONDecodeError:
-            return response.text  # Return raw text if not JSON
+        except json.JSONDecodeError as json_error:
+            effective_logger.warning(f"Failed to parse JSON response: {json_error}")
+            effective_logger.debug("Returning raw text response")
+            return decoded_content  # Return decoded text if not JSON
 
     except requests.exceptions.Timeout:
         effective_logger.error(f"Timeout error making {method} request to {url}")
         return f"Error: API request timed out for tool '{tool_name}'."
     except requests.exceptions.HTTPError as e:
-        effective_logger.error(f"HTTP error making {method} request to {url}: {e.response.status_code} {e.response.text}")
-        return f"Error: API request failed for tool '{tool_name}' with status {e.response.status_code}. Response: {e.response.text}"
+        effective_logger.error(f"HTTP error making {method} request to {url}: {e.response.status_code} {e.response.text[:500]}")
+        return f"Error: API request failed for tool '{tool_name}' with status {e.response.status_code}. Response: {e.response.text[:200]}"
     except requests.exceptions.RequestException as e:
         effective_logger.error(f"Request exception making {method} request to {url}: {e}")
         return f"Error: Failed to make API request for tool '{tool_name}': {e}."
@@ -334,14 +407,13 @@ class ToolsRegistry:
         return list(cls.PREDEFINED_TOOLS.keys())
     
     @classmethod
-    def create_api_tool(cls, api_config: Dict[str, Any], agent_state: Dict[str, Any], 
+    def create_api_tool(cls, api_config: Dict[str, Any], 
                        log_adapter: logging.LoggerAdapter) -> BaseTool:
         """
         Create a dynamic API request tool using the centralized make_api_request function.
         
         Args:
             api_config: API configuration dictionary
-            agent_state: Current agent state
             log_adapter: Logger adapter for consistent logging
             
         Returns:
@@ -351,20 +423,24 @@ class ToolsRegistry:
         tool_name = api_config.get("name", tool_id)
         tool_description = api_config.get("description", f"API tool: {tool_name}")
         
-        # Create a partial function with the configuration bound
-        api_function = partial(
-            make_api_request,
-            api_config=api_config,
-            agent_state=agent_state,
-            log_adapter=log_adapter
-        )
+        # Create API tool using @tool decorator pattern for proper InjectedState handling
+        @tool
+        def api_tool_func(state: Annotated[dict, InjectedState]) -> str:
+            """
+            Dynamic API request tool created from configuration.
+            Makes HTTP requests with placeholder replacement from agent state.
+            """
+            return make_api_request(
+                api_config=api_config,
+                log_adapter=log_adapter,
+                state=state
+            )
         
-        # Create the tool
-        return Tool(
-            name=tool_id,
-            description=tool_description,
-            func=api_function
-        )
+        # Update the tool's metadata to match configuration
+        api_tool_func.name = tool_id
+        api_tool_func.description = tool_description
+        
+        return api_tool_func
 
 
 # =============================================================================
@@ -406,13 +482,6 @@ def configure_tools_centralized(
         settings = config_simple.get("settings", {})
         tool_settings = settings.get("tools", [])
         
-        # Create agent state for API tools
-        # This is a simplified state - in practice, you might need more context
-        agent_state = {
-            'config': agent_config,
-            'user_data': {},  # Will be populated at runtime
-        }
-        
         # Configure API request tools
         api_request_configs = [t for t in tool_settings if t.get("type") == "apiRequest"]
         for api_config_entry in api_request_configs:
@@ -439,7 +508,6 @@ def configure_tools_centralized(
                 
                 api_tool = ToolsRegistry.create_api_tool(
                     api_config=complete_api_config,
-                    agent_state=agent_state,
                     log_adapter=log_adapter
                 )
                 api_tools.append(api_tool)
