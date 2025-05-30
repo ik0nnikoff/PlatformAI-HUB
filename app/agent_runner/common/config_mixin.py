@@ -3,7 +3,7 @@
 Обеспечивает единообразный доступ к настройкам модели и агента.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 import logging
 
 logger = logging.getLogger(__name__)
@@ -54,15 +54,41 @@ class AgentConfigMixin:
                 .get("simple", {})
                 .get("settings", {}))
     
-    def _get_tools_settings(self) -> Dict[str, Any]:
+    def _get_tools_settings(self) -> List[Dict[str, Any]]:
         """
         Получает настройки инструментов из конфигурации агента.
+        Поддерживает новую структуру config.simple.settings.tools[].
         
         Returns:
-            Dict[str, Any]: Словарь настроек инструментов или пустой словарь если путь не найден.
+            List[Dict[str, Any]]: Список конфигураций инструментов или пустой список если путь не найден.
         """
         agent_settings = self._get_agent_settings()
-        return agent_settings.get("tools", [])
+        tools = agent_settings.get("tools", [])
+        
+        # Убеждаемся, что возвращаем список
+        if not isinstance(tools, list):
+            logger.warning(f"Tools configuration is not a list: {type(tools)}. Returning empty list.")
+            return []
+        
+        return tools
+    
+    def _get_integrations_settings(self) -> List[Dict[str, Any]]:
+        """
+        Получает настройки интеграций из конфигурации агента.
+        Поддерживает новую структуру config.simple.settings.integrations[].
+        
+        Returns:
+            List[Dict[str, Any]]: Список конфигураций интеграций или пустой список если путь не найден.
+        """
+        agent_settings = self._get_agent_settings()
+        integrations = agent_settings.get("integrations", [])
+        
+        # Убеждаемся, что возвращаем список
+        if not isinstance(integrations, list):
+            logger.warning(f"Integrations configuration is not a list: {type(integrations)}. Returning empty list.")
+            return []
+        
+        return integrations
     
     def _get_config_value(self, path: str, default: Any = None) -> Any:
         """
@@ -158,9 +184,26 @@ class AgentConfigMixin:
         Returns:
             int: Значение maxRewrites или 3 по умолчанию
         """
-        return (agent_config
-                .get("config", {})
-                .get("simple", {})
-                .get("settings", {})
-                .get("model", {})
-                .get("maxRewrites", 3))
+        # Temporarily set agent_config for methods to work
+        temp_config = self.agent_config
+        self.agent_config = agent_config
+        
+        try:
+            # First try to get from tools settings
+            tools_settings = self._get_tools_settings()
+            for tool in tools_settings:
+                if tool.get("type") == "knowledgeBase":
+                    tool_settings = tool.get("settings", {})
+                    if "rewriteAttempts" in tool_settings:
+                        return tool_settings["rewriteAttempts"]
+            
+            # Fallback to old path or default
+            return (agent_config
+                    .get("config", {})
+                    .get("simple", {})
+                    .get("settings", {})
+                    .get("model", {})
+                    .get("maxRewrites", 3))
+        finally:
+            # Restore original config
+            self.agent_config = temp_config

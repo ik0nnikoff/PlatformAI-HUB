@@ -17,7 +17,7 @@ from app.agent_runner.common.config_mixin import AgentConfigMixin
 from app.agent_runner.common.tools_registry import (
     auth_tool,
     get_user_info_tool, 
-    get_bonus_points,
+    # get_bonus_points,
     make_api_request,
     ToolsRegistry,
     configure_tools_centralized
@@ -89,9 +89,9 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
         
         # Add centralized tools to our lists
         safe_tools.extend(centralized_safe)
-        # Note: centralized_api_tools are already included in centralized_safe_tools
+        safe_tools.extend(centralized_api)  # Add API tools to safe tools
         
-        logger.info(f"Added {len(centralized_safe)} tools from centralized registry")
+        logger.info(f"Added {len(centralized_safe + centralized_api)} tools from centralized registry")
         
     except Exception as e:
         logger.error(f"Failed to configure centralized tools: {e}", exc_info=True)
@@ -101,7 +101,7 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
         predefined_tools_map = {
             "auth_tool": auth_tool,
             "get_user_info_tool": get_user_info_tool,
-            "get_bonus_points": get_bonus_points
+            # "get_bonus_points": get_bonus_points
         }
         for tool_name, tool_instance in predefined_tools_map.items():
             safe_tools.append(tool_instance)
@@ -145,6 +145,16 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
                     tool_id = kb_config.get("id", f"kb_retriever_{'_'.join([str(kb_id) for kb_id in kb_ids])}") # Generate ID if missing
                     tool_name = kb_config.get("name", "Knowledge Base Search") # Name for LLM
                     kb_description = kb_config.get("description", f"Searches and returns information from the {qdrant_collection} knowledge base.")
+                    
+                    # New configuration fields
+                    return_to_agent = kb_settings.get("returnToAgent", True)
+                    rewrite_query = kb_settings.get("rewriteQuery", True)
+                    tool_enabled = kb_config.get("enabled", True)
+
+                    # Skip disabled tools
+                    if not tool_enabled:
+                        logger.info(f"Skipping disabled Knowledge Base tool '{tool_name}' (ID: {tool_id})")
+                        continue
 
                     if not kb_ids:
                         logger.warning(f"KnowledgeBase tool '{tool_id}' configured but no knowledgeBaseIds provided. Skipping.")
@@ -196,26 +206,30 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
         ws_id = ws_config.get("id", "web_search") # Use ID from config
         ws_name = ws_config.get("name", "Web Search") # Name for LLM
         ws_description = ws_settings.get("description", "Performs a web search for recent information.") # Use description from config if available
+        ws_enabled = ws_config.get("enabled", True)
         search_limit = ws_settings.get("searchLimit", 3)
         include_domains = ws_settings.get("include_domains", [])
         exclude_domains = ws_settings.get("excludeDomains", [])
 
-        tavily_api_key = app_settings.TAVILY_API_KEY
-        if not tavily_api_key:
-            logger.warning("TAVILY_API_KEY not set. Web search tool disabled.")
+        if not ws_enabled:
+            logger.info(f"Skipping disabled Web Search tool '{ws_name}' (ID: {ws_id})")
         else:
-            try:
-                web_search_tool = TavilySearchResults(
-                    max_results=int(search_limit),
-                    name=ws_id, # Use ID from config
-                    description=ws_description, # Use description from config
-                    include_domains=include_domains, # Use domainLimit from config
-                    exclude_domains=exclude_domains,
-                )
-                safe_tools.append(web_search_tool)
-                logger.info(f"Configured Web Search tool '{ws_name}' (ID: {ws_id})")
-            except Exception as e:
-                logger.error(f"Failed to create Web Search tool: {e}", exc_info=True)
+            tavily_api_key = app_settings.TAVILY_API_KEY
+            if not tavily_api_key:
+                logger.warning("TAVILY_API_KEY not set. Web search tool disabled.")
+            else:
+                try:
+                    web_search_tool = TavilySearchResults(
+                        max_results=int(search_limit),
+                        name=ws_id, # Use ID from config
+                        description=ws_description, # Use description from config
+                        include_domains=include_domains, # Use domainLimit from config
+                        exclude_domains=exclude_domains,
+                    )
+                    safe_tools.append(web_search_tool)
+                    logger.info(f"Configured Web Search tool '{ws_name}' (ID: {ws_id})")
+                except Exception as e:
+                    logger.error(f"Failed to create Web Search tool: {e}", exc_info=True)
 
 
     # --- Dynamic API Request Tools ---

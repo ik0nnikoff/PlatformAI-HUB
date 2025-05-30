@@ -44,48 +44,48 @@ def auth_tool() -> str:
     return "необходима авторизация. Допиши в ответе, в квадратных скобках не меняя содержимое: [AUTH_REQUIRED]"
 
 
-@tool
-def get_bonus_points(state: Annotated[dict, InjectedState]) -> str:
-    """
-    Getting the user's bonus points balance
+# @tool
+# def get_bonus_points(state: Annotated[dict, InjectedState]) -> str:
+#     """
+#     Getting the user's bonus points balance
 
-    Args:
-        state (user_data): user data (phone number).
+#     Args:
+#         state (user_data): user data (phone number).
 
-    Returns:
-        str: The number of bonus points on the user's balance that can be spent or accumulated.
-    """
-    # Get logger adapter from state if passed, otherwise use default logger
-    # Try getting agent_id from config first for consistency
-    agent_id = state.get('config', {}).get('configurable', {}).get('agent_id', 'unknown_agent')
-    log_adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id})
+#     Returns:
+#         str: The number of bonus points on the user's balance that can be spent or accumulated.
+#     """
+#     # Get logger adapter from state if passed, otherwise use default logger
+#     # Try getting agent_id from config first for consistency
+#     agent_id = state.get('config', {}).get('configurable', {}).get('agent_id', 'unknown_agent')
+#     log_adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id})
 
-    user_data = state.get("user_data", {})
-    if user_data.get("is_authenticated"):
-        user_phone = user_data.get("phone_number")
-        # Ensure phone number format if necessary
-        if not user_phone:
-            return "Номер телефона пользователя не найден для проверки баллов."
-        try:
-            # Consider making URL configurable
-            url = f"http://airsoft-rus.ru/obmen_rus/bals.php?type=info&tel={user_phone}"
-            response = requests.get(url, timeout=10) # Add timeout
-            response.raise_for_status()
-            # Basic check if response looks like a number
-            if response.text.strip().isdigit():
-                 return f"Количество бонусных баллов на балансе: {response.text}"
-            else:
-                 # Handle cases where the API might return error messages as text
-                 log_adapter.warning(f"Bonus points API returned non-numeric text: {response.text}")
-                 return f"Не удалось получить баланс бонусных баллов. Ответ API: {response.text}"
+#     user_data = state.get("user_data", {})
+#     if user_data.get("is_authenticated"):
+#         user_phone = user_data.get("phone_number")
+#         # Ensure phone number format if necessary
+#         if not user_phone:
+#             return "Номер телефона пользователя не найден для проверки баллов."
+#         try:
+#             # Consider making URL configurable
+#             url = f"http://airsoft-rus.ru/obmen_rus/bals.php?type=info&tel={user_phone}"
+#             response = requests.get(url, timeout=10) # Add timeout
+#             response.raise_for_status()
+#             # Basic check if response looks like a number
+#             if response.text.strip().isdigit():
+#                  return f"Количество бонусных баллов на балансе: {response.text}"
+#             else:
+#                  # Handle cases where the API might return error messages as text
+#                  log_adapter.warning(f"Bonus points API returned non-numeric text: {response.text}")
+#                  return f"Не удалось получить баланс бонусных баллов. Ответ API: {response.text}"
 
-        except requests.exceptions.Timeout:
-             log_adapter.error("Timeout error fetching bonus points.")
-             return "Ошибка: Не удалось связаться с сервисом бонусных баллов (таймаут)."
-        except requests.exceptions.RequestException as e:
-            log_adapter.error(f"Request exception fetching bonus points: {e}")
-            return f"Ошибка: Не удалось получить бонусные баллы ({e})."
-    return "Необходима авторизация для просмотра бонусных баллов. Запусти авторизацию."
+#         except requests.exceptions.Timeout:
+#              log_adapter.error("Timeout error fetching bonus points.")
+#              return "Ошибка: Не удалось связаться с сервисом бонусных баллов (таймаут)."
+#         except requests.exceptions.RequestException as e:
+#             log_adapter.error(f"Request exception fetching bonus points: {e}")
+#             return f"Ошибка: Не удалось получить бонусные баллы ({e})."
+#     return "Необходима авторизация для просмотра бонусных баллов. Запусти авторизацию."
 
 
 @tool
@@ -167,7 +167,7 @@ def make_api_request(
 
     url = api_config.get("apiUrl") # Use apiUrl from config
     method = api_config.get("method", "GET").upper() # Assume GET if not specified
-    headers = api_config.get("headers", {})
+    headers_raw = api_config.get("headers", {})
     params_config = api_config.get("params", []) # Config for expected params (list of dicts)
     tool_name = api_config.get('name', 'unnamed')
 
@@ -177,6 +177,33 @@ def make_api_request(
     # Ensure URL starts with http:// or https://
     if not url.startswith("http://") and not url.startswith("https://"):
         url = "http://" + url # Assume http if scheme is missing
+
+    # Normalize headers: convert list format to dict format if needed
+    headers = {}
+    effective_logger.debug(f"Raw headers type: {type(headers_raw)}, value: {headers_raw}")
+    
+    if isinstance(headers_raw, dict):
+        headers = headers_raw.copy()
+        effective_logger.debug(f"Using dict headers: {headers}")
+    elif isinstance(headers_raw, list):
+        # Convert list format [{"key": "Authorization", "value": "Bearer token"}] to dict
+        effective_logger.debug(f"Converting list headers to dict format...")
+        for header_item in headers_raw:
+            if isinstance(header_item, dict) and "key" in header_item and "value" in header_item:
+                headers[header_item["key"]] = header_item["value"]
+                effective_logger.debug(f"Added header: {header_item['key']} = {header_item['value']}")
+            else:
+                effective_logger.warning(f"Invalid header format in API tool '{tool_name}': {header_item}")
+        effective_logger.debug(f"Final converted headers: {headers}")
+    else:
+        effective_logger.warning(f"Unexpected headers format in API tool '{tool_name}': {type(headers_raw)}")
+        # Ensure headers is always a dict for requests library
+        headers = {}
+    
+    # Final safety check - ensure headers is always a dict
+    if not isinstance(headers, dict):
+        effective_logger.error(f"CRITICAL: Headers is not a dict after normalization! Type: {type(headers)}, Value: {headers}")
+        headers = {}  # Force to empty dict for safety
 
     effective_logger.info(f"Executing API tool '{tool_name}'")
     effective_logger.debug(f"API Config: {api_config}")
@@ -189,6 +216,11 @@ def make_api_request(
 
     # --- Prepare Query Parameters with Placeholder Replacement ---
     user_data = agent_state.get("user_data", {}) if agent_state else {}
+
+    # Убрать потом
+    # user_data = state.get("user_data", {})
+    log_adapter.info(f"agent_state: {agent_state}")
+    log_adapter.info(f"User data for API tool '{tool_name}': {user_data}")
 
     for param_conf in params_config:
         param_key = param_conf.get("key")
@@ -228,8 +260,13 @@ def make_api_request(
     # --- Make Request ---
     try:
         effective_logger.info(f"Making {method} request to {url}")
-        effective_logger.debug(f"Headers: {headers}")
-        effective_logger.debug(f"Query Params: {query_params}")
+        effective_logger.info(f"Headers type: {type(headers)}, value: {headers}")
+        effective_logger.info(f"Query Params: {query_params}")
+
+        # Final safety check before making request
+        if not isinstance(headers, dict):
+            effective_logger.error(f"CRITICAL ERROR: Headers is not a dict before request! Type: {type(headers)}")
+            headers = {}  # Force to empty dict
 
         response = requests.request(
             method=method,
@@ -278,7 +315,7 @@ class ToolsRegistry:
     PREDEFINED_TOOLS = {
         'auth_tool': auth_tool,
         'get_user_info_tool': get_user_info_tool,
-        'get_bonus_points': get_bonus_points,
+        # 'get_bonus_points': get_bonus_points,
     }
     
     @classmethod
@@ -381,13 +418,32 @@ def configure_tools_centralized(
         for api_config_entry in api_request_configs:
             try:
                 api_settings = api_config_entry.get("settings", {})
+                
+                # Merge tool-level configuration with settings for complete API config
+                complete_api_config = {
+                    "id": api_config_entry.get("id", "api_tool"),
+                    "name": api_settings.get("name", api_config_entry.get("id", "API Tool")),
+                    "description": api_settings.get("description", f"API tool: {api_settings.get('name', 'unnamed')}"),
+                    "enabled": api_config_entry.get("enabled", True),
+                    # Extract API configuration from settings
+                    "apiUrl": api_settings.get("apiUrl", ""),
+                    "method": api_settings.get("method", "GET"),
+                    "headers": api_settings.get("headers", {}),
+                    "params": api_settings.get("params", [])
+                }
+                
+                # Skip disabled tools
+                if not complete_api_config.get("enabled", True):
+                    log_adapter.info(f"Skipping disabled API tool: {complete_api_config['id']}")
+                    continue
+                
                 api_tool = ToolsRegistry.create_api_tool(
-                    api_config=api_settings,
+                    api_config=complete_api_config,
                     agent_state=agent_state,
                     log_adapter=log_adapter
                 )
                 api_tools.append(api_tool)
-                log_adapter.info(f"Configured API tool: {api_config_entry.get('id', 'unnamed')}")
+                log_adapter.info(f"Configured API tool: {complete_api_config['id']} ({complete_api_config['name']}) (method: {complete_api_config['method']})")
             except Exception as e:
                 log_adapter.error(f"Failed to configure API tool {api_config_entry.get('id', 'unnamed')}: {e}")
     

@@ -1,8 +1,11 @@
 from pydantic import BaseModel, Field as PydanticField, model_validator, ConfigDict
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+import logging
 
 from .common_schemas import IntegrationType # Импортируем из соседнего файла
+
+logger = logging.getLogger(__name__)
 
 # --- Pydantic Models (API Layer) for Agents ---
 
@@ -16,33 +19,93 @@ class AgentConfigSimpleSettingsModel(BaseModel):
     contextMemoryDepth: int = 10
     provider: str = "OpenAI"
     useMarkdown: bool = True
+    useContextMemory: bool = True  # Added for compatibility
+    streaming: bool = True  # Added streaming support
 
 class AgentConfigSimpleToolSettings(BaseModel):
+    # Knowledge Base tool settings
     knowledgeBaseIds: Optional[List[str]] = None
     retrievalLimit: Optional[int] = 4
     rewriteAttempts: Optional[int] = 3
+    description: Optional[str] = None
+    name: Optional[str] = None
+    returnToAgent: Optional[bool] = False
+    rewriteQuery: Optional[bool] = True
+    
+    # Web Search tool settings
     searchLimit: Optional[int] = 3
+    include_domains: Optional[List[str]] = None
+    excludeDomains: Optional[List[str]] = None
+    
+    # API Request tool settings
+    apiUrl: Optional[str] = None
+    method: Optional[str] = "GET"
+    params: Optional[List[Dict[str, Any]]] = None
+    headers: Optional[Any] = None  # Can be dict or list of {"key": "name", "value": "val"}
+    
+    # Common settings
+    model_config = ConfigDict(extra="allow")  # Allow additional fields
 
 class AgentConfigSimpleTool(BaseModel):
     id: str
     type: str # e.g., "knowledgeBase", "webSearch", "apiRequest"
-    name: str
-    settings: Optional[AgentConfigSimpleToolSettings] = None
+    settings: Optional[Dict[str, Any]] = None  # More flexible to handle different tool types
+    
+    model_config = ConfigDict(extra="allow")  # Allow additional fields
+
+class AgentConfigSimpleIntegrationSettings(BaseModel):
+    """Settings for integrations like Telegram"""
+    # Telegram integration settings
+    botToken: Optional[str] = None
+    webhookUrl: Optional[str] = None
+    
+    # Common integration settings
+    model_config = ConfigDict(extra="allow")  # Allow additional fields
+
+class AgentConfigSimpleIntegration(BaseModel):
+    id: str
+    type: str # e.g., "telegram", "slack", etc.
+    name: Optional[str] = None
+    enabled: Optional[bool] = True
+    settings: Optional[Dict[str, Any]] = None
+    
+    model_config = ConfigDict(extra="allow")  # Allow additional fields
+
+class AgentConfigSimpleSettings(BaseModel):
+    """Settings within config.simple.settings"""
+    # Model configuration
+    model: Optional[Dict[str, Any]] = None
+    
+    # Tools configuration
+    tools: Optional[List[Dict[str, Any]]] = None
+    
+    # Integrations configuration  
+    integrations: Optional[List[Dict[str, Any]]] = None
+    
+    model_config = ConfigDict(extra="allow")  # Allow additional fields
 
 class AgentConfigSimple(BaseModel):
-    settings: Optional[Dict[str, Any]] = None
+    settings: Optional[AgentConfigSimpleSettings] = None
 
     @model_validator(mode='before')
     @classmethod
     def check_config_structure(cls, data: Any) -> Any:
-        # Валидация оставлена как есть из исходного файла,
-        # но может потребовать пересмотра или быть удалена,
-        # если AgentConfigInput обеспечивает достаточную валидацию.
+        """Validate the new structure config.simple.settings"""
         if isinstance(data, dict):
+            # Check if 'settings' exists and contains expected structure
             if 'settings' in data and isinstance(data['settings'], dict):
-                pass
-            else:
-                pass # Логика из исходного файла
+                settings = data['settings']
+                # Validate tools structure
+                if 'tools' in settings and isinstance(settings['tools'], list):
+                    for tool in settings['tools']:
+                        if not isinstance(tool, dict) or 'id' not in tool or 'type' not in tool:
+                            logger.warning(f"Invalid tool structure: {tool}")
+                
+                # Validate integrations structure  
+                if 'integrations' in settings and isinstance(settings['integrations'], list):
+                    for integration in settings['integrations']:
+                        if not isinstance(integration, dict) or 'id' not in integration or 'type' not in integration:
+                            logger.warning(f"Invalid integration structure: {integration}")
         return data
 
 class AgentConfigStructure(BaseModel):
@@ -52,7 +115,7 @@ class AgentConfigStructure(BaseModel):
 class AgentConfigInput(BaseModel):
     name: str = PydanticField(..., min_length=1, max_length=100)
     description: str = PydanticField("", max_length=500)
-    userId: str # В будущем может быть заменено на объект пользователя или ID из системы аутентификации
+    userId: str # Changed from userId to ownerId to match new structure
     config_json: Dict[str, Any] = PydanticField(..., alias='config')
 
 class AgentConfigOutput(BaseModel):
