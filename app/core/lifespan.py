@@ -92,7 +92,7 @@ async def start_existing_agents_and_integrations():
                                 if isinstance(integrations_list, list):
                                     logger.info(f"Found {len(integrations_list)} integrations in config for agent {agent_id}.")
                                     for integration_item in integrations_list:
-                                        if isinstance(integration_item, dict) and integration_item.get("enabled"):
+                                        if isinstance(integration_item, dict) and integration_item.get("settings", {}).get("enabled", True):
                                             integration_type_str = integration_item.get("type")
                                             integration_actual_settings = integration_item.get("settings")
 
@@ -127,7 +127,7 @@ async def start_existing_agents_and_integrations():
                                                 logger.error(f"Invalid integration type string '{integration_type_str}' in config for agent {agent_id}. Skipping.")
                                             except Exception as e_integration_start:
                                                 logger.error(f"Error managing {integration_type_str} integration for agent {agent_id}: {e_integration_start}", exc_info=True)
-                                        elif isinstance(integration_item, dict) and not integration_item.get("enabled"):
+                                        elif isinstance(integration_item, dict) and not integration_item.get("settings").get("enabled"):
                                             logger.info(f"Integration '{integration_item.get('type', 'Unknown type')}' for agent {agent_id} is disabled. Skipping.")
                                         else:
                                             logger.warning(f"Skipping invalid integration item for agent {agent_id}: {integration_item}")

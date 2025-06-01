@@ -137,7 +137,7 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
                     # New configuration fields
                     return_to_agent = kb_settings.get("returnToAgent", True)
                     rewrite_query = kb_settings.get("rewriteQuery", True)
-                    tool_enabled = kb_config.get("enabled", True)
+                    tool_enabled = kb_settings.get("enabled", True)
 
                     # Skip disabled tools
                     if not tool_enabled:
@@ -194,7 +194,7 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
         ws_id = ws_config.get("id", "web_search") # Use ID from config
         ws_name = ws_settings.get("name", "Web Search") # Name for LLM
         ws_description = ws_settings.get("description", "Performs a web search for recent information.") # Use description from config if available
-        ws_enabled = ws_config.get("enabled", True)
+        ws_enabled = ws_settings.get("enabled", True)
         search_limit = ws_settings.get("searchLimit", 3)
         include_domains = ws_settings.get("include_domains", [])
         exclude_domains = ws_settings.get("excludeDomains", [])

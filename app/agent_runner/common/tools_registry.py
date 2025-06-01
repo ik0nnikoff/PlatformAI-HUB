@@ -493,7 +493,7 @@ def configure_tools_centralized(
                     "id": api_config_entry.get("id", "api_tool"),
                     "name": api_settings.get("name", api_config_entry.get("id", "API Tool")),
                     "description": api_settings.get("description", f"API tool: {api_settings.get('name', 'unnamed')}"),
-                    "enabled": api_config_entry.get("enabled", True),
+                    "enabled": api_settings.get("enabled", True),
                     # Extract API configuration from settings
                     "apiUrl": api_settings.get("apiUrl", ""),
                     "method": api_settings.get("method", "GET"),

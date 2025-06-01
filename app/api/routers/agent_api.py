@@ -9,6 +9,7 @@ import json
 
 from app.core.dependencies import get_db
 from app.api.schemas.agent_schemas import AgentConfigInput, AgentConfigOutput, AgentStatus, AgentListItem, AgentConfigStructure
+from app.api.schemas.common_schemas import IntegrationType
 from app.db.crud import agent_crud, user_crud
 from app.services.process_manager import ProcessManager
 from app.api.schemas.user_schemas import UserOutput
@@ -81,6 +82,96 @@ async def _resolve_knowledge_base_ids(config_json: Dict[str, Any], client: httpx
 
     except Exception as e:
         logger.error(f"Agent {agent_id_for_log}: Error processing tools to resolve source IDs: {e}", exc_info=True)
+
+# --- Helper function for managing integrations state ---
+async def _manage_integrations_state(agent_id: str, config_json: Dict[str, Any], pm: ProcessManager):
+    """
+    Управляет состоянием интеграций после перезапуска агента:
+    - Перезапускает включенные интеграции (enabled: true)
+    - Останавливает выключенные интеграции (enabled: false)
+    
+    Args:
+        agent_id (str): ID агента
+        config_json (Dict[str, Any]): Конфигурация агента из БД
+        pm (ProcessManager): Экземпляр ProcessManager
+    """
+    try:
+        logger.info(f"Attempting to manage integrations state for agent {agent_id}")
+        
+        # Извлекаем интеграции из конфигурации агента
+        if not isinstance(config_json, dict):
+            logger.warning(f"Agent {agent_id} config_json is not a dict, skipping integration state management.")
+            return
+            
+        simple_config = config_json.get("simple")
+        if not isinstance(simple_config, dict):
+            logger.warning(f"Agent {agent_id} simple config is not a dict, skipping integration state management.")
+            return
+            
+        settings_config = simple_config.get("settings")
+        if not isinstance(settings_config, dict):
+            logger.warning(f"Agent {agent_id} settings config is not a dict, skipping integration state management.")
+            return
+            
+        integrations_list = settings_config.get("integrations")
+        if not isinstance(integrations_list, list):
+            logger.info(f"Agent {agent_id} has no integrations configured, skipping integration state management.")
+            return
+            
+        logger.info(f"Found {len(integrations_list)} integrations in config for agent {agent_id}")
+        
+        # Обрабатываем каждую интеграцию
+        for integration_item in integrations_list:
+            if not isinstance(integration_item, dict):
+                logger.warning(f"Invalid integration item for agent {agent_id}: {integration_item}")
+                continue
+                
+            integration_type_str = integration_item.get("type")
+            integration_settings = integration_item.get("settings", {})
+            
+            if not integration_type_str:
+                logger.warning(f"Integration item for agent {agent_id} is missing 'type'. Skipping.")
+                continue
+                
+            try:
+                # Валидируем тип интеграции
+                integration_type_enum_val = IntegrationType(integration_type_str).value
+                
+                # Проверяем, включена ли интеграция
+                is_enabled = integration_settings.get("enabled", True)
+                
+                if is_enabled:
+                    logger.info(f"Attempting to restart {integration_type_enum_val} integration for agent: {agent_id}")
+                    
+                    # Перезапускаем интеграцию
+                    restart_success = await pm.restart_integration_process(
+                        agent_id, 
+                        integration_type_enum_val,
+                        integration_settings=integration_settings
+                    )
+                    
+                    if restart_success:
+                        logger.info(f"Successfully initiated restart for {integration_type_enum_val} integration for agent: {agent_id}")
+                    else:
+                        logger.warning(f"Failed to initiate restart for {integration_type_enum_val} integration for agent: {agent_id}")
+                else:
+                    logger.info(f"Integration '{integration_type_str}' for agent {agent_id} is disabled. Attempting to stop it.")
+                    
+                    # Останавливаем выключенную интеграцию
+                    stop_success = await pm.stop_integration_process(agent_id, integration_type_enum_val)
+                    
+                    if stop_success:
+                        logger.info(f"Successfully initiated stop for disabled {integration_type_enum_val} integration for agent: {agent_id}")
+                    else:
+                        logger.warning(f"Failed to stop disabled {integration_type_enum_val} integration for agent: {agent_id}")
+                    
+            except ValueError:
+                logger.error(f"Invalid integration type string '{integration_type_str}' in config for agent {agent_id}. Skipping.")
+            except Exception as e_integration:
+                logger.error(f"Error managing {integration_type_str} integration for agent {agent_id}: {e_integration}", exc_info=True)
+                
+    except Exception as e:
+        logger.error(f"Error managing integrations state for agent {agent_id}: {e}", exc_info=True)
 
 @router.post(
     "/",
@@ -219,6 +310,10 @@ async def update_agent(
                     # Используем ProcessManager для перезапуска
                     await pm.restart_agent_process(agent_id)
                     logger.info(f"Restart command issued for agent {agent_id} after config update.")
+                    
+                    # Управляем состоянием интеграций после перезапуска агента
+                    await _manage_integrations_state(agent_id, updated_db_agent.config_json, pm)
+                    
                 except Exception as restart_e:
                     logger.error(f"Failed to issue restart command for agent {agent_id} after update: {restart_e}", exc_info=True)
                     # Не прерываем основной процесс обновления, но логируем ошибку
