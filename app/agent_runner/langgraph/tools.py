@@ -157,7 +157,8 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
                     # Add datasource_id filter using MatchAny
                     must_conditions.append(
                         models.FieldCondition(
-                            key="metadata.datasource_id",
+                            # key="metadata.datasource_id",
+                            key="metadata.datastoreId", # Use datastoreId for consistency
                             match=models.MatchAny(any=[str(kb_id) for kb_id in kb_ids]) # Use MatchAny for list of IDs
                         )
                     )
@@ -176,7 +177,7 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
                     )
                     datastore_tools.append(retriever_tool)
                     datastore_names.add(tool_id) # Use tool_id instead of kb_id
-                    logger.info(f"Configured Knowledge Base tool '{tool_name}' (ID: {tool_id}) for datasources: {kb_ids} with description: {kb_description}")
+                    logger.info(f"Configured Knowledge Base tool '{tool_name}' (ID: {tool_id}) for datastores: {kb_ids} with description: {kb_description}")
 
             except Exception as e:
                 logger.error(f"Failed to configure Knowledge Base tools: {e}", exc_info=True)

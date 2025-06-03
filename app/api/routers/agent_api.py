@@ -188,8 +188,8 @@ async def create_agent(
     agent_id = f"agent_{agent_config.name.lower().replace(' ', '_')}_{os.urandom(4).hex()}"
 
     # Разрешение knowledgeBaseIds перед сохранением
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        await _resolve_knowledge_base_ids(agent_config.config_json, client, agent_id_for_log=agent_id)
+    # async with httpx.AsyncClient(timeout=10.0) as client:
+    #     await _resolve_knowledge_base_ids(agent_config.config_json, client, agent_id_for_log=agent_id)
 
     try:
         db_agent = await agent_crud.db_create_agent_config(db, agent_config, agent_id)
@@ -296,8 +296,8 @@ async def update_agent(
         is_running = initial_status_info.get("status") in ["running", "starting", "initializing"]
 
         # Разрешение knowledgeBaseIds перед обновлением
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await _resolve_knowledge_base_ids(agent_config.config_json, client, agent_id_for_log=agent_id)
+        # async with httpx.AsyncClient(timeout=10.0) as client:
+        #     await _resolve_knowledge_base_ids(agent_config.config_json, client, agent_id_for_log=agent_id)
 
         try:
             updated_db_agent = await agent_crud.db_update_agent_config(db, agent_id, agent_config)
