@@ -15,25 +15,31 @@ wait_for_database() {
         # Проверяем подключение к базе данных
         if uv run python -c "
 import asyncio
-import asyncpg
-import os
 import sys
-from urllib.parse import urlparse
+import os
+
+# Добавляем путь к приложению в PYTHONPATH
+sys.path.insert(0, '/app')
+sys.path.insert(0, '.')
+
+try:
+    from app.core.config import settings
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy import text
+except ImportError as e:
+    print(f'Import error: {e}')
+    sys.exit(1)
 
 async def check_db():
     try:
-        db_url = os.getenv('DATABASE_URL', 'postgresql+asyncpg://admin:password@localhost:5432/PlatformAI-DOC')
-        # Парсим URL и убираем +asyncpg
-        parsed = urlparse(db_url.replace('+asyncpg', ''))
+        # Используем настройки из конфигурации приложения
+        engine = create_async_engine(str(settings.DATABASE_URL), pool_pre_ping=True)
         
-        conn = await asyncpg.connect(
-            host=parsed.hostname,
-            port=parsed.port,
-            user=parsed.username,
-            password=parsed.password,
-            database=parsed.path[1:]  # убираем первый слеш
-        )
-        await conn.close()
+        # Тестируем подключение простым запросом
+        async with engine.begin() as conn:
+            await conn.execute(text('SELECT 1'))
+        
+        await engine.dispose()
         return True
     except Exception as e:
         print(f'Database connection failed: {e}')
