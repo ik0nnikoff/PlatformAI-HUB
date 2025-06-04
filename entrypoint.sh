@@ -13,7 +13,7 @@ wait_for_database() {
         echo "Attempt $attempt of $max_attempts..."
         
         # Проверяем подключение к базе данных
-        if python -c "
+        if uv run python -c "
 import asyncio
 import asyncpg
 import os
