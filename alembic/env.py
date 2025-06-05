@@ -11,8 +11,8 @@ from alembic import context
 # Now import Base and models from your application
 # Ensure agent_manager is discoverable (e.g., via PYTHONPATH or installed package)
 try:
-    from hub.agent_manager.db import Base
-    from hub.agent_manager.models import AgentConfigDB # Import all your DB models here
+    from app.db.session import Base
+    from app.db.alchemy_models import AgentConfigDB # Import all your DB models here
 except ImportError as e:
      print(f"Error importing agent_manager modules in alembic/env.py: {e}")
      print("Ensure agent_manager is in PYTHONPATH or installed.")
