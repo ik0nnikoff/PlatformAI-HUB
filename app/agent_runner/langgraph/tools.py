@@ -187,26 +187,28 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
 
     logger.info(f"Using max_rewrites: {max_rewrites}")
 
-    # --- Web Search Tool ---
+    # --- Web Search Tools ---
     web_search_configs = [t for t in tool_settings if t.get("type") == "webSearch"]
     if web_search_configs:
-        ws_config = web_search_configs[0] # Assume one web search tool
-        ws_settings = ws_config.get("settings", {})
-        ws_id = ws_config.get("id", "web_search") # Use ID from config
-        ws_name = ws_settings.get("name", "Web Search") # Name for LLM
-        ws_description = ws_settings.get("description", "Performs a web search for recent information.") # Use description from config if available
-        ws_enabled = ws_settings.get("enabled", True)
-        search_limit = ws_settings.get("searchLimit", 3)
-        include_domains = ws_settings.get("include_domains", [])
-        exclude_domains = ws_settings.get("excludeDomains", [])
-
-        if not ws_enabled:
-            logger.info(f"Skipping disabled Web Search tool '{ws_name}' (ID: {ws_id})")
+        logger.info(f"Configuring {len(web_search_configs)} Web Search tool(s)...")
+        tavily_api_key = app_settings.TAVILY_API_KEY
+        if not tavily_api_key:
+            logger.warning("TAVILY_API_KEY not set. Web search tools disabled.")
         else:
-            tavily_api_key = app_settings.TAVILY_API_KEY
-            if not tavily_api_key:
-                logger.warning("TAVILY_API_KEY not set. Web search tool disabled.")
-            else:
+            for ws_config in web_search_configs:
+                ws_settings = ws_config.get("settings", {})
+                ws_id = ws_config.get("id", f"web_search_{web_search_configs.index(ws_config)}") # Use ID from config with fallback
+                ws_name = ws_settings.get("name", "Web Search") # Name for LLM
+                ws_description = ws_settings.get("description", "Performs a web search for recent information.") # Use description from config if available
+                ws_enabled = ws_settings.get("enabled", True)
+                search_limit = ws_settings.get("searchLimit", 3)
+                include_domains = ws_settings.get("include_domains", [])
+                exclude_domains = ws_settings.get("excludeDomains", [])
+
+                if not ws_enabled:
+                    logger.info(f"Skipping disabled Web Search tool '{ws_name}' (ID: {ws_id})")
+                    continue
+
                 try:
                     web_search_tool = TavilySearchResults(
                         max_results=int(search_limit),
@@ -218,7 +220,9 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
                     safe_tools.append(web_search_tool)
                     logger.info(f"Configured Web Search tool '{ws_name}' (ID: {ws_id}) with description: {ws_description}")
                 except Exception as e:
-                    logger.error(f"Failed to create Web Search tool: {e}", exc_info=True)
+                    logger.error(f"Failed to create Web Search tool '{ws_name}' (ID: {ws_id}): {e}", exc_info=True)
+    else:
+        logger.info("No Web Search tools configured.")
 
 
     # --- Dynamic API Request Tools ---
