@@ -48,13 +48,13 @@ async def db_add_chat_message(
         raise
 
 async def db_get_chat_history(db: AsyncSession, agent_id: str, thread_id: str, skip: int = 0, limit: int = 100) -> List[ChatMessageDB]:
-    """Retrieves chat history for a specific agent and thread, ordered by timestamp."""
+    """Retrieves chat history for a specific agent and thread, ordered by timestamp (newest first)."""
     logger.debug(f"Fetching chat history for Agent={agent_id}, Thread={thread_id} (skip={skip}, limit={limit})")
     try:
         stmt = (
             select(ChatMessageDB)
             .where(ChatMessageDB.agent_id == agent_id, ChatMessageDB.thread_id == thread_id)
-            .order_by(ChatMessageDB.timestamp.asc())
+            .order_by(ChatMessageDB.timestamp.desc())
             .offset(skip)
             .limit(limit)
         )

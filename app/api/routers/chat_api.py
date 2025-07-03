@@ -54,7 +54,7 @@ async def get_chat_history_api(
 ):
     """
     Retrieves the chat message history for a specific agent and thread ID,
-    ordered by timestamp in ascending order.
+    ordered by timestamp in descending order (newest first).
     """
     db_agent = await agent_crud.db_get_agent_config(db, agent_id) # Проверка существования агента
     if not db_agent:
