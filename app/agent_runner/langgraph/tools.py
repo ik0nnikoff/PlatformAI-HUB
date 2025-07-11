@@ -110,7 +110,7 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
                 embeddings = OpenAIEmbeddings()
                 qdrant_client = QdrantClient(
                     url=qdrant_url,
-                    timeout=20.0
+                    timeout=20
                 )
                 vector_store = QdrantVectorStore(
                     client=qdrant_client,
