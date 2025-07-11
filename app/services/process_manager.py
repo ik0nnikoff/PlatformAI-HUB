@@ -134,7 +134,8 @@ class ProcessManager(RedisClientManager):
 
         # Integration paths (using string keys for integration types)
         self.integration_module_paths: Dict[IntegrationTypeStr, str] = {
-            "TELEGRAM": "app.integrations.telegram.telegram_bot_main"
+            "TELEGRAM": "app.integrations.telegram.telegram_bot_main",
+            "WHATSAPP": "app.integrations.whatsapp.whatsapp_main"
             # Add other integration types here
         }
         self.integration_script_full_paths: Dict[IntegrationTypeStr, str] = {
@@ -195,7 +196,7 @@ class ProcessManager(RedisClientManager):
             return
 
         redis_cli = await self.redis_client
-        await redis_cli.hset(key, mapping=mapping)
+        redis_cli.hset(key, mapping=mapping)  # type: ignore
         logger.debug(f"Updated status for key {key} with mapping: {mapping}")
 
     async def _get_status_from_redis(self, key: str) -> Dict[str, str]:
@@ -221,7 +222,7 @@ class ProcessManager(RedisClientManager):
             # decode_responses=False was used during client creation in RedisClientManager,
             # so hgetall returns Dict[bytes, bytes].
             redis_cli = await self.redis_client # Get the actual client instance
-            raw_status_data: Dict[bytes, bytes] = await redis_cli.hgetall(key)
+            raw_status_data = await redis_cli.hgetall(key)  # type: ignore
             
             if not raw_status_data:
                 return {}
@@ -256,7 +257,7 @@ class ProcessManager(RedisClientManager):
         """
         if not fields: return
         redis_cli = await self.redis_client
-        await redis_cli.hdel(key, *fields)
+        redis_cli.hdel(key, *fields)
         logger.debug(f"Deleted fields {fields} from key {key}")
     
     async def _delete_status_key_from_redis(self, key: str):
@@ -269,7 +270,7 @@ class ProcessManager(RedisClientManager):
             key (str): Ключ Redis для удаления.
         """
         redis_cli = await self.redis_client
-        await redis_cli.delete(key)
+        redis_cli.delete(key)
         logger.debug(f"Deleted status key {key}")
 
     # --- Public methods for complete status deletion ---
@@ -939,12 +940,20 @@ class ProcessManager(RedisClientManager):
             "--config-url", config_url,
         ]
 
-        pid = await self.launcher.launch_process(cmd, self.process_env, f"agent_{agent_id}")
-        if pid:
-            logger.info(f"Successfully started agent process for {agent_id} with PID {pid}. Command: {' '.join(cmd)}")
+        process_obj, _, _ = await self.launcher.launch_process(
+            command=cmd,
+            process_id=f"agent_{agent_id}",
+            cwd=self.project_root,
+            env_vars=self.process_env,
+            capture_output=False
+        )
+        
+        if process_obj and process_obj.pid:
+            logger.info(f"Successfully started agent process for {agent_id} with PID {process_obj.pid}. Command: {' '.join(cmd)}")
+            return process_obj.pid
         else:
             logger.error(f"Failed to start agent process for {agent_id}. Command: {' '.join(cmd)}")
-        return pid
+            return None
 
 # Example of how to use the ProcessManager (e.g., in an API router or a main service script)
 async def example_usage():

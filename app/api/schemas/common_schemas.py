@@ -2,6 +2,7 @@ from enum import Enum
 
 class IntegrationType(str, Enum):
     TELEGRAM = "telegram"
+    WHATSAPP = "whatsapp"
     # Add other integration types here
 
 class SenderType(str, Enum):

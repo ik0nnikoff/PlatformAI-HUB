@@ -109,13 +109,16 @@ def get_user_info_tool(state: Annotated[dict, InjectedState]) -> str:
     user_data = state.get("user_data", {})
     if user_data.get("is_authenticated"):
         user_fname = user_data.get("first_name", "N/A")
-        user_lname = user_data.get("last_name", "N/A")
+        user_lname = user_data.get("last_name")  # Получаем значение без fallback
         user_phone = user_data.get("phone_number", "N/A")
         user_id = user_data.get("user_id", "N/A")
 
+        # Формируем информацию о фамилии
+        last_name_info = user_lname if user_lname else "Не указана"
+
         return f"""Информация о пользователе:
 First Name: {user_fname}
-Last Name: {user_lname}
+Last Name: {last_name_info}
 User phone number: {user_phone}
 User ID: {user_id}
 Channel: {channel}
@@ -133,10 +136,10 @@ Authorization status: Не авторизован
 
 def make_api_request(
     # Arguments bound from the tool configuration using functools.partial
-    api_config: Dict[str, Any] = None,
+    api_config: Optional[Dict[str, Any]] = None,
     log_adapter: Optional[logging.LoggerAdapter] = None,
     # LangGraph state injection - provides access to current runtime state
-    state: Annotated[dict, InjectedState] = None
+    state: Annotated[Optional[dict], InjectedState] = None
 ) -> str:
     """
     Makes an HTTP request based on the provided API configuration and input arguments.
