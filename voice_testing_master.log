@@ -1,0 +1,56 @@
+2025-07-15 02:59:03,492 - voice_testing_master - INFO - 🚀 Starting comprehensive testing suite: ['workflow', 'integration', 'performance']
+2025-07-15 02:59:03,493 - voice_testing_master - INFO - 🎙️ Starting workflow automation tests...
+2025-07-15 02:59:03,608 - voice_workflow_test - INFO - 🚀 Running comprehensive voice workflow test suite...
+2025-07-15 02:59:03,608 - voice_workflow_test - INFO - 🔧 Setting up test environment...
+2025-07-15 02:59:04,810 - app.agent_runner.common.tools_registry - INFO - Tools registry validation passed
+2025-07-15 02:59:04,823 - app.db.session - INFO - Database URL configured for: localhost:5432/PlatformAI-HUB
+2025-07-15 02:59:05,055 - voice_workflow_test - INFO - ✅ Test environment setup complete
+2025-07-15 02:59:05,055 - voice_workflow_test - INFO - 🎯 Testing voice intent detection...
+2025-07-15 02:59:05,055 - voice_workflow_test - INFO - Message: 'Отвечай голосом. Сколько времени сейчас?' -> Intent: True
+2025-07-15 02:59:05,055 - voice_workflow_test - INFO - Message: 'Скажи мне текущее время' -> Intent: True
+2025-07-15 02:59:05,055 - voice_workflow_test - INFO - Message: 'Произнеси ответ вслух' -> Intent: True
+2025-07-15 02:59:05,055 - voice_workflow_test - INFO - Message: 'Озвучь информацию о погоде' -> Intent: True
+2025-07-15 02:59:05,055 - voice_workflow_test - INFO - Message: 'Просто текстовый ответ' -> Intent: False
+2025-07-15 02:59:05,055 - voice_workflow_test - INFO - Message: 'Какая погода сегодня?' -> Intent: False
+2025-07-15 02:59:05,055 - voice_workflow_test - INFO - Message: 'Расскажи голосом о товарах' -> Intent: True
+2025-07-15 02:59:05,055 - voice_workflow_test - INFO - 🤖 Testing agent interaction with message: 'Отвечай голосом. Сколько времени сейчас?'
+2025-07-15 02:59:05,055 - voice_workflow_test - INFO - 🎵 Mock TTS generated: http://localhost:9000/voice-files/test_audio_bdfe979c.mp3
+2025-07-15 02:59:05,056 - voice_workflow_test - INFO - MOCK: Sent text message to 12345: Сейчас в Москве 00:47, 15 июля 2025 года....
+2025-07-15 02:59:05,056 - voice_workflow_test - INFO - MOCK: Sent voice message to 12345: 🎤 Голосовой ответ
+2025-07-15 02:59:05,056 - voice_workflow_test - INFO - 🤖 Testing agent interaction with message: 'Скажи мне текущее время'
+2025-07-15 02:59:05,056 - voice_workflow_test - INFO - 🎵 Mock TTS generated: http://localhost:9000/voice-files/test_audio_0d3a16da.mp3
+2025-07-15 02:59:05,056 - voice_workflow_test - INFO - MOCK: Sent text message to 12346: Сейчас в Москве 00:47, 15 июля 2025 года....
+2025-07-15 02:59:05,056 - voice_workflow_test - INFO - MOCK: Sent voice message to 12346: 🎤 Голосовой ответ
+2025-07-15 02:59:05,056 - voice_workflow_test - INFO - 🤖 Testing agent interaction with message: 'Произнеси ответ вслух'
+2025-07-15 02:59:05,056 - voice_workflow_test - INFO - 🎵 Mock TTS generated: http://localhost:9000/voice-files/test_audio_c0e834ba.mp3
+2025-07-15 02:59:05,056 - voice_workflow_test - INFO - MOCK: Sent text message to 12347: Сейчас в Москве 00:47, 15 июля 2025 года....
+2025-07-15 02:59:05,056 - voice_workflow_test - INFO - MOCK: Sent voice message to 12347: 🎤 Голосовой ответ
+2025-07-15 02:59:05,056 - voice_workflow_test - INFO - 🎼 Testing real voice orchestrator...
+2025-07-15 02:59:05,059 - app.services.redis_service - INFO - Redis connection pool initialized successfully.
+2025-07-15 02:59:05,061 - app.services.redis_wrapper - INFO - Redis service initialized
+2025-07-15 02:59:05,067 - voice_workflow_test - INFO - MinIO client initialized. Bucket: voice-files
+2025-07-15 02:59:05,067 - voice_workflow_test - INFO - Voice service orchestrator initialized
+2025-07-15 02:59:05,068 - app.services.redis_service - INFO - Redis connection pool closed successfully.
+2025-07-15 02:59:05,069 - app.services.redis_wrapper - INFO - Redis service cleaned up
+2025-07-15 02:59:05,069 - voice_workflow_test - INFO - MinIO file manager cleaned up
+2025-07-15 02:59:05,069 - voice_workflow_test - INFO - Voice service orchestrator cleaned up
+2025-07-15 02:59:05,069 - voice_workflow_test - INFO - ⚙️ Testing agent configuration loading...
+2025-07-15 02:59:05,076 - voice_workflow_test - INFO - 🏁 Test suite completed: {'total_tests': 6, 'passed_tests': 6, 'failed_tests': 0, 'success_rate': '100.0%', 'mock_messages_sent': 3, 'mock_voice_messages_sent': 3}
+2025-07-15 02:59:07,077 - voice_testing_master - INFO - 🔌 Starting integration tests...
+2025-07-15 02:59:07,092 - voice_integration_test - INFO - 🏥 Testing service health endpoints...
+2025-07-15 02:59:07,100 - voice_integration_test - INFO - ⚙️ Testing agent configuration API for agent_airsoft_0faa9616...
+2025-07-15 02:59:07,110 - voice_integration_test - INFO - 🎵 Testing TTS synthesis via API...
+2025-07-15 02:59:07,111 - voice_integration_test - INFO - 💬 Testing full voice chat with agent agent_airsoft_0faa9616...
+2025-07-15 02:59:07,111 - voice_integration_test - INFO -    Testing message 1: Request with voice intent
+2025-07-15 02:59:08,112 - voice_integration_test - INFO -    Testing message 2: Regular text request
+2025-07-15 02:59:09,116 - voice_integration_test - INFO -    Testing message 3: Another voice intent request
+2025-07-15 02:59:10,120 - voice_integration_test - INFO - 🔴 Testing Redis integration...
+2025-07-15 02:59:12,125 - voice_testing_master - INFO - 🎪 Starting performance tests...
+2025-07-15 02:59:12,144 - voice_performance_test - INFO - 🔥 Starting stress test: 5 users, 3 requests each
+2025-07-15 02:59:12,453 - voice_performance_test - INFO - ✅ Stress test completed: 0/15 successful
+2025-07-15 02:59:12,453 - voice_performance_test - INFO - 📈 Starting load test: 1.5 RPS for 30s
+2025-07-15 02:59:42,516 - voice_performance_test - INFO - ✅ Load test completed: 0/45 successful
+2025-07-15 02:59:42,518 - voice_performance_test - INFO - 🧠 Starting memory leak test: 50 iterations
+2025-07-15 02:59:42,529 - voice_performance_test - INFO -    Completed 20/50 iterations
+2025-07-15 02:59:43,044 - voice_performance_test - INFO -    Completed 40/50 iterations
+2025-07-15 02:59:43,550 - voice_testing_master - INFO - 💾 Master results saved to: voice_testing_master_results_test_session_1752530343.json

@@ -259,6 +259,7 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
             # Process TTS if enabled and keywords detected
             audio_url = await self._process_response_with_tts(
                 response_content=response_content,
+                user_message=user_text,
                 chat_id=chat_id,
                 channel=channel
             )
@@ -563,12 +564,13 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         except Exception as e:
             self.logger.error(f"Error caching voice settings: {e}")
 
-    async def _process_response_with_tts(self, response_content: str, chat_id: str, channel: str) -> Optional[str]:
+    async def _process_response_with_tts(self, response_content: str, user_message: str, chat_id: str, channel: str) -> Optional[str]:
         """
         Обрабатывает ответ агента с TTS если нужно
         
         Args:
             response_content: Текст ответа агента
+            user_message: Оригинальное сообщение пользователя для проверки intent
             chat_id: ID чата
             channel: Канал (telegram, whatsapp)
             
@@ -581,20 +583,33 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         try:
             # Не логируем "Processing TTS" сразу, сначала проверим нужен ли TTS
             
-            # Пытаемся синтезировать речь через оркестратор
-            result = await self.voice_orchestrator.synthesize_speech(
+            # Получаем конфигурацию агента для проверки намерений
+            if not self.agent_config:
+                self.logger.debug("No agent config available for TTS")
+                return None
+            
+            # Пытаемся синтезировать речь через оркестратор с проверкой намерений
+            success, file_info, error_message = await self.voice_orchestrator.synthesize_response_with_intent(
                 agent_id=self._component_id,
-                text=response_content,
-                user_id=chat_id
+                user_id=chat_id,
+                response_text=response_content,
+                user_message=user_message,
+                agent_config=self.agent_config
             )
             
-            if result and result.success and result.audio_url:
-                self.logger.info(f"TTS synthesis successful for {chat_id}: {result.audio_url}")
-                return result.audio_url
+            if success and file_info:
+                # Генерируем временную ссылку на аудиофайл
+                try:
+                    audio_url = await self.voice_orchestrator.minio_manager.get_file_url(file_info, expiry_hours=24)
+                    self.logger.info(f"TTS synthesis successful for {chat_id}: {audio_url}")
+                    return audio_url
+                except Exception as e:
+                    self.logger.error(f"Failed to generate audio URL for {chat_id}: {e}")
+                    return None
             else:
                 # Логируем только если была реальная ошибка, а не просто отсутствие намерения
-                if result and result.error_message and "намерение" not in result.error_message.lower():
-                    self.logger.debug(f"TTS synthesis failed for {chat_id}: {result.error_message}")
+                if error_message and "намерение" not in error_message.lower():
+                    self.logger.debug(f"TTS synthesis failed for {chat_id}: {error_message}")
                 return None
                 
         except Exception as e:

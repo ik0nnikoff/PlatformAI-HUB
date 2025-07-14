@@ -17,6 +17,7 @@ from app.agent_runner.common.config_mixin import AgentConfigMixin
 from app.agent_runner.common.tools_registry import (
     auth_tool,
     get_user_info_tool, 
+    voice_capabilities_tool,
     ToolsRegistry,
     configure_tools_centralized
 )
@@ -90,6 +91,7 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
         predefined_tools_map = {
             "auth_tool": auth_tool,
             "get_user_info_tool": get_user_info_tool,
+            "voice_capabilities_tool": voice_capabilities_tool,
         }
         for tool_name, tool_instance in predefined_tools_map.items():
             safe_tools.append(tool_instance)
@@ -237,6 +239,34 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
     else:
         logger.debug("No additional API request tools to configure")
 
+
+    # --- Internal Tools (like voice capabilities) ---
+    internal_configs = [t for t in tool_settings if t.get("type") == "internal"]
+    for internal_config in internal_configs:
+        try:
+            tool_id = internal_config.get("id")
+            tool_settings_internal = internal_config.get("settings", {})
+            tool_name = tool_settings_internal.get("name", "Internal Tool")
+            tool_enabled = tool_settings_internal.get("enabled", True)
+            
+            if not tool_enabled:
+                logger.info(f"Skipping disabled internal tool '{tool_name}' (ID: {tool_id})")
+                continue
+                
+            # For voice capabilities tool specifically
+            if "voiceCapabilities" in tool_id:
+                # Add voice capabilities tool if it's not already added
+                if voice_capabilities_tool not in safe_tools:
+                    safe_tools.append(voice_capabilities_tool)
+                    logger.info(f"Added internal tool: {tool_name} (ID: {tool_id})")
+                else:
+                    logger.debug(f"Voice capabilities tool already configured")
+            else:
+                logger.warning(f"Unknown internal tool type: {tool_id}")
+                
+        except Exception as e:
+            logger.error(f"Failed to configure internal tool: {e}", exc_info=True)
+    
 
     # --- Predefined tools are now handled by centralized configuration above ---
     # No need for manual predefined tool configuration as they are included

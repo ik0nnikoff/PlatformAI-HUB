@@ -1,0 +1,197 @@
+{
+  "start_time": "2025-07-15T02:59:07.092835",
+  "agent_id": "agent_airsoft_0faa9616",
+  "tests": {
+    "health": {
+      "test": "health_endpoints",
+      "results": {
+        "main_api": {
+          "status": "unhealthy",
+          "response_code": 404
+        },
+        "voice_service": {
+          "status": "unhealthy",
+          "response_code": 404
+        },
+        "redis_service": {
+          "status": "unhealthy",
+          "response_code": 404
+        }
+      },
+      "overall_health": false
+    },
+    "configuration": {
+      "test": "agent_configuration_api",
+      "status": "passed",
+      "agent_id": "agent_airsoft_0faa9616",
+      "config_loaded": true,
+      "has_voice_settings": true,
+      "voice_settings": {
+        "enabled": true,
+        "intent_detection_mode": "keywords",
+        "intent_keywords": [
+          "голос",
+          "скажи",
+          "произнеси",
+          "озвучь",
+          "расскажи голосом",
+          "ответь голосом",
+          "прочитай вслух"
+        ],
+        "auto_stt": true,
+        "auto_tts_on_keywords": true,
+        "max_file_size_mb": 25,
+        "cache_enabled": true,
+        "cache_ttl_hours": 24,
+        "rate_limit_per_minute": 15,
+        "providers": [
+          {
+            "provider": "yandex",
+            "priority": 1,
+            "fallback_enabled": true,
+            "stt_config": {
+              "enabled": true,
+              "model": "general",
+              "language": "ru-RU",
+              "max_duration": 60,
+              "sample_rate_hertz": 16000,
+              "enable_automatic_punctuation": true,
+              "enable_profanity_filter": false,
+              "custom_params": {
+                "sampleRateHertz": 16000,
+                "languageCode": "ru-RU",
+                "model": "general"
+              }
+            },
+            "tts_config": {
+              "enabled": true,
+              "model": "jane",
+              "language": "ru-RU",
+              "voice": "jane",
+              "speed": 1.0,
+              "pitch": 0.0,
+              "volume_gain_db": 0.0,
+              "audio_format": "mp3",
+              "sample_rate": 22050,
+              "custom_params": {
+                "speed": 1.0
+              }
+            },
+            "custom_settings": {
+              "description": "Основной провайдер для русскоязычных клиентов",
+              "priority_reason": "Лучшее качество для русского языка"
+            }
+          },
+          {
+            "provider": "openai",
+            "priority": 2,
+            "fallback_enabled": true,
+            "stt_config": {
+              "enabled": true,
+              "model": "whisper-1",
+              "language": "ru",
+              "max_duration": 60,
+              "enable_automatic_punctuation": true,
+              "custom_params": {
+                "model": "whisper-1",
+                "language": "ru"
+              }
+            },
+            "tts_config": {
+              "enabled": true,
+              "model": "tts-1",
+              "language": "ru",
+              "voice": "nova",
+              "speed": 1.0,
+              "audio_format": "mp3",
+              "sample_rate": 22050,
+              "custom_params": {
+                "model": "tts-1",
+                "voice": "nova",
+                "speed": 1.0
+              }
+            },
+            "custom_settings": {
+              "description": "Fallback провайдер с хорошей поддержкой многих языков",
+              "priority_reason": "Надежный резервный вариант"
+            }
+          },
+          {
+            "provider": "google",
+            "priority": 3,
+            "fallback_enabled": true,
+            "stt_config": {
+              "enabled": true,
+              "model": "latest_short",
+              "language": "ru-RU",
+              "max_duration": 60,
+              "sample_rate_hertz": 16000,
+              "enable_automatic_punctuation": true,
+              "custom_params": {
+                "model": "latest_short",
+                "languageCode": "ru-RU"
+              }
+            },
+            "tts_config": {
+              "enabled": true,
+              "model": "wavenet",
+              "language": "ru-RU",
+              "voice": "ru-RU-Wavenet-A",
+              "speed": 1.0,
+              "audio_format": "mp3",
+              "sample_rate": 22050,
+              "custom_params": {
+                "voiceName": "ru-RU-Wavenet-A",
+                "audioEncoding": "MP3"
+              }
+            },
+            "custom_settings": {
+              "description": "Дополнительный fallback провайдер",
+              "priority_reason": "Резервный вариант для особых случаев"
+            }
+          }
+        ]
+      },
+      "update_test": {
+        "status": "failed",
+        "error": "HTTP 405"
+      }
+    },
+    "tts_synthesis": {
+      "test": "voice_tts_synthesis",
+      "status": "failed",
+      "error": "HTTP 404: {\"detail\":\"Not Found\"}"
+    },
+    "voice_chat": {
+      "test": "agent_voice_chat",
+      "agent_id": "agent_airsoft_0faa9616",
+      "total_tests": 3,
+      "passed_tests": 0,
+      "success_rate": 0.0,
+      "detailed_results": [
+        {
+          "message": "Отвечай голосом. Расскажи о страйкболе кратко.",
+          "status": "failed",
+          "error": "HTTP 404"
+        },
+        {
+          "message": "Что такое тактическая игра?",
+          "status": "failed",
+          "error": "HTTP 404"
+        },
+        {
+          "message": "Скажи мне о правилах безопасности.",
+          "status": "failed",
+          "error": "HTTP 404"
+        }
+      ],
+      "overall_status": "failed"
+    },
+    "redis": {
+      "test": "redis_integration",
+      "status": "failed",
+      "error": "HTTP 404"
+    }
+  },
+  "end_time": "2025-07-15T02:59:10.122872"
+}

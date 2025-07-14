@@ -1,0 +1,81 @@
+{
+  "suite_start_time": 2117157.909241541,
+  "tests": {
+    "intent_detection": {
+      "test": "voice_intent_detection",
+      "status": "passed",
+      "results": {
+        "Отвечай голосом. Сколько времени сейчас?": true,
+        "Скажи мне текущее время": true,
+        "Произнеси ответ вслух": true,
+        "Озвучь информацию о погоде": true,
+        "Просто текстовый ответ": false,
+        "Какая погода сегодня?": false,
+        "Расскажи голосом о товарах": true
+      }
+    },
+    "mock_interaction_1": {
+      "test": "mock_agent_interaction",
+      "status": "passed",
+      "user_message": "Отвечай голосом. Сколько времени сейчас?",
+      "agent_response": "Сейчас в Москве 00:47, 15 июля 2025 года.",
+      "voice_intent_detected": true,
+      "audio_generated": true,
+      "audio_url": "http://localhost:9000/voice-files/test_audio_7fced954.mp3",
+      "messages_sent": 1,
+      "voice_messages_sent": 1
+    },
+    "mock_interaction_2": {
+      "test": "mock_agent_interaction",
+      "status": "passed",
+      "user_message": "Скажи мне текущее время",
+      "agent_response": "Сейчас в Москве 00:47, 15 июля 2025 года.",
+      "voice_intent_detected": true,
+      "audio_generated": true,
+      "audio_url": "http://localhost:9000/voice-files/test_audio_32d44027.mp3",
+      "messages_sent": 2,
+      "voice_messages_sent": 2
+    },
+    "mock_interaction_3": {
+      "test": "mock_agent_interaction",
+      "status": "passed",
+      "user_message": "Произнеси ответ вслух",
+      "agent_response": "Сейчас в Москве 00:47, 15 июля 2025 года.",
+      "voice_intent_detected": true,
+      "audio_generated": true,
+      "audio_url": "http://localhost:9000/voice-files/test_audio_4fefb281.mp3",
+      "messages_sent": 3,
+      "voice_messages_sent": 3
+    },
+    "voice_orchestrator": {
+      "test": "real_voice_orchestrator",
+      "status": "passed",
+      "health": {
+        "orchestrator_initialized": true,
+        "minio_health": true,
+        "stt_services": {},
+        "tts_services": {},
+        "total_rate_limiters": 0
+      },
+      "orchestrator_initialized": true,
+      "minio_health": true,
+      "stt_services": {},
+      "tts_services": {}
+    },
+    "configuration_loading": {
+      "test": "agent_configuration_loading",
+      "status": "failed",
+      "error": "Cannot connect to host localhost:8001 ssl:default [Multiple exceptions: [Errno 61] Connect call failed ('::1', 8001, 0, 0), [Errno 61] Connect call failed ('127.0.0.1', 8001)]"
+    }
+  },
+  "suite_end_time": 2117157.962106833,
+  "total_duration": 0.05286529194563627,
+  "summary": {
+    "total_tests": 6,
+    "passed_tests": 5,
+    "failed_tests": 1,
+    "success_rate": "83.3%",
+    "mock_messages_sent": 3,
+    "mock_voice_messages_sent": 3
+  }
+}

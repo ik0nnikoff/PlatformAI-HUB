@@ -424,66 +424,54 @@ class VoiceServiceOrchestrator(VoiceConfigMixin):
             self.logger.error(f"Unexpected error in speech synthesis: {e}", exc_info=True)
             return False, None, f"Неожиданная ошибка синтеза: {str(e)}"
 
-    async def synthesize_speech(self,
-                               agent_id: str,
-                               text: str,
-                               user_id: str) -> VoiceProcessingResult:
+    async def synthesize_response_with_intent(self,
+                                             agent_id: str,
+                                             user_id: str,
+                                             response_text: str,
+                                             user_message: str,
+                                             agent_config: Dict[str, Any]) -> Tuple[bool, Optional[VoiceFileInfo], Optional[str]]:
         """
-        Основной метод синтеза речи (TTS)
+        Синтез речи для ответа агента (TTS) с проверкой намерения по пользовательскому сообщению
         
         Args:
             agent_id: ID агента
-            text: Текст для синтеза  
             user_id: ID пользователя
+            response_text: Текст ответа агента для синтеза
+            user_message: Оригинальное сообщение пользователя для проверки intent
+            agent_config: Конфигурация агента
             
         Returns:
-            VoiceProcessingResult: Результат синтеза
+            Tuple[success, voice_file_info, error_message]
         """
-        start_time = time.time()
-        
         try:
             # Проверяем rate limit
             if not await self._check_rate_limit(agent_id, user_id):
-                return VoiceProcessingResult(
-                    success=False,
-                    error_message="Превышен лимит запросов на синтез речи",
-                    processing_time=time.time() - start_time
-                )
+                return False, None, "Превышен лимит запросов на синтез речи"
 
-            # Получаем конфигурацию агента из Redis кэша или другого источника
-            # Для упрощения будем передавать voice_settings напрямую
-            voice_settings = await self._get_voice_settings_for_agent(agent_id)
+            # Получаем настройки голоса
+            voice_settings = await self._get_voice_settings(agent_config)
             if not voice_settings or not voice_settings.enabled:
-                return VoiceProcessingResult(
-                    success=False,
-                    error_message="Голосовые функции отключены",
-                    processing_time=time.time() - start_time
-                )
+                return False, None, "Голосовые функции отключены"
 
-            # Проверяем намерение на озвучивание
-            if not voice_settings.should_process_voice_intent(text):
-                return VoiceProcessingResult(
-                    success=False,
-                    error_message="Не обнаружено намерение озвучивания",
-                    processing_time=time.time() - start_time
-                )
+            # Проверяем намерение пользователя по ОРИГИНАЛЬНОМУ сообщению
+            if not voice_settings.should_process_voice_intent(user_message):
+                self.logger.debug(f"No voice intent detected in user message: '{user_message[:50]}...'")
+                return False, None, "Не обнаружено намерение озвучивания"
+
+            self.logger.info(f"Voice intent detected in user message: '{user_message[:50]}...'")
 
             # Получаем список TTS провайдеров
             tts_providers = voice_settings.get_tts_providers()
             if not tts_providers:
-                return VoiceProcessingResult(
-                    success=False,
-                    error_message="Нет доступных TTS провайдеров",
-                    processing_time=time.time() - start_time
-                )
+                return False, None, "Нет доступных TTS провайдеров"
 
-            # Пробуем каждого провайдера по очереди
+            # Пробуем каждого провайдера для синтеза ОТВЕТА агента
             last_error = None
             for provider_config in tts_providers:
                 try:
                     result = await self._process_tts_with_provider(
                         provider_config.provider,
-                        text
+                        response_text  # Синтезируем ответ агента
                     )
                     
                     if result.success and result.metadata.get('audio_data'):
@@ -495,18 +483,11 @@ class VoiceServiceOrchestrator(VoiceConfigMixin):
                             user_id=user_id,
                             original_filename=f"response_{int(time.time())}.mp3",
                             mime_type="audio/mpeg",
-                            metadata={
-                                "type": "tts_output", 
-                                "text_length": len(text),
-                                "duration_seconds": result.metadata.get('duration_seconds')
-                            }
+                            metadata={"type": "tts_output", "text_length": len(response_text)}
                         )
                         
-                        result.file_url = file_info.public_url
-                        result.processing_time = time.time() - start_time
-                        
                         self.logger.info(f"TTS successful with provider {provider_config.provider.value}")
-                        return result
+                        return True, file_info, None
                     else:
                         last_error = result.error_message
                         self.logger.warning(f"TTS failed with provider {provider_config.provider.value}: {last_error}")
@@ -516,212 +497,224 @@ class VoiceServiceOrchestrator(VoiceConfigMixin):
                     self.logger.error(f"TTS error with provider {provider_config.provider.value}: {e}")
                     continue
 
-            # Все провайдеры неудачны
-            return VoiceProcessingResult(
-                success=False,
-                error_message=f"Все TTS провайдеры неудачны. Последняя ошибка: {last_error}",
-                processing_time=time.time() - start_time
-            )
+            return False, None, f"Все TTS провайдеры недоступны. Последняя ошибка: {last_error}"
 
         except Exception as e:
-            self.logger.error(f"Unexpected error in TTS processing: {e}", exc_info=True)
-            return VoiceProcessingResult(
-                success=False,
-                error_message=f"Неожиданная ошибка синтеза: {str(e)}",
-                processing_time=time.time() - start_time
-            )
+            self.logger.error(f"Error in synthesize_response_with_intent: {e}", exc_info=True)
+            return False, None, f"Ошибка синтеза речи: {str(e)}"
 
-    async def _get_voice_settings_for_agent(self, agent_id: str) -> Optional[VoiceSettings]:
+    async def process_voice_message_with_intent(self,
+                                               agent_id: str,
+                                               user_id: str,
+                                               audio_data: bytes,
+                                               original_filename: str,
+                                               agent_config: Dict[str, Any],
+                                               user_message: str) -> VoiceProcessingResult:
         """
-        Получает голосовые настройки для агента (из кэша или конфигурации)
+        Обработка голосового сообщения (STT) с учетом намерения пользователя
         
         Args:
             agent_id: ID агента
+            user_id: ID пользователя
+            audio_data: Аудиоданные
+            original_filename: Оригинальное имя файла
+            agent_config: Конфигурация агента
+            user_message: Оригинальное сообщение пользователя
             
         Returns:
-            VoiceSettings или None
+            VoiceProcessingResult: Результат обработки
+        """
+        start_time = time.time()
+        
+        try:
+            # Проверяем rate limit
+            if not await self._check_rate_limit(agent_id, user_id):
+                return VoiceProcessingResult(
+                    success=False,
+                    error_message="Превышен лимит запросов на обработку голоса",
+                    processing_time=time.time() - start_time
+                )
+
+            # Получаем настройки голоса
+            voice_settings = await self._get_voice_settings(agent_config)
+            if not voice_settings or not voice_settings.enabled:
+                return VoiceProcessingResult(
+                    success=False,
+                    error_message="Голосовые функции отключены для этого агента",
+                    processing_time=0.0
+                )
+
+            # Валидируем размер файла
+            if not self._validate_file_size(audio_data, voice_settings.max_file_size_mb):
+                return VoiceProcessingResult(
+                    success=False,
+                    error_message=f"Файл слишком большой (макс. {voice_settings.max_file_size_mb}MB)",
+                    processing_time=0.0
+                )
+
+            # Определяем формат аудио
+            from app.services.voice.base import AudioFileProcessor
+            audio_format = AudioFileProcessor.detect_audio_format(audio_data, original_filename)
+            
+            # Сохраняем файл в MinIO
+            file_info = await self.minio_manager.upload_audio_file(
+                audio_data=audio_data,
+                agent_id=agent_id,
+                user_id=user_id,
+                original_filename=original_filename,
+                audio_format=audio_format,
+                metadata={"type": "voice_input"}
+            )
+
+            # Проверяем кэш
+            cache_key = self._generate_stt_cache_key(file_info, voice_settings)
+            cached_result = await self._get_cached_stt_result(cache_key)
+            if cached_result:
+                self.logger.debug(f"Using cached STT result for {file_info.file_id}")
+                cached_result.processing_time = time.time() - start_time
+                return cached_result
+
+            # Получаем список STT провайдеров по приоритету
+            stt_providers = voice_settings.get_stt_providers()
+            if not stt_providers:
+                return VoiceProcessingResult(
+                    success=False,
+                    error_message="Нет доступных STT провайдеров",
+                    processing_time=time.time() - start_time
+                )
+
+            # Пробуем каждого провайдера по очереди
+            last_error = None
+            for provider_config in stt_providers:
+                try:
+                    result = await self._process_stt_with_provider(
+                        provider_config.provider,
+                        audio_data,
+                        file_info
+                    )
+                    
+                    if result.success:
+                        # Кэшируем успешный результат
+                        if voice_settings.cache_enabled:
+                            await self._cache_stt_result(cache_key, result, voice_settings.cache_ttl_hours)
+                        
+                        result.processing_time = time.time() - start_time
+                        self.logger.info(f"STT successful with provider {provider_config.provider.value}")
+                        return result
+                    else:
+                        last_error = result.error_message
+                        self.logger.warning(f"STT failed with provider {provider_config.provider.value}: {last_error}")
+                        
+                except Exception as e:
+                    last_error = str(e)
+                    self.logger.error(f"STT error with provider {provider_config.provider.value}: {e}")
+                    continue
+
+            # Все провайдеры неудачны
+            return VoiceProcessingResult(
+                success=False,
+                error_message=f"Все STT провайдеры неудачны. Последняя ошибка: {last_error}",
+                processing_time=time.time() - start_time
+            )
+
+        except Exception as e:
+            self.logger.error(f"Unexpected error in voice message processing: {e}", exc_info=True)
+            return VoiceProcessingResult(
+                success=False,
+                error_message=f"Неожиданная ошибка обработки: {str(e)}",
+                processing_time=time.time() - start_time
+            )
+
+    async def synthesize_response_with_intent_and_cache(self,
+                                                       agent_id: str,
+                                                       user_id: str,
+                                                       response_text: str,
+                                                       user_message: str,
+                                                       agent_config: Dict[str, Any]) -> Tuple[bool, Optional[VoiceFileInfo], Optional[str]]:
+        """
+        Синтез речи для ответа агента (TTS) с проверкой намерения по пользовательскому сообщению и кэшированием результата
+        
+        Args:
+            agent_id: ID агента
+            user_id: ID пользователя
+            response_text: Текст ответа агента для синтеза
+            user_message: Оригинальное сообщение пользователя для проверки intent
+            agent_config: Конфигурация агента
+            
+        Returns:
+            Tuple[success, voice_file_info, error_message]
         """
         try:
-            # Попытка получить из кэша Redis
-            cache_key = f"agent_voice_settings:{agent_id}"
-            cached_settings = await self.redis_service.get(cache_key)
-            
-            if cached_settings:
-                settings_dict = json.loads(cached_settings)
-                return VoiceSettings(**settings_dict)
-                
-            # Если в кэше нет, возвращаем None
-            # В реальной реализации здесь может быть запрос к API управления
-            self.logger.debug(f"No voice settings found for agent {agent_id}")
-            return None
-            
+            # Проверяем rate limit
+            if not await self._check_rate_limit(agent_id, user_id):
+                return False, None, "Превышен лимит запросов на синтез речи"
+
+            # Получаем настройки голоса
+            voice_settings = await self._get_voice_settings(agent_config)
+            if not voice_settings or not voice_settings.enabled:
+                return False, None, "Голосовые функции отключены"
+
+            # Проверяем намерение пользователя по ОРИГИНАЛЬНОМУ сообщению
+            if not voice_settings.should_process_voice_intent(user_message):
+                self.logger.debug(f"No voice intent detected in user message: '{user_message[:50]}...'")
+                return False, None, "Не обнаружено намерение озвучивания"
+
+            self.logger.info(f"Voice intent detected in user message: '{user_message[:50]}...'")
+
+            # Получаем список TTS провайдеров
+            tts_providers = voice_settings.get_tts_providers()
+            if not tts_providers:
+                return False, None, "Нет доступных TTS провайдеров"
+
+            # Пробуем каждого провайдера для синтеза ОТВЕТА агента
+            last_error = None
+            for provider_config in tts_providers:
+                try:
+                    result = await self._process_tts_with_provider(
+                        provider_config.provider,
+                        response_text  # Синтезируем ответ агента
+                    )
+                    
+                    if result.success and result.metadata.get('audio_data'):
+                        # Сохраняем аудио в MinIO
+                        audio_data = result.metadata['audio_data']
+                        file_info = await self.minio_manager.upload_audio_file(
+                            audio_data=audio_data,
+                            agent_id=agent_id,
+                            user_id=user_id,
+                            original_filename=f"response_{int(time.time())}.mp3",
+                            mime_type="audio/mpeg",
+                            metadata={"type": "tts_output", "text_length": len(response_text)}
+                        )
+                        
+                        # Кэшируем результат
+                        cache_key = f"tts_response_cache:{agent_id}:{user_id}:{int(time.time())}"
+                        await self.redis_service.setex(
+                            cache_key,
+                            voice_settings.cache_ttl_hours * 3600,
+                            json.dumps({
+                                "success": True,
+                                "file_info": file_info.dict(),
+                                "response_text": response_text
+                            })
+                        )
+                        
+                        self.logger.info(f"TTS successful with provider {provider_config.provider.value}")
+                        return True, file_info, None
+                    else:
+                        last_error = result.error_message
+                        self.logger.warning(f"TTS failed with provider {provider_config.provider.value}: {last_error}")
+                        
+                except Exception as e:
+                    last_error = str(e)
+                    self.logger.error(f"TTS error with provider {provider_config.provider.value}: {e}")
+                    continue
+
+            return False, None, f"Все TTS провайдеры недоступны. Последняя ошибка: {last_error}"
+
         except Exception as e:
-            self.logger.error(f"Error getting voice settings for agent {agent_id}: {e}")
-            return None
-
-    async def _check_rate_limit(self, agent_id: str, user_id: str = None) -> bool:
-        """Проверка rate limit для агента/пользователя"""
-        if agent_id not in self.rate_limiters:
-            return True  # Если лимитер не настроен, разрешаем
-        
-        # Используем user_id если предоставлен, иначе agent_id
-        check_id = user_id or agent_id
-        return await self.rate_limiters[agent_id].is_allowed(check_id)
-
-    async def _get_voice_settings(self, agent_config: Dict[str, Any]) -> Optional[VoiceSettings]:
-        """Получение настроек голоса из конфигурации агента"""
-        try:
-            voice_config = self.get_voice_settings_from_config(agent_config)
-            if not voice_config:
-                return None
-            return VoiceSettings(**voice_config)
-        except Exception as e:
-            self.logger.error(f"Error parsing voice settings: {e}")
-            return None
-
-    def _validate_file_size(self, audio_data: bytes, max_size_mb: int) -> bool:
-        """Валидация размера файла"""
-        size_mb = len(audio_data) / (1024 * 1024)
-        return size_mb <= max_size_mb
-
-    def _generate_stt_cache_key(self, file_info: VoiceFileInfo, voice_settings: VoiceSettings) -> str:
-        """Генерация ключа кэша для STT"""
-        # Используем хэш файла + настройки первого STT провайдера
-        stt_providers = voice_settings.get_stt_providers()
-        if not stt_providers:
-            return f"stt_no_providers_{file_info.size_bytes}"
-        
-        provider_config = stt_providers[0]
-        config_hash = hash(str(provider_config.stt_config.dict()))
-        return f"stt_{file_info.size_bytes}_{config_hash}"
-
-    async def _get_cached_stt_result(self, cache_key: str) -> Optional[VoiceProcessingResult]:
-        """Получение результата STT из кэша"""
-        try:
-            cached_data = await self.redis_service.get(f"voice_stt_cache:{cache_key}")
-            if cached_data:
-                result_dict = json.loads(cached_data)
-                return VoiceProcessingResult(**result_dict)
-        except Exception as e:
-            self.logger.warning(f"Error reading STT cache: {e}")
-        return None
-
-    async def _cache_stt_result(self, cache_key: str, result: VoiceProcessingResult, ttl_hours: int) -> None:
-        """Сохранение результата STT в кэш"""
-        try:
-            # Не кэшируем неуспешные результаты
-            if not result.success:
-                return
-                
-            cache_data = result.dict()
-            await self.redis_service.setex(
-                f"voice_stt_cache:{cache_key}",
-                ttl_hours * 3600,
-                json.dumps(cache_data)
-            )
-        except Exception as e:
-            self.logger.warning(f"Error caching STT result: {e}")
-
-    async def _process_stt_with_provider(self,
-                                       provider: VoiceProvider,
-                                       audio_data: bytes,
-                                       file_info: VoiceFileInfo,
-                                       agent_id: str = None,
-                                       user_id: str = None) -> VoiceProcessingResult:
-        """Обработка STT с конкретным провайдером"""
-        service = self.stt_services.get(provider)
-        if not service:
-            raise VoiceServiceError(f"STT service for {provider.value} not initialized")
-        
-        start_time = time.time()
-        try:
-            result = await service.transcribe_audio(audio_data, file_info)
-            
-            # Записываем метрику
-            if agent_id and user_id:
-                metric = VoiceMetrics(
-                    timestamp=time.time(),
-                    agent_id=agent_id,
-                    user_id=user_id,
-                    operation="stt",
-                    provider=provider.value,
-                    success=result.success,
-                    processing_time=time.time() - start_time,
-                    error_message=result.error_message if not result.success else None,
-                    input_size_bytes=len(audio_data),
-                    duration_seconds=file_info.duration_seconds
-                )
-                await self.metrics_collector.record_metric(metric)
-            
-            return result
-            
-        except Exception as e:
-            # Записываем метрику ошибки
-            if agent_id and user_id:
-                metric = VoiceMetrics(
-                    timestamp=time.time(),
-                    agent_id=agent_id,
-                    user_id=user_id,
-                    operation="stt",
-                    provider=provider.value,
-                    success=False,
-                    processing_time=time.time() - start_time,
-                    error_message=str(e),
-                    input_size_bytes=len(audio_data)
-                )
-                await self.metrics_collector.record_metric(metric)
-            raise
-
-    async def _process_tts_with_provider(self,
-                                       provider: VoiceProvider,
-                                       text: str,
-                                       agent_id: str = None,
-                                       user_id: str = None) -> VoiceProcessingResult:
-        """Обработка TTS с конкретным провайдером"""
-        service = self.tts_services.get(provider)
-        if not service:
-            raise VoiceServiceError(f"TTS service for {provider.value} not initialized")
-        
-        start_time = time.time()
-        
-        try:
-            result = await service.synthesize_speech(text)
-            
-            # Записываем успешную метрику
-            if self.metrics_collector:
-                processing_time = time.time() - start_time
-                metric = VoiceMetrics(
-                    timestamp=time.time(),
-                    agent_id=agent_id or "unknown",
-                    user_id=user_id or "unknown",
-                    operation="tts",
-                    provider=provider,
-                    success=True,
-                    processing_time=processing_time,
-                    input_size_bytes=len(text.encode('utf-8')),
-                    output_size_bytes=len(result.metadata.get('audio_data', b''))
-                )
-                await self.metrics_collector.record_metric(metric)
-            
-            return result
-            
-        except Exception as e:
-            # Записываем метрику ошибки
-            if self.metrics_collector:
-                processing_time = time.time() - start_time
-                metric = VoiceMetrics(
-                    timestamp=time.time(),
-                    agent_id=agent_id or "unknown", 
-                    user_id=user_id or "unknown",
-                    operation="tts",
-                    provider=provider,
-                    success=False,
-                    processing_time=processing_time,
-                    error_message=str(e),
-                    input_size_bytes=len(text.encode('utf-8'))
-                )
-                await self.metrics_collector.record_metric(metric)
-            raise
+            self.logger.error(f"Error in synthesize_response_with_intent_and_cache: {e}", exc_info=True)
+            return False, None, f"Ошибка синтеза речи: {str(e)}"
 
     async def get_service_health(self) -> Dict[str, Any]:
         """Получение статуса здоровья всех сервисов"""
@@ -800,3 +793,140 @@ class VoiceServiceOrchestrator(VoiceConfigMixin):
         except Exception as e:
             self.logger.error(f"Error validating voice config structure: {e}")
             return False
+
+    async def _check_rate_limit(self, agent_id: str, user_id: str) -> bool:
+        """
+        Проверяет rate limit для пользователя
+        
+        Args:
+            agent_id: ID агента
+            user_id: ID пользователя
+            
+        Returns:
+            True если rate limit не превышен
+        """
+        # Простая реализация - всегда разрешаем
+        # TODO: Реализовать полноценный rate limiting через Redis
+        return True
+
+    async def _get_voice_settings(self, agent_config: Dict[str, Any]) -> Optional[VoiceSettings]:
+        """
+        Асинхронная версия получения голосовых настроек из конфигурации агента
+        
+        Args:
+            agent_config: Конфигурация агента
+            
+        Returns:
+            VoiceSettings объект или None
+        """
+        voice_config = self.get_voice_settings_from_config(agent_config)
+        if not voice_config:
+            return None
+        
+        try:
+            return VoiceSettings(**voice_config)
+        except Exception as e:
+            self.logger.error(f"Failed to create VoiceSettings object: {e}")
+            return None
+
+    def _generate_stt_cache_key(self, file_info: VoiceFileInfo, voice_settings: VoiceSettings) -> str:
+        """
+        Генерирует ключ кэша для STT результата
+        
+        Args:
+            file_info: Информация о файле
+            voice_settings: Настройки голоса
+            
+        Returns:
+            Ключ кэша
+        """
+        import hashlib
+        cache_data = f"{file_info.file_size}:{file_info.mime_type}:{voice_settings.providers[0].provider.value if voice_settings.providers else 'none'}"
+        cache_hash = hashlib.md5(cache_data.encode()).hexdigest()
+        return f"stt_cache:{cache_hash}"
+
+    async def _get_cached_stt_result(self, cache_key: str) -> Optional[VoiceProcessingResult]:
+        """
+        Получает кэшированный STT результат
+        
+        Args:
+            cache_key: Ключ кэша
+            
+        Returns:
+            Кэшированный результат или None
+        """
+        try:
+            cached_data = await self.redis_service.get(cache_key)
+            if cached_data:
+                result_data = json.loads(cached_data)
+                return VoiceProcessingResult(**result_data)
+        except Exception as e:
+            self.logger.warning(f"Failed to get cached STT result: {e}")
+        return None
+
+    async def _cache_stt_result(self, cache_key: str, result: VoiceProcessingResult, ttl_hours: int) -> None:
+        """
+        Кэширует STT результат
+        
+        Args:
+            cache_key: Ключ кэша
+            result: Результат для кэширования
+            ttl_hours: TTL в часах
+        """
+        try:
+            await self.redis_service.setex(
+                cache_key,
+                ttl_hours * 3600,
+                json.dumps(result.dict())
+            )
+        except Exception as e:
+            self.logger.warning(f"Failed to cache STT result: {e}")
+
+    def _validate_file_size(self, audio_data: bytes, max_size_mb: int) -> bool:
+        """
+        Валидирует размер файла
+        
+        Args:
+            audio_data: Аудиоданные
+            max_size_mb: Максимальный размер в МБ
+            
+        Returns:
+            True если размер допустимый
+        """
+        file_size_mb = len(audio_data) / (1024 * 1024)
+        return file_size_mb <= max_size_mb
+
+    async def _process_stt_with_provider(self, provider: VoiceProvider, audio_data: bytes, file_info: VoiceFileInfo) -> VoiceProcessingResult:
+        """
+        Обрабатывает STT с помощью указанного провайдера
+        
+        Args:
+            provider: Провайдер голосовых сервисов
+            audio_data: Аудиоданные
+            file_info: Информация о файле
+            
+        Returns:
+            VoiceProcessingResult: Результат обработки
+        """
+        if provider not in self.stt_services:
+            raise VoiceServiceError(f"STT service для провайдера {provider.value} не инициализирован")
+        
+        stt_service = self.stt_services[provider]
+        return await stt_service.transcribe_audio(audio_data, file_info)
+
+    async def _process_tts_with_provider(self, provider: 'VoiceProvider', text: str) -> 'VoiceProcessingResult':
+        """
+        Обрабатывает TTS синтез с помощью указанного провайдера
+        
+        Args:
+            provider: Провайдер голосовых сервисов
+            text: Текст для синтеза
+            
+        Returns:
+            VoiceProcessingResult: Результат обработки
+        """
+        if provider not in self.tts_services:
+            raise VoiceServiceError(f"TTS service для провайдера {provider.value} не инициализирован")
+        
+        tts_service = self.tts_services[provider]
+        return await tts_service.synthesize_speech(text)

@@ -592,24 +592,47 @@ class TelegramIntegrationBot(ServiceComponentBase):
 
                         # Check if audio response is included
                         audio_url = payload.get("audio_url")
+                        voice_sent_successfully = False
                         
                         if audio_url:
                             self.logger.info(f"Sending audio response to chat {chat_id}: {audio_url}")
                             try:
-                                # Send text response first
-                                await self.bot.send_message(chat_id, response)
-                                # Then send audio
-                                await self.bot.send_audio(
-                                    chat_id=chat_id,
-                                    audio=audio_url,
-                                    caption="🎤 Голосовой ответ"
-                                )
+                                # Download audio file and send as voice message
+                                import aiohttp
+                                from aiogram.types import BufferedInputFile
+                                from aiogram.exceptions import TelegramBadRequest
+                                
+                                async with aiohttp.ClientSession() as session:
+                                    async with session.get(audio_url) as resp:
+                                        if resp.status == 200:
+                                            audio_data = await resp.read()
+                                            
+                                            # Create BufferedInputFile for voice message
+                                            voice_file = BufferedInputFile(
+                                                audio_data,
+                                                filename="voice_response.mp3"
+                                            )
+                                            
+                                            # Send as voice message without caption
+                                            await self.bot.send_voice(
+                                                chat_id=chat_id,
+                                                voice=voice_file
+                                            )
+                                            voice_sent_successfully = True
+                                            self.logger.info(f"Voice message sent successfully to chat {chat_id}")
+                                        else:
+                                            self.logger.error(f"Failed to download audio from {audio_url}: HTTP {resp.status}")
+                                            
+                            except TelegramBadRequest as e:
+                                if "VOICE_MESSAGES_FORBIDDEN" in str(e):
+                                    self.logger.warning(f"Voice messages are forbidden for chat {chat_id}, falling back to text")
+                                else:
+                                    self.logger.error(f"Telegram API error sending voice to chat {chat_id}: {e}")
                             except Exception as e:
                                 self.logger.error(f"Error sending audio response to chat {chat_id}: {e}", exc_info=True)
-                                # Fallback to text only
-                                await self.bot.send_message(chat_id, response)
-                        else:
-                            self.logger.info(f"Sending text message from agent to chat {chat_id}: '{response[:50]}...'")
+                        
+                        # Send text response only if voice wasn't sent successfully
+                        if not voice_sent_successfully:
                             await self.bot.send_message(chat_id, response)
 
                 else:
