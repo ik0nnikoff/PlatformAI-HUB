@@ -20,7 +20,7 @@ class YandexTTSService(TTSServiceBase):
 
     def __init__(self, config: TTSConfig, logger: Optional[logging.Logger] = None):
         super().__init__(VoiceProvider.YANDEX, config, logger)
-        self.api_key = settings.YANDEX_API_KEY
+        self.api_key = settings.YANDEX_API_KEY.get_secret_value() if settings.YANDEX_API_KEY else None
         self.folder_id = settings.YANDEX_FOLDER_ID
         self.tts_url = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"
         self.session: Optional[aiohttp.ClientSession] = None
@@ -72,13 +72,13 @@ class YandexTTSService(TTSServiceBase):
             # Проверяем доступность API через минимальный запрос
             headers = {
                 "Authorization": f"Api-Key {self.api_key}",
+                "x-folder-id": self.folder_id,
             }
             
             data = {
                 "text": "test",
                 "lang": "ru-RU",
                 "voice": "jane",
-                "folderId": self.folder_id,
             }
             
             async with self.session.post(
@@ -125,6 +125,7 @@ class YandexTTSService(TTSServiceBase):
             # Подготовка заголовков
             headers = {
                 "Authorization": f"Api-Key {self.api_key}",
+                "x-folder-id": self.folder_id,
             }
 
             # Подготовка данных запроса
@@ -134,8 +135,7 @@ class YandexTTSService(TTSServiceBase):
                 "voice": self.config.voice or "jane",
                 "speed": getattr(self.config, 'speed', 1.0),
                 "format": self._get_yandex_format(),
-                "sampleRateHertz": getattr(self.config, 'sample_rate', 22050),
-                "folderId": self.folder_id,
+                # Убираем sampleRateHertz, так как Yandex не поддерживает 22050
             }
 
             # Дополнительные параметры из конфигурации
@@ -167,16 +167,17 @@ class YandexTTSService(TTSServiceBase):
             processing_time = 0  # Yandex не возвращает время обработки
             
             return VoiceProcessingResult(
-                audio_data=audio_data,
-                processing_time_ms=processing_time,
-                provider=self.provider,
+                success=True,
+                provider_used=self.provider,
+                processing_time=processing_time,
                 metadata={
                     "voice": data["voice"],
                     "language": data["lang"],
                     "format": data["format"],
-                    "sample_rate": data["sampleRateHertz"],
                     "speed": data["speed"],
-                    "text_length": len(text)
+                    "text_length": len(text),
+                    "audio_size": len(audio_data),
+                    "audio_data": audio_data  # Сохраняем данные в метаданных
                 }
             )
 
@@ -392,7 +393,8 @@ class YandexTTSService(TTSServiceBase):
         """Получение заголовков для API запросов"""
         return {
             "Authorization": f"Api-Key {self.api_key}",
-            "Content-Type": "application/x-www-form-urlencoded"
+            "Content-Type": "application/x-www-form-urlencoded",
+            "x-folder-id": self.folder_id
         }
     
     def _build_synthesis_request(self, text: str, voice: str, speed: float, format: str) -> dict[str, str]:
@@ -403,5 +405,4 @@ class YandexTTSService(TTSServiceBase):
             "speed": speed,
             "format": format,
             "lang": self.config.language,
-            "folderId": self.folder_id
         }

@@ -94,7 +94,9 @@ class OpenAITTSService(TTSServiceBase):
                 provider=self.provider
             )
 
-        start_time = self.logger.info("Starting OpenAI speech synthesis")
+        import time
+        start_time = time.time()
+        self.logger.info("Starting OpenAI speech synthesis")
 
         try:
             # Валидация длины текста
@@ -154,7 +156,8 @@ class OpenAITTSService(TTSServiceBase):
             # Читаем аудиоданные
             audio_data = response.content
 
-            processing_time = self.logger.info("OpenAI speech synthesis completed")
+            processing_time = time.time() - start_time
+            self.logger.info("OpenAI speech synthesis completed")
 
             if not audio_data:
                 return VoiceProcessingResult(
@@ -193,7 +196,7 @@ class OpenAITTSService(TTSServiceBase):
                 success=False,
                 error_message=error_msg,
                 provider_used=self.provider,
-                processing_time=0.0
+                processing_time=time.time() - start_time
             )
 
         except openai.AuthenticationError as e:
@@ -203,7 +206,7 @@ class OpenAITTSService(TTSServiceBase):
                 success=False,
                 error_message=error_msg,
                 provider_used=self.provider,
-                processing_time=0.0
+                processing_time=time.time() - start_time
             )
 
         except openai.RateLimitError as e:
@@ -213,7 +216,7 @@ class OpenAITTSService(TTSServiceBase):
                 success=False,
                 error_message=error_msg,
                 provider_used=self.provider,
-                processing_time=0.0
+                processing_time=time.time() - start_time
             )
 
         except VoiceServiceTimeout as e:
@@ -233,7 +236,7 @@ class OpenAITTSService(TTSServiceBase):
                 success=False,
                 error_message=error_msg,
                 provider_used=self.provider,
-                processing_time=0.0
+                processing_time=time.time() - start_time
             )
 
     async def synthesize_stream(self, 

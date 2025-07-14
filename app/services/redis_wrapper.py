@@ -74,3 +74,33 @@ class RedisService:
         if not self.client:
             raise RuntimeError("Redis service not initialized")
         return self.client.pipeline()
+
+    async def zadd(self, key: str, mapping: dict) -> int:
+        """Добавить элементы в sorted set"""
+        if not self.client:
+            raise RuntimeError("Redis service not initialized")
+        return await self.client.zadd(key, mapping)
+
+    async def zcard(self, key: str) -> int:
+        """Получить количество элементов в sorted set"""
+        if not self.client:
+            raise RuntimeError("Redis service not initialized")
+        return await self.client.zcard(key)
+
+    async def zremrangebyrank(self, key: str, start: int, end: int) -> int:
+        """Удалить элементы из sorted set по рангу"""
+        if not self.client:
+            raise RuntimeError("Redis service not initialized")
+        return await self.client.zremrangebyrank(key, start, end)
+
+    async def expire(self, key: str, time: int) -> bool:
+        """Установить TTL для ключа"""
+        if not self.client:
+            raise RuntimeError("Redis service not initialized")
+        return await self.client.expire(key, time)
+
+    async def lpush(self, key: str, *values) -> int:
+        """Добавить элементы в начало списка"""
+        if not self.client:
+            raise RuntimeError("Redis service not initialized")
+        return await self.client.lpush(key, *values)

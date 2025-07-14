@@ -168,7 +168,9 @@ class VoiceServiceOrchestrator(VoiceConfigMixin):
         elif provider == VoiceProvider.GOOGLE:
             return bool(settings.GOOGLE_APPLICATION_CREDENTIALS and settings.GOOGLE_CLOUD_PROJECT_ID)
         elif provider == VoiceProvider.YANDEX:
-            return bool(settings.YANDEX_API_KEY or settings.YANDEX_IAM_TOKEN)
+            api_key = settings.YANDEX_API_KEY.get_secret_value() if settings.YANDEX_API_KEY else None
+            iam_token = settings.YANDEX_IAM_TOKEN.get_secret_value() if settings.YANDEX_IAM_TOKEN else None
+            return bool(api_key or iam_token)
         
         return False
 
@@ -493,7 +495,11 @@ class VoiceServiceOrchestrator(VoiceConfigMixin):
                             user_id=user_id,
                             original_filename=f"response_{int(time.time())}.mp3",
                             mime_type="audio/mpeg",
-                            duration_seconds=result.metadata.get('duration_seconds')
+                            metadata={
+                                "type": "tts_output", 
+                                "text_length": len(text),
+                                "duration_seconds": result.metadata.get('duration_seconds')
+                            }
                         )
                         
                         result.file_url = file_info.public_url
@@ -693,7 +699,7 @@ class VoiceServiceOrchestrator(VoiceConfigMixin):
                     success=True,
                     processing_time=processing_time,
                     input_size_bytes=len(text.encode('utf-8')),
-                    output_size_bytes=len(result.audio_data) if result.audio_data else 0
+                    output_size_bytes=len(result.metadata.get('audio_data', b''))
                 )
                 await self.metrics_collector.record_metric(metric)
             

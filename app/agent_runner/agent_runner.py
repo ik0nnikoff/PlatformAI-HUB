@@ -588,9 +588,9 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
                 user_id=chat_id
             )
             
-            if result and result.success and result.file_url:
-                self.logger.info(f"TTS synthesis successful for {chat_id}: {result.file_url}")
-                return result.file_url
+            if result and result.success and result.audio_url:
+                self.logger.info(f"TTS synthesis successful for {chat_id}: {result.audio_url}")
+                return result.audio_url
             else:
                 # Логируем только если была реальная ошибка, а не просто отсутствие намерения
                 if result and result.error_message and "намерение" not in result.error_message.lower():
