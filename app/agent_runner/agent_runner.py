@@ -19,6 +19,9 @@ from app.db.alchemy_models import ChatMessageDB, SenderType
 from app.db.crud.chat_crud import db_get_recent_chat_history
 from app.core.config import settings
 from app.core.base.service_component import ServiceComponentBase # Added import
+from app.services.voice.voice_orchestrator import VoiceServiceOrchestrator
+from app.services.redis_wrapper import RedisService
+from app.api.schemas.voice_schemas import VoiceSettings
 
 # --- Helper Functions (some might become methods or stay as utilities) ---
 
@@ -117,6 +120,9 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         self.agent_app: Optional[Any] = None
         # Конфигурации извлекаются напрямую из agent_config по мере необходимости
 
+        # Voice processing orchestrator
+        self.voice_orchestrator: Optional[VoiceServiceOrchestrator] = None
+
         self.logger.info(f"AgentRunner for agent {self._component_id} initialized. PID: {os.getpid()}")
 
 
@@ -153,6 +159,9 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         except Exception as e:
             self.logger.error(f"Failed to create LangGraph application: {e}", exc_info=True)
             return False
+
+        # Initialize Voice Service Orchestrator if voice settings are present
+        await self._setup_voice_orchestrator()
 
         self.logger.info(f"LangGraph application created successfully.")
         return True
@@ -247,11 +256,22 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
                 thread_id=chat_id
             )
 
+            # Process TTS if enabled and keywords detected
+            audio_url = await self._process_response_with_tts(
+                response_content=response_content,
+                chat_id=chat_id,
+                channel=channel
+            )
+
             response_payload = {
                 "chat_id": chat_id,
                 "response": response_content,
                 "channel": channel
             }
+            
+            # Add audio URL if TTS was processed
+            if audio_url:
+                response_payload["audio_url"] = audio_url
 
             await redis_cli.publish(self.response_channel, json.dumps(response_payload))
             self.logger.debug(f"Published to {self.response_channel} response: {json.dumps(response_payload)}")
@@ -484,58 +504,120 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         except Exception as e:
             self.logger.error(f"Unexpected error queuing message for history (Thread: {thread_id}): {e}", exc_info=True)
 
-
-    async def setup(self) -> None:
+    async def _setup_voice_orchestrator(self) -> None:
         """
-        Настраивает AgentRunner.
-        Вызывает super().setup() для инициализации StatusUpdater и RedisClientManager.
-        Затем загружает конфигурацию агента и настраивает приложение LangGraph.
+        Инициализирует Voice Service Orchestrator если в конфигурации агента есть голосовые настройки
         """
-        self.logger.info(f"AgentRunner setup started.")
-        await super().setup() # This calls ServiceComponentBase.setup() which handles StatusUpdater, Redis init, and clears needs_restart and _main_tasks
-
-        if not await self._load_config():
-            self.logger.critical(f"Failed to load or prepare agent configuration. AgentRunner cannot start.")
-            await self.mark_as_error(error_message="Failed to load agent config")
-            raise RuntimeError("Agent configuration failed to load.")
-
-        if not await self._setup_app():
-            self.logger.critical(f"Failed to setup LangGraph application. AgentRunner cannot start.")
-            await self.mark_as_error(error_message="Failed to setup LangGraph app")
-            raise RuntimeError("LangGraph application setup failed.")
-        
-        self.logger.debug(f"AgentRunner setup completed successfully.")
-
-
-    async def run_loop(self) -> None:
-        """
-        Основной цикл работы AgentRunner.
-        Регистрирует слушателя Pub/Sub как основную задачу и передает управление
-        в `super().run_loop()` для ее выполнения и мониторинга.
-        """
-        if not self.agent_app:
-            self.logger.error(f"Agent application not initialized. Cannot start run_loop.")
-            await self.mark_as_error("Agent application not initialized")
-            # self.initiate_shutdown() # ServiceComponentBase.run_loop handles shutdown if _running becomes False
-            return
-
-        self.logger.info(f"AgentRunner run_loop starting...")
-        
-        # Регистрируем _pubsub_listener_loop как основную задачу
-        # self._pubsub_channel уже установлен в __init__
-        self._register_main_task(self._pubsub_listener_loop(), name="AgentPubSubListener")
-
         try:
-            await super().run_loop()
-        except Exception as e:
-            self.logger.critical(f"Unexpected error in AgentRunner run_loop for {self.agent_id}: {e}", exc_info=True)
-            self._running = False
-            self.clear_restart_request()
-            await self.mark_as_error(f"Run_loop critical error: {e}")
-        finally:
-            self.logger.info(f"AgentRunner run_loop finished.")
-            self._running = False 
+            voice_settings = self.get_voice_settings_from_config(self.agent_config)
+            if not voice_settings or not voice_settings.get('enabled', False):
+                self.logger.debug(f"Voice settings not enabled for agent {self._component_id}")
+                return
 
+            # Создаем Redis service wrapper для VoiceOrchestrator
+            redis_service = RedisService()
+            await redis_service.initialize()
+            
+            # Инициализируем orchestrator
+            self.voice_orchestrator = VoiceServiceOrchestrator(
+                redis_service=redis_service,
+                logger=self.logger
+            )
+            
+            await self.voice_orchestrator.initialize()
+            
+            # Инициализируем провайдеры для этого агента
+            success = await self.voice_orchestrator.initialize_voice_services_for_agent(
+                agent_id=self._component_id,
+                agent_config=self.agent_config
+            )
+            
+            if success:
+                # Кэшируем voice settings в Redis для быстрого доступа
+                await self._cache_voice_settings(voice_settings)
+                self.logger.info(f"Voice orchestrator initialized successfully for agent {self._component_id}")
+            else:
+                self.logger.warning(f"Voice orchestrator initialization failed for agent {self._component_id}")
+                self.voice_orchestrator = None
+                
+        except Exception as e:
+            self.logger.error(f"Error setting up voice orchestrator: {e}", exc_info=True)
+            self.voice_orchestrator = None
+
+    async def _cache_voice_settings(self, voice_settings: Dict[str, Any]) -> None:
+        """
+        Кэширует голосовые настройки агента в Redis
+        
+        Args:
+            voice_settings: Голосовые настройки
+        """
+        try:
+            if self.voice_orchestrator and hasattr(self.voice_orchestrator, 'redis_service'):
+                cache_key = f"agent_voice_settings:{self._component_id}"
+                await self.voice_orchestrator.redis_service.client.setex(
+                    cache_key,
+                    3600,  # 1 час TTL
+                    json.dumps(voice_settings)
+                )
+                self.logger.debug(f"Voice settings cached for agent {self._component_id}")
+        except Exception as e:
+            self.logger.error(f"Error caching voice settings: {e}")
+
+    async def _process_response_with_tts(self, response_content: str, chat_id: str, channel: str) -> Optional[str]:
+        """
+        Обрабатывает ответ агента с TTS если нужно
+        
+        Args:
+            response_content: Текст ответа агента
+            chat_id: ID чата
+            channel: Канал (telegram, whatsapp)
+            
+        Returns:
+            URL аудиофайла если TTS был выполнен, иначе None
+        """
+        if not self.voice_orchestrator:
+            return None
+            
+        try:
+            # Не логируем "Processing TTS" сразу, сначала проверим нужен ли TTS
+            
+            # Пытаемся синтезировать речь через оркестратор
+            result = await self.voice_orchestrator.synthesize_speech(
+                agent_id=self._component_id,
+                text=response_content,
+                user_id=chat_id
+            )
+            
+            if result and result.success and result.file_url:
+                self.logger.info(f"TTS synthesis successful for {chat_id}: {result.file_url}")
+                return result.file_url
+            else:
+                # Логируем только если была реальная ошибка, а не просто отсутствие намерения
+                if result and result.error_message and "намерение" not in result.error_message.lower():
+                    self.logger.debug(f"TTS synthesis failed for {chat_id}: {result.error_message}")
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"Error processing TTS for response: {e}", exc_info=True)
+            return None
+
+
+    def get_voice_settings_from_config(self, agent_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Извлекает голосовые настройки из конфигурации агента
+        
+        Args:
+            agent_config: Конфигурация агента
+            
+        Returns:
+            Голосовые настройки или None
+        """
+        try:
+            # Извлекаем из config.simple.settings.voice_settings
+            return agent_config.get("config", {}).get("simple", {}).get("settings", {}).get("voice_settings")
+        except Exception as e:
+            self.logger.error(f"Error extracting voice settings from config: {e}")
+            return None
 
     async def cleanup(self) -> None:
         """
@@ -546,15 +628,19 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         self.logger.info(f"AgentRunner cleanup started.")
         
         try:
+            # Cleanup voice orchestrator
+            if self.voice_orchestrator:
+                await self.voice_orchestrator.cleanup()
+                self.voice_orchestrator = None
+                
             redis_cli = await self.redis_client
             try:
                 deleted_count = await redis_cli.delete(self.loaded_threads_key)
-                self.logger.info(f"Cleared loaded threads cache '{self.loaded_threads_key}' (deleted: {deleted_count}) on start/restart.")
+                self.logger.info(f"Cleared loaded threads cache '{self.loaded_threads_key}' (deleted: {deleted_count}) on cleanup.")
             except redis_exceptions.RedisError as cache_clear_err:
                 self.logger.error(f"Failed to clear loaded threads cache '{self.loaded_threads_key}': {cache_clear_err}")
         except RuntimeError as e:
-            self.logger.error(f"Redis client not available for handling pubsub message: {e}")
-            return
+            self.logger.error(f"Redis client not available during cleanup: {e}")
         
         # LangGraph app cleanup (if any specific method exists)
         if hasattr(self.agent_app, 'cleanup'):
@@ -574,8 +660,6 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         self.agent_config = None
         self.config = None
         self.config_url = None
-        # Сброс состояния агента (конфигурация извлекается напрямую из agent_config)
-        self.pubsub_handler_task = None
 
         await super().cleanup()
         self.logger.info(f"AgentRunner cleanup finished.")
@@ -583,17 +667,69 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
     async def mark_as_error(self, error_message: str, error_type: str = "UnknownError"):
         """Marks the component's status as 'error'."""
         self.logger.error(f"Marking component as error. Error Type: {error_type}, Message: {error_message}")
-        # Removed 'reason' keyword argument, pass error_message directly
-        await self.status_updater.mark_as_error(error_message, error_type=error_type)
+        # Use inherited StatusUpdater methods directly
+        await self.update_status("error", {"error_message": error_message, "error_type": error_type})
 
     async def _handle_status_update_exception(self, e: Exception, phase: str):
         """Handles exceptions during status updates, logging them and marking the component as error."""
         error_message = f"Failed to update status during {phase}: {e}"
         self.logger.error(error_message, exc_info=True)
-        # Ensure this call is also compatible with the updated mark_as_error
-        await self.status_updater.mark_as_error(
-            message=f"Internal error: Failed to update status during {phase}.",
-            error_type="StatusUpdateError"
-        )
+        # Use inherited StatusUpdater methods directly
+        await self.update_status("error", {
+            "error_message": f"Internal error: Failed to update status during {phase}.",
+            "error_type": "StatusUpdateError"
+        })
+
+    async def run_loop(self) -> None:
+        """
+        Основной цикл работы AgentRunner.
+        Регистрирует слушателя Pub/Sub как основную задачу и передает управление
+        в `super().run_loop()` для ее выполнения и мониторинга.
+        """
+        if not self.agent_app:
+            self.logger.error(f"Agent application not initialized. Cannot start run_loop.")
+            await self.mark_as_error("Agent application not initialized", "ConfigurationError")
+            return
+
+        self.logger.info(f"AgentRunner run_loop starting...")
+        
+        # Регистрируем _pubsub_listener_loop как основную задачу
+        # self._pubsub_channel уже установлен в __init__
+        self._register_main_task(self._pubsub_listener_loop(), name="AgentPubSubListener")
+
+        try:
+            await super().run_loop()
+        except Exception as e:
+            self.logger.critical(f"Unexpected error in AgentRunner run_loop: {e}", exc_info=True)
+            self._running = False
+            self.clear_restart_request()
+            await self.mark_as_error(f"Run_loop critical error: {e}", "RuntimeError")
+        finally:
+            self.logger.info(f"AgentRunner run_loop finished.")
+            self._running = False
+
+    async def setup(self) -> None:
+        """
+        Настройка AgentRunner.
+        Загружает конфигурацию и создает приложение LangGraph.
+        """
+        self.logger.info(f"Setting up AgentRunner...")
+        
+        # Call parent setup
+        await super().setup()
+        
+        # Load configuration
+        if not await self._load_config():
+            self.logger.critical(f"Failed to load configuration. AgentRunner cannot start.")
+            await self.mark_as_error("Failed to load configuration", "ConfigurationError")
+            raise RuntimeError("Configuration loading failed.")
+        
+        # Setup LangGraph application
+        if not await self._setup_app():
+            self.logger.critical(f"Failed to setup LangGraph application. AgentRunner cannot start.")
+            await self.mark_as_error("Failed to setup LangGraph app", "ConfigurationError")
+            raise RuntimeError("LangGraph application setup failed.")
+        
+        self.logger.debug(f"AgentRunner setup completed successfully.")
 
 

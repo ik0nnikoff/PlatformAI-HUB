@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Optional, Dict, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -17,6 +18,8 @@ from app.core.config import settings
 from app.core.base.service_component import ServiceComponentBase
 from app.db.crud import user_crud
 from app.api.schemas.common_schemas import IntegrationType
+from app.services.voice import VoiceServiceOrchestrator
+from app.services.redis_wrapper import RedisService
 
 
 # Constants
@@ -53,6 +56,10 @@ class TelegramIntegrationBot(ServiceComponentBase):
         self.dp: Optional[Dispatcher] = None
 
         self.typing_tasks: Dict[int, asyncio.Task] = {} # To manage typing indicator tasks
+        
+        # Voice processing orchestrator
+        self.voice_orchestrator: Optional[VoiceServiceOrchestrator] = None
+        
         self.logger.info(f"TelegramIntegrationBot initialized. PID: {os.getpid()}")
 
     def _request_contact_markup(self) -> ReplyKeyboardMarkup:
@@ -325,6 +332,176 @@ class TelegramIntegrationBot(ServiceComponentBase):
                 self.typing_tasks[chat_id].cancel()
                 # No need to await here, _send_typing_periodically handles its own cleanup on cancel
 
+    async def _handle_voice_message(self, message: Message):
+        """Handle voice and audio messages from users"""
+        if not self.bot:
+            return
+        
+        chat_id = message.chat.id
+        platform_user_id = str(message.from_user.id)
+        
+        # Start typing indicator
+        if chat_id in self.typing_tasks:
+            self.typing_tasks[chat_id].cancel()
+        self.typing_tasks[chat_id] = asyncio.create_task(self._send_typing_periodically(chat_id))
+        
+        try:
+            # Check if voice processing is available
+            if not self.voice_orchestrator:
+                await message.answer("🔇 Голосовые функции временно недоступны.")
+                return
+            
+            # Get voice/audio file info
+            voice_file = None
+            if message.voice:
+                voice_file = message.voice
+                file_type = "voice"
+                self.logger.info(f"Received voice message from {platform_user_id}: {voice_file.duration}s, {voice_file.file_size} bytes")
+            elif message.audio:
+                voice_file = message.audio  
+                file_type = "audio"
+                self.logger.info(f"Received audio message from {platform_user_id}: {voice_file.duration}s, {voice_file.file_size} bytes")
+            else:
+                await message.answer("⚠️ Неподдерживаемый тип аудиофайла.")
+                return
+            
+            # Validate file size
+            max_size = getattr(settings, 'VOICE_MAX_FILE_SIZE_MB', 25) * 1024 * 1024  # Convert to bytes
+            if voice_file.file_size > max_size:
+                await message.answer(f"📁 Файл слишком большой. Максимальный размер: {settings.VOICE_MAX_FILE_SIZE_MB}MB")
+                return
+            
+            # Validate duration
+            max_duration = getattr(settings, 'VOICE_MAX_DURATION', 120)
+            if voice_file.duration > max_duration:
+                await message.answer(f"⏱️ Аудио слишком длинное. Максимальная длительность: {max_duration} секунд")
+                return
+            
+            # Download the file
+            file_info = await self.bot.get_file(voice_file.file_id)
+            if not file_info.file_path:
+                await message.answer("⚠️ Не удалось получить аудиофайл.")
+                return
+            
+            # Download file content
+            audio_data = await self.bot.download_file(file_info.file_path)
+            if not audio_data:
+                await message.answer("⚠️ Не удалось скачать аудиофайл.")
+                return
+            
+            # Get user authorization info
+            is_authorized = await self._check_user_authorization(platform_user_id)
+            user_data = {"is_authenticated": is_authorized, "user_id": platform_user_id}
+            
+            # Get user details if available
+            if is_authorized and self.db_session_factory:
+                async with self.db_session_factory() as session:
+                    db_user = await user_crud.get_user_by_platform_id(session, platform="telegram", platform_user_id=platform_user_id)
+                    if db_user:
+                        user_data.update({
+                            "phone_number": db_user.phone_number,
+                            "first_name": db_user.first_name,
+                            "last_name": db_user.last_name, 
+                            "username": db_user.username
+                        })
+            
+            # TODO: Get agent config for voice processing
+            # For now, we'll use a basic configuration with correct structure
+            agent_config = {
+                "config": {
+                    "simple": {
+                        "settings": {
+                            "voice_settings": {
+                                "enabled": True,
+                                "intent_detection_mode": "keywords",
+                                "intent_keywords": [
+                                    "голос",
+                                    "скажи",
+                                    "произнеси", 
+                                    "озвучь",
+                                    "расскажи голосом",
+                                    "ответь голосом",
+                                    "прочитай вслух"
+                                ],
+                                "auto_stt": True,
+                                "auto_tts_on_keywords": True,
+                                "max_file_size_mb": 25,
+                                "cache_enabled": True,
+                                "cache_ttl_hours": 24,
+                                "rate_limit_per_minute": 15,
+                                "providers": [
+                                    {
+                                        "provider": "yandex",
+                                        "priority": 1,
+                                        "fallback_enabled": True,
+                                        "stt_config": {
+                                            "enabled": True,
+                                            "model": "general",
+                                            "language": "ru-RU",
+                                            "max_duration": 60,
+                                            "sample_rate_hertz": 16000,
+                                            "enable_automatic_punctuation": True
+                                        }
+                                    },
+                                    {
+                                        "provider": "openai",
+                                        "priority": 2,
+                                        "fallback_enabled": True,
+                                        "stt_config": {
+                                            "enabled": True,
+                                            "model": "whisper-1",
+                                            "language": "ru"
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+            
+            # Process voice message
+            
+            # Initialize voice services for this agent if not already done
+            try:
+                await self.voice_orchestrator.initialize_voice_services_for_agent(self.agent_id, agent_config)
+                self.logger.debug(f"Voice services initialized for agent {self.agent_id}")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize voice services for agent {self.agent_id}: {e}")
+                # Continue anyway, maybe services are already initialized
+            
+            # Determine filename based on file type
+            filename = f"voice_{int(time.time())}.ogg" if file_type == "voice" else f"audio_{int(time.time())}.mp3"
+            
+            # Process the voice message with orchestrator
+            result = await self.voice_orchestrator.process_voice_message(
+                agent_id=self.agent_id,
+                user_id=platform_user_id,
+                audio_data=audio_data.read(),
+                original_filename=filename,
+                agent_config=agent_config
+            )
+            
+            if result.success and result.text:
+                # Send recognized text to agent as a regular message
+                self.logger.info(f"Voice transcription successful: '{result.text[:100]}...'")
+                await self._publish_to_agent(chat_id, platform_user_id, result.text, user_data)
+            else:
+                error_msg = result.error_message or "Не удалось распознать речь"
+                await message.answer(f"🔇 {error_msg}")
+                self.logger.warning(f"Voice processing failed: {error_msg}")
+            
+        except Exception as e:
+            self.logger.error(f"Error processing voice message from chat {chat_id}: {e}", exc_info=True)
+            try:
+                await message.answer("⚠️ Ошибка при обработке голосового сообщения.")
+            except Exception as e_reply:
+                self.logger.error(f"Failed to send voice error reply to chat {chat_id}: {e_reply}")
+        finally:
+            # Stop typing indicator
+            await asyncio.sleep(1)
+            if chat_id in self.typing_tasks:
+                self.typing_tasks[chat_id].cancel()
 
     async def _register_handlers(self):
         """Registers aiogram message handlers."""
@@ -335,6 +512,8 @@ class TelegramIntegrationBot(ServiceComponentBase):
         self.dp.message(CommandStart())(self._handle_start_command)
         self.dp.message(Command("login"))(self._handle_login_command)
         self.dp.message(F.contact)(self._handle_contact)
+        self.dp.message(F.voice)(self._handle_voice_message)  # Voice message handler
+        self.dp.message(F.audio)(self._handle_voice_message)  # Audio message handler  
         self.dp.message(F.text)(self._handle_text_message)
         # Add other handlers as needed
 
@@ -411,8 +590,27 @@ class TelegramIntegrationBot(ServiceComponentBase):
                                 except Exception as e_task_cancel:
                                     self.logger.error(f"Error awaiting cancelled typing task for chat {chat_id}: {e_task_cancel}", exc_info=True)
 
-                        self.logger.info(f"Sending message from agent to chat {chat_id}: '{response[:50]}...'")
-                        await self.bot.send_message(chat_id, response)
+                        # Check if audio response is included
+                        audio_url = payload.get("audio_url")
+                        
+                        if audio_url:
+                            self.logger.info(f"Sending audio response to chat {chat_id}: {audio_url}")
+                            try:
+                                # Send text response first
+                                await self.bot.send_message(chat_id, response)
+                                # Then send audio
+                                await self.bot.send_audio(
+                                    chat_id=chat_id,
+                                    audio=audio_url,
+                                    caption="🎤 Голосовой ответ"
+                                )
+                            except Exception as e:
+                                self.logger.error(f"Error sending audio response to chat {chat_id}: {e}", exc_info=True)
+                                # Fallback to text only
+                                await self.bot.send_message(chat_id, response)
+                        else:
+                            self.logger.info(f"Sending text message from agent to chat {chat_id}: '{response[:50]}...'")
+                            await self.bot.send_message(chat_id, response)
 
                 else:
                     self.logger.warning(f"Received message from agent for chat {chat_id} without response or error: {payload}")
@@ -450,6 +648,17 @@ class TelegramIntegrationBot(ServiceComponentBase):
         self.bot = Bot(token=self.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
         self.dp = Dispatcher()
         self.logger.info(f"Aiogram Bot and Dispatcher initialized.")
+
+        # Initialize voice orchestrator
+        try:
+            redis_service = RedisService()
+            await redis_service.initialize()
+            self.voice_orchestrator = VoiceServiceOrchestrator(redis_service, self.logger)
+            await self.voice_orchestrator.initialize()
+            self.logger.info("Voice orchestrator initialized for Telegram bot")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize voice orchestrator: {e}")
+            # Voice features will be disabled but bot can still work
 
         await self._register_handlers()
 
@@ -516,6 +725,16 @@ class TelegramIntegrationBot(ServiceComponentBase):
             self.logger.info(f"Closing Aiogram bot session.")
             await self.bot.session.close()
             self.logger.info(f"Aiogram bot session closed.")
+        
+        # Cleanup voice orchestrator
+        if self.voice_orchestrator:
+            try:
+                await self.voice_orchestrator.cleanup()
+                self.logger.info("Voice orchestrator cleaned up")
+            except Exception as e:
+                self.logger.warning(f"Error cleaning up voice orchestrator: {e}")
+            finally:
+                self.voice_orchestrator = None
         
         self.bot = None
         self.dp = None

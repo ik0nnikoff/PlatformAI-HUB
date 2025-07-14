@@ -196,7 +196,7 @@ class ProcessManager(RedisClientManager):
             return
 
         redis_cli = await self.redis_client
-        redis_cli.hset(key, mapping=mapping)  # type: ignore
+        await redis_cli.hset(key, mapping=mapping)  # type: ignore
         logger.debug(f"Updated status for key {key} with mapping: {mapping}")
 
     async def _get_status_from_redis(self, key: str) -> Dict[str, str]:
@@ -257,7 +257,7 @@ class ProcessManager(RedisClientManager):
         """
         if not fields: return
         redis_cli = await self.redis_client
-        redis_cli.hdel(key, *fields)
+        await redis_cli.hdel(key, *fields)
         logger.debug(f"Deleted fields {fields} from key {key}")
     
     async def _delete_status_key_from_redis(self, key: str):
@@ -270,7 +270,7 @@ class ProcessManager(RedisClientManager):
             key (str): Ключ Redis для удаления.
         """
         redis_cli = await self.redis_client
-        redis_cli.delete(key)
+        await redis_cli.delete(key)
         logger.debug(f"Deleted status key {key}")
 
     # --- Public methods for complete status deletion ---

@@ -80,6 +80,36 @@ class Settings:
     WPPCONNECT_RECONNECT_ATTEMPTS: int = int(os.getenv("WPPCONNECT_RECONNECT_ATTEMPTS", "5"))
     WPPCONNECT_RECONNECT_DELAY: int = int(os.getenv("WPPCONNECT_RECONNECT_DELAY", "5")) # seconds
 
+    # Voice Processing Configuration
+    # Google Cloud Speech API
+    GOOGLE_CLOUD_PROJECT_ID: Optional[str] = os.getenv("GOOGLE_CLOUD_PROJECT_ID")
+    GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    
+    # Yandex SpeechKit API
+    YANDEX_IAM_TOKEN: Optional[str] = os.getenv("YANDEX_IAM_TOKEN")
+    YANDEX_FOLDER_ID: str = os.getenv("YANDEX_FOLDER_ID", "aje4vtb0ecrp0glbscsr")
+    _yandex_api_key = os.getenv("YANDEX_API_KEY")
+    YANDEX_API_KEY: SecretStr | None = SecretStr(_yandex_api_key) if _yandex_api_key else None
+    
+    # Voice processing limits and defaults
+    VOICE_MAX_DURATION: int = int(os.getenv("VOICE_MAX_DURATION", "120")) # seconds
+    VOICE_MAX_FILE_SIZE_MB: int = int(os.getenv("VOICE_MAX_FILE_SIZE_MB", "25")) # megabytes
+    VOICE_PROCESSING_TIMEOUT: int = int(os.getenv("VOICE_PROCESSING_TIMEOUT", "30")) # seconds
+    VOICE_STT_CACHE_TTL: int = int(os.getenv("VOICE_STT_CACHE_TTL", "3600")) # seconds
+    VOICE_TEMP_FILE_TTL: int = int(os.getenv("VOICE_TEMP_FILE_TTL", "1800")) # seconds
+    
+    # Voice service defaults
+    VOICE_DEFAULT_STT_PROVIDER: str = os.getenv("VOICE_DEFAULT_STT_PROVIDER", "openai")
+    VOICE_DEFAULT_TTS_PROVIDER: str = os.getenv("VOICE_DEFAULT_TTS_PROVIDER", "openai")
+    VOICE_DEFAULT_LANGUAGE: str = os.getenv("VOICE_DEFAULT_LANGUAGE", "ru-RU")
+
+    # MinIO Configuration for voice files
+    MINIO_ENDPOINT: str = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+    MINIO_ACCESS_KEY: str = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+    MINIO_SECRET_KEY: str = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+    MINIO_SECURE: bool = os.getenv("MINIO_SECURE", "false").lower() == "true"
+    MINIO_VOICE_BUCKET_NAME: str = os.getenv("MINIO_VOICE_BUCKET_NAME", "voice-files")
+
 settings = Settings()
 
 # For debugging purposes, print out a few key settings
