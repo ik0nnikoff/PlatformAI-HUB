@@ -841,7 +841,7 @@ class VoiceServiceOrchestrator(VoiceConfigMixin):
             Ключ кэша
         """
         import hashlib
-        cache_data = f"{file_info.file_size}:{file_info.mime_type}:{voice_settings.providers[0].provider.value if voice_settings.providers else 'none'}"
+        cache_data = f"{file_info.size_bytes}:{file_info.mime_type}:{voice_settings.providers[0].provider.value if voice_settings.providers else 'none'}"
         cache_hash = hashlib.md5(cache_data.encode()).hexdigest()
         return f"stt_cache:{cache_hash}"
 
