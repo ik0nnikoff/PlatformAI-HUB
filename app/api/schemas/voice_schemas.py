@@ -210,6 +210,7 @@ class VoiceProcessingResult(BaseModel):
     success: bool = Field(description="Успешность обработки")
     text: Optional[str] = Field(default=None, description="Распознанный текст")
     audio_url: Optional[str] = Field(default=None, description="URL аудиофайла")
+    audio_data: Optional[bytes] = Field(default=None, description="Бинарные аудиоданные")
     provider_used: Optional[VoiceProvider] = Field(default=None, description="Использованный провайдер")
     processing_time: float = Field(default=0.0, description="Время обработки в секундах")
     error_message: Optional[str] = Field(default=None, description="Сообщение об ошибке")

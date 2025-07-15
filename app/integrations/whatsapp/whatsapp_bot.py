@@ -63,6 +63,9 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
         # Typing indicator tracking
         self.typing_tasks: Dict[str, asyncio.Task] = {}
         
+        # Voice orchestrator (will be initialized in setup())
+        self.voice_orchestrator = None
+        
         # Reconnection tracking
         self.reconnect_attempts = 0
         self.max_reconnect_attempts = settings.WPPCONNECT_RECONNECT_ATTEMPTS
@@ -103,6 +106,21 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             
             # Register Socket.IO event handlers
             self._setup_socketio_handlers()
+            
+            # 🆕 Initialize voice orchestrator
+            try:
+                from app.services.voice.voice_orchestrator import VoiceServiceOrchestrator
+                from app.services.redis_wrapper import RedisService
+                
+                redis_service = RedisService()
+                await redis_service.initialize()
+                self.voice_orchestrator = VoiceServiceOrchestrator(redis_service, self.logger)
+                await self.voice_orchestrator.initialize()
+                self.logger.info("Voice orchestrator initialized for WhatsApp bot")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize voice orchestrator: {e}")
+                # Voice features will be disabled but bot can still work
+                self.voice_orchestrator = None
             
             self.logger.info(f"WhatsApp integration setup completed for session {self.session_name}")
             
@@ -237,6 +255,14 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
                 
             if self.http_client:
                 await self.http_client.aclose()
+            
+            # 🆕 Cleanup voice orchestrator
+            if hasattr(self, 'voice_orchestrator') and self.voice_orchestrator:
+                try:
+                    await self.voice_orchestrator.cleanup()
+                    self.logger.info("Voice orchestrator cleaned up")
+                except Exception as e:
+                    self.logger.error(f"Error cleaning up voice orchestrator: {e}")
                 
             await super().cleanup()
             
@@ -265,7 +291,9 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             
             # Добавим дополнительное логирование для отладки
             from_me = response.get("fromMe", False)
-            self.logger.debug(f"Message fromMe={from_me}")
+            message_type = response.get("type", "")
+            message_id = response.get("id", response.get("messageId", ""))
+            self.logger.debug(f"Message details: fromMe={from_me}, type={message_type}, id={message_id}")
             
             # Игнорировать исходящие сообщения (отправленные ботом) чтобы избежать зацикливания
             if from_me:
@@ -516,6 +544,7 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             chat_id = data.get("chat_id")
             response_text = data.get("response")
             channel = data.get("channel")
+            audio_url = data.get("audio_url")  # 🆕 Извлекаем audio_url
             
             if channel != "whatsapp":
                 return
@@ -529,8 +558,26 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
                 self.typing_tasks[chat_id].cancel()
                 # Small delay to make the typing simulation look more natural
                 await asyncio.sleep(0.5)
-                
-            await self._send_message(chat_id, response_text)
+            
+            voice_sent_successfully = False
+            
+            # 🆕 Попытка отправить голосовое сообщение
+            if audio_url:
+                try:
+                    self.logger.debug(f"Attempting to send voice message to {chat_id} with audio_url: {audio_url}")
+                    voice_sent_successfully = await self._send_voice_message(chat_id, audio_url)
+                    if voice_sent_successfully:
+                        self.logger.info(f"Voice message sent successfully to WhatsApp chat {chat_id}")
+                        return  # Выходим, если голосовое сообщение отправлено успешно
+                    else:
+                        self.logger.warning(f"Voice message failed for {chat_id}, falling back to text")
+                except Exception as e:
+                    self.logger.error(f"Error sending voice message to WhatsApp chat {chat_id}: {e}")
+            
+            # Fallback на текст если голос не отправился
+            if not voice_sent_successfully:
+                self.logger.debug(f"Sending text fallback message to {chat_id}")
+                await self._send_message(chat_id, response_text)
             
         except json.JSONDecodeError as e:
             self.logger.error(f"Failed to decode agent response: {e}")
@@ -710,6 +757,15 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             media_key = response.get("mediaKey", "")
             mimetype = response.get("mimetype", "")
             filename = response.get("filename", "voice.ogg")
+            message_id = response.get("id", response.get("messageId", ""))
+            
+            self.logger.debug(f"Voice message details: messageId={message_id}, mediaKey={media_key[:20]}..., mimetype={mimetype}, filename={filename}")
+            
+            if not message_id:
+                self.logger.warning("Voice message without message ID")
+                if chat_id in self.typing_tasks:
+                    self.typing_tasks[chat_id].cancel()
+                return
             
             if not media_key:
                 self.logger.warning("Voice message without media key")
@@ -718,9 +774,11 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
                 return
             
             # Download audio file
-            audio_data = await self._download_whatsapp_media(media_key, mimetype)
+            message_id = response.get("id", response.get("messageId", ""))
+            audio_data = await self._download_whatsapp_media(media_key, mimetype, message_id)
             if not audio_data:
                 self.logger.error("Failed to download voice message audio")
+                await self._send_error_message(chat_id, "Извините, не удалось загрузить голосовое сообщение.")
                 if chat_id in self.typing_tasks:
                     self.typing_tasks[chat_id].cancel()
                 return
@@ -732,16 +790,28 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             
         except Exception as e:
             self.logger.error(f"Error handling WhatsApp voice message: {e}", exc_info=True)
+            try:
+                await self._send_error_message(chat_id, "Извините, произошла ошибка при обработке голосового сообщения.")
+            except:
+                pass
+        finally:
+            # Always stop typing indicator
             if 'chat_id' in locals() and chat_id in self.typing_tasks:
                 self.typing_tasks[chat_id].cancel()
+                del self.typing_tasks[chat_id]
+                try:
+                    await self._send_typing_action(chat_id, False)
+                except:
+                    pass
 
-    async def _download_whatsapp_media(self, media_key: str, mimetype: str) -> Optional[bytes]:
+    async def _download_whatsapp_media(self, media_key: str, mimetype: str, message_id: str) -> Optional[bytes]:
         """
         Скачивание медиа файла из WhatsApp
         
         Args:
             media_key: Ключ медиа файла
             mimetype: MIME тип файла
+            message_id: ID сообщения для скачивания медиа
             
         Returns:
             Данные файла или None при ошибке
@@ -749,23 +819,58 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
         try:
             url = f"/api/{self.session_name}/download-media"
             payload = {
-                "mediakey": media_key,
-                "mimetype": mimetype
+                "messageId": message_id
             }
             
+            # Добавляем дополнительные параметры если они есть
+            if media_key:
+                payload["mediakey"] = media_key
+            if mimetype:
+                payload["mimetype"] = mimetype
+            
+            self.logger.debug(f"Downloading media with payload: {payload}")
             response = await self.http_client.post(url, json=payload)
             
+            self.logger.debug(f"Download response status: {response.status_code}")
             if response.status_code == 200:
+                # Log raw response for debugging
+                raw_response = response.text
+                self.logger.debug(f"Raw response (first 200 chars): {raw_response[:200]}")
+                
                 # Response should contain base64 encoded data
                 response_data = response.json()
-                if "data" in response_data:
+                
+                # Проверяем различные форматы ответа
+                base64_data = None
+                if "base64" in response_data:
+                    # Формат: {"base64": "..."}
+                    base64_data = response_data["base64"]
+                    self.logger.debug("Found base64 data in 'base64' field")
+                elif "data" in response_data:
+                    # Формат: {"data": "..."}
+                    base64_data = response_data["data"]
+                    self.logger.debug("Found base64 data in 'data' field")
+                else:
+                    # Попробуем интерпретировать весь ответ как base64
+                    if isinstance(response_data, str):
+                        base64_data = response_data
+                        self.logger.debug("Using entire response as base64")
+                
+                if base64_data:
                     import base64
-                    return base64.b64decode(response_data["data"])
+                    try:
+                        audio_bytes = base64.b64decode(base64_data)
+                        self.logger.debug(f"Successfully decoded base64 media data, size: {len(audio_bytes)} bytes")
+                        return audio_bytes
+                    except Exception as e:
+                        self.logger.error(f"Failed to decode base64 data: {e}")
+                        return None
                 else:
                     # Some implementations return raw bytes
+                    self.logger.debug(f"No base64 field found, using raw response data, size: {len(response.content)} bytes")
                     return response.content
             else:
-                self.logger.error(f"Failed to download WhatsApp media. Status: {response.status_code}")
+                self.logger.error(f"Failed to download WhatsApp media. Status: {response.status_code}, Response: {response.text}")
                 return None
                 
         except Exception as e:
@@ -791,75 +896,127 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
         try:
             # Import voice orchestrator here to avoid circular imports
             from app.services.voice.voice_orchestrator import VoiceServiceOrchestrator
-            from app.services.voice import VoiceFileInfo
-            from app.services.redis_wrapper import RedisService
+            from app.api.schemas.voice_schemas import VoiceFileInfo
             
-            # Create file info
+            # Create file info with all required fields and detect real audio format
+            import uuid
+            from datetime import datetime
+            from app.services.voice.base import AudioFileProcessor
+            
+            # Detect real audio format instead of hardcoding
+            detected_format = AudioFileProcessor.detect_audio_format(audio_data, filename)
+            mime_type = "audio/ogg"  # Default for WhatsApp
+            
+            if detected_format:
+                format_to_mime = {
+                    "mp3": "audio/mpeg",
+                    "wav": "audio/wav", 
+                    "ogg": "audio/ogg",
+                    "opus": "audio/opus",
+                    "flac": "audio/flac",
+                    "aac": "audio/aac"
+                }
+                mime_type = format_to_mime.get(detected_format.value.lower(), "audio/ogg")
+                self.logger.info(f"Detected audio format: {detected_format.value} -> {mime_type}")
+            else:
+                self.logger.warning(f"Could not detect audio format, using default: {mime_type}")
+            
             file_info = VoiceFileInfo(
+                file_id=str(uuid.uuid4()),
                 original_filename=filename,
+                mime_type=mime_type,
                 size_bytes=len(audio_data),
-                format=None,  # Will be auto-detected
-                duration_seconds=None
+                format=detected_format,  # Use detected format
+                duration_seconds=None,
+                created_at=datetime.utcnow().isoformat(),
+                minio_bucket="voice-messages",  # Default bucket
+                minio_key=f"whatsapp/{chat_id}/{str(uuid.uuid4())}.ogg"
             )
             
-            # Example agent config - in real implementation, load from database/API
-            agent_config = {
-                "voice_settings": {
-                    "enabled": True,
-                    "intent_detection_mode": "keywords",
-                    "intent_keywords": ["голос", "скажи", "произнеси", "озвучь", "отвечай голосом"],
-                    "auto_stt": True,
-                    "auto_tts_on_keywords": False,
-                    "max_file_size_mb": 25,
-                    "cache_enabled": True,
-                    "cache_ttl_hours": 24,
-                    "rate_limit_per_minute": 10,
-                    "providers": [
-                        {
-                            "provider": "openai",
-                            "priority": 1,
-                            "fallback_enabled": True,
-                            "stt_config": {
-                                "enabled": True,
-                                "model": "whisper-1",
-                                "language": "ru",
-                                "max_duration": 120
+            # Load real agent config from API
+            try:
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(f"http://localhost:8001/api/v1/agents/{self.agent_id}/config")
+                    if response.status_code == 200:
+                        agent_config = response.json()
+                        self.logger.debug(f"Loaded agent config for voice processing: {agent_config}")
+                    else:
+                        self.logger.error(f"Failed to load agent config: {response.status_code}")
+                        # Fallback to minimal config
+                        agent_config = {
+                            "config": {
+                                "simple": {
+                                    "settings": {
+                                        "voice_settings": {
+                                            "enabled": False
+                                        }
+                                    }
+                                }
                             }
                         }
-                    ]
+            except Exception as e:
+                self.logger.error(f"Error loading agent config: {e}")
+                # Fallback to minimal config
+                agent_config = {
+                    "config": {
+                        "simple": {
+                            "settings": {
+                                "voice_settings": {
+                                    "enabled": False
+                                }
+                            }
+                        }
+                    }
                 }
-            }
             
-            # Initialize orchestrator (you might want to cache this)
-            redis_service = RedisService()
-            await redis_service.initialize()
+            # Use global voice orchestrator if available, otherwise create temporary one
+            orchestrator = self.voice_orchestrator
+            should_cleanup = False
             
-            orchestrator = VoiceServiceOrchestrator(redis_service, self.logger)
-            await orchestrator.initialize()
+            if not orchestrator:
+                self.logger.warning("Global voice orchestrator not available, creating temporary one")
+                # Fallback to temporary orchestrator
+                from app.services.redis_wrapper import RedisService
+                redis_service = RedisService()
+                await redis_service.initialize()
+                
+                orchestrator = VoiceServiceOrchestrator(redis_service, self.logger)
+                await orchestrator.initialize()
+                should_cleanup = True
+            
+            # Initialize voice services for this agent if needed
             await orchestrator.initialize_voice_services_for_agent(self.agent_id, agent_config)
             
             # Process STT
-            result = await orchestrator.process_stt(
+            result = await orchestrator.process_voice_message(
                 agent_id=self.agent_id,
                 user_id=platform_user_id,
                 audio_data=audio_data,
-                file_info=file_info,
+                original_filename=filename,
                 agent_config=agent_config
             )
             
-            if result and result.text:
+            if result.success and result.text:
                 self.logger.info(f"STT result for WhatsApp voice message: {result.text}")
+                
+                # Stop typing indicator before sending to agent
+                if chat_id in self.typing_tasks:
+                    self.typing_tasks[chat_id].cancel()
+                    del self.typing_tasks[chat_id]
+                await self._send_typing_action(chat_id, False)
                 
                 # Publish transcribed text to agent
                 await self._publish_to_agent(chat_id, platform_user_id, result.text, user_data)
             else:
-                self.logger.warning("STT processing failed or returned empty text")
+                self.logger.warning(f"STT processing failed: {result.error_message if result else 'No result'}")
                 # Send error message to user
-                await self._send_whatsapp_message(chat_id, "Извините, не удалось распознать голосовое сообщение.")
+                await self._send_message(chat_id, "Извините, не удалось распознать голосовое сообщение.")
             
-            # Cleanup
-            await orchestrator.cleanup()
-            await redis_service.cleanup()
+            # Cleanup only if we created temporary orchestrator
+            if should_cleanup:
+                await orchestrator.cleanup()
+                await redis_service.cleanup()
             
         except Exception as e:
             self.logger.error(f"Error processing voice message with orchestrator: {e}", exc_info=True)
@@ -867,3 +1024,66 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
                 await self._send_whatsapp_message(chat_id, "Извините, произошла ошибка при обработке голосового сообщения.")
             except:
                 pass
+        finally:
+            # Always stop typing indicator
+            if chat_id in self.typing_tasks:
+                self.typing_tasks[chat_id].cancel()
+                del self.typing_tasks[chat_id]
+            try:
+                await self._send_typing_action(chat_id, False)
+            except:
+                pass
+
+    async def _send_voice_message(self, chat_id: str, audio_url: str) -> bool:
+        """
+        Отправка голосового сообщения в WhatsApp через wppconnect API
+        
+        Args:
+            chat_id: ID чата WhatsApp
+            audio_url: URL аудиофайла
+            
+        Returns:
+            True если сообщение отправлено успешно
+        """
+        try:
+            import aiohttp
+            import base64
+            
+            self.logger.debug(f"Downloading audio from URL: {audio_url}")
+            
+            # Скачиваем аудиофайл по URL
+            async with aiohttp.ClientSession() as session:
+                async with session.get(audio_url) as resp:
+                    if resp.status != 200:
+                        self.logger.error(f"Failed to download audio from {audio_url}: HTTP {resp.status}")
+                        return False
+                        
+                    audio_data = await resp.read()
+                    self.logger.debug(f"Downloaded audio data: {len(audio_data)} bytes")
+            
+            # Кодируем в base64 для wppconnect API
+            audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+            self.logger.debug(f"Encoded audio to base64: {len(audio_base64)} characters")
+            
+            # Отправляем через wppconnect API используя send-voice-base64 endpoint
+            url = f"/api/{self.session_name}/send-voice-base64"
+            payload = {
+                "phone": chat_id,
+                "isGroup": False,
+                "base64Ptt": audio_base64
+            }
+            
+            self.logger.debug(f"Sending voice message to {chat_id} via {url}")
+            response = await self.http_client.post(url, json=payload)
+            
+            if response.status_code in [200, 201]:
+                self.logger.info(f"Voice message sent successfully to {chat_id}: HTTP {response.status_code}")
+                await self.update_last_active_time()
+                return True
+            else:
+                self.logger.error(f"WhatsApp voice send failed: HTTP {response.status_code}, Response: {response.text}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error sending WhatsApp voice message: {e}", exc_info=True)
+            return False

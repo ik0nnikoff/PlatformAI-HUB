@@ -395,9 +395,9 @@ class VoiceServiceOrchestrator(VoiceConfigMixin):
                         text
                     )
                     
-                    if result.success and result.metadata.get('audio_data'):
+                    if result.success and result.audio_data:
                         # Сохраняем аудио в MinIO
-                        audio_data = result.metadata['audio_data']
+                        audio_data = result.audio_data
                         file_info = await self.minio_manager.upload_audio_file(
                             audio_data=audio_data,
                             agent_id=agent_id,
@@ -474,9 +474,9 @@ class VoiceServiceOrchestrator(VoiceConfigMixin):
                         response_text  # Синтезируем ответ агента
                     )
                     
-                    if result.success and result.metadata.get('audio_data'):
+                    if result.success and result.audio_data:
                         # Сохраняем аудио в MinIO
-                        audio_data = result.metadata['audio_data']
+                        audio_data = result.audio_data
                         file_info = await self.minio_manager.upload_audio_file(
                             audio_data=audio_data,
                             agent_id=agent_id,
@@ -675,9 +675,9 @@ class VoiceServiceOrchestrator(VoiceConfigMixin):
                         response_text  # Синтезируем ответ агента
                     )
                     
-                    if result.success and result.metadata.get('audio_data'):
+                    if result.success and result.audio_data:
                         # Сохраняем аудио в MinIO
-                        audio_data = result.metadata['audio_data']
+                        audio_data = result.audio_data
                         file_info = await self.minio_manager.upload_audio_file(
                             audio_data=audio_data,
                             agent_id=agent_id,

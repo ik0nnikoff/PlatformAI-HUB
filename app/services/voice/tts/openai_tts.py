@@ -179,13 +179,13 @@ class OpenAITTSService(TTSServiceBase):
                 success=True,
                 provider_used=self.provider,
                 processing_time=processing_time,
+                audio_data=audio_data,  # Возвращаем аудиоданные в правильном поле
                 metadata={
                     "model": self.config.model.value,
                     "voice": self.config.voice,
                     "text_length": len(text),
                     "audio_size": len(audio_data),
-                    "response_format": response_format,
-                    "audio_data": audio_data  # Сохраняем данные в метаданных
+                    "response_format": response_format
                 }
             )
 
@@ -257,8 +257,8 @@ class OpenAITTSService(TTSServiceBase):
         # Если текст короткий, обрабатываем его целиком
         if len(text) <= 4096:
             result = await self.synthesize_speech(text, **kwargs)
-            if result.success and result.metadata.get('audio_data'):
-                yield result.metadata['audio_data']
+            if result.success and result.audio_data:
+                yield result.audio_data
             else:
                 raise VoiceServiceError(
                     result.error_message or "Ошибка синтеза речи",
@@ -277,8 +277,8 @@ class OpenAITTSService(TTSServiceBase):
                 self.logger.debug(f"Processing chunk {i+1}/{len(chunks)}: {len(chunk)} chars")
                 result = await self.synthesize_speech(chunk, **kwargs)
                 
-                if result.success and result.metadata.get('audio_data'):
-                    yield result.metadata['audio_data']
+                if result.success and result.audio_data:
+                    yield result.audio_data
                 else:
                     self.logger.error(f"Failed to synthesize chunk {i+1}: {result.error_message}")
                     # Продолжаем с следующим chunk вместо остановки

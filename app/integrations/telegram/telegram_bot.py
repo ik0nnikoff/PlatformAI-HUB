@@ -405,60 +405,42 @@ class TelegramIntegrationBot(ServiceComponentBase):
                             "username": db_user.username
                         })
             
-            # TODO: Get agent config for voice processing
-            # For now, we'll use a basic configuration with correct structure
-            agent_config = {
-                "config": {
-                    "simple": {
-                        "settings": {
-                            "voice_settings": {
-                                "enabled": True,
-                                "intent_detection_mode": "keywords",
-                                "intent_keywords": [
-                                    "голос",
-                                    "скажи",
-                                    "произнеси", 
-                                    "озвучь",
-                                    "расскажи голосом",
-                                    "ответь голосом",
-                                    "прочитай вслух"
-                                ],
-                                "auto_stt": True,
-                                "auto_tts_on_keywords": True,
-                                "max_file_size_mb": 25,
-                                "cache_enabled": True,
-                                "cache_ttl_hours": 24,
-                                "rate_limit_per_minute": 15,
-                                "providers": [
-                                    {
-                                        "provider": "yandex",
-                                        "priority": 1,
-                                        "fallback_enabled": True,
-                                        "stt_config": {
-                                            "enabled": True,
-                                            "model": "general",
-                                            "language": "ru-RU",
-                                            "max_duration": 60,
-                                            "sample_rate_hertz": 16000,
-                                            "enable_automatic_punctuation": True
-                                        }
-                                    },
-                                    {
-                                        "provider": "openai",
-                                        "priority": 2,
-                                        "fallback_enabled": True,
-                                        "stt_config": {
-                                            "enabled": True,
-                                            "model": "whisper-1",
-                                            "language": "ru"
+            # Load real agent config from API
+            try:
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(f"http://localhost:8001/api/v1/agents/{self.agent_id}/config")
+                    if response.status_code == 200:
+                        agent_config = response.json()
+                        self.logger.debug(f"Loaded agent config for voice processing: {agent_config}")
+                    else:
+                        self.logger.error(f"Failed to load agent config: {response.status_code}")
+                        # Fallback to minimal config
+                        agent_config = {
+                            "config": {
+                                "simple": {
+                                    "settings": {
+                                        "voice_settings": {
+                                            "enabled": False
                                         }
                                     }
-                                ]
+                                }
+                            }
+                        }
+            except Exception as e:
+                self.logger.error(f"Error loading agent config: {e}")
+                # Fallback to minimal config
+                agent_config = {
+                    "config": {
+                        "simple": {
+                            "settings": {
+                                "voice_settings": {
+                                    "enabled": False
+                                }
                             }
                         }
                     }
                 }
-            }
             
             # Process voice message
             

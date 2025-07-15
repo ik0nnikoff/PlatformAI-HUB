@@ -157,10 +157,83 @@ class YandexSTTService(STTServiceBase):
                 "x-folder-id": self.folder_id,
             }
 
+            # Конвертация OGG файлов от WhatsApp в WAV для совместимости
+            converted_audio_data = audio_data
+            yandex_format = self._get_yandex_format(file_info)
+            
+            # WhatsApp OGG файлы нужно конвертировать в WAV, т.к. они не содержат Opus
+            if (file_info.original_filename.lower().endswith('.ogg') and 
+                yandex_format == 'oggopus'):
+                try:
+                    from pydub import AudioSegment
+                    import io
+                    
+                    self.logger.info("Converting WhatsApp OGG file to WAV for Yandex compatibility")
+                    
+                    # Проверим заголовок файла
+                    if audio_data[:4] == b'OggS':
+                        self.logger.debug("File has valid OGG header")
+                    else:
+                        self.logger.warning(f"File does not have OGG header: {audio_data[:10].hex()}")
+                    
+                    # Попробуем различные способы загрузки
+                    audio_segment = None
+                    
+                    # Способ 1: Попробовать как OGG
+                    try:
+                        audio_segment = AudioSegment.from_ogg(io.BytesIO(audio_data))
+                        self.logger.debug("Successfully loaded as OGG")
+                    except Exception as e:
+                        self.logger.debug(f"Failed to load as OGG: {e}")
+                        
+                        # Способ 2: Попробовать автоопределение
+                        try:
+                            audio_segment = AudioSegment.from_file(io.BytesIO(audio_data))
+                            self.logger.debug("Successfully loaded with auto-detection")
+                        except Exception as e2:
+                            self.logger.debug(f"Failed to load with auto-detection: {e2}")
+                            raise e2
+                    
+                    if audio_segment:
+                        # Конвертируем в WAV с параметрами для Yandex
+                        wav_buffer = io.BytesIO()
+                        audio_segment.export(
+                            wav_buffer, 
+                            format="wav",
+                            parameters=["-ar", "16000", "-ac", "1"]  # 16kHz, mono
+                        )
+                        converted_audio_data = wav_buffer.getvalue()
+                        
+                        # Обновляем формат для Yandex
+                        yandex_format = 'lpcm'
+                        
+                        self.logger.info(f"Converted OGG to WAV: {len(audio_data)} -> {len(converted_audio_data)} bytes")
+                    else:
+                        raise Exception("Could not load audio file")
+                    
+                except Exception as e:
+                    self.logger.warning(f"Failed to convert OGG to WAV: {e}")
+                    
+                    # Если конвертация не удалась, возможно это не настоящий OGG файл
+                    # Попробуем обработать его как WAV напрямую
+                    if audio_data[:4] == b'RIFF' or audio_data[8:12] == b'WAVE':
+                        self.logger.info("Audio data appears to be WAV format, using as-is")
+                        converted_audio_data = audio_data
+                        yandex_format = 'lpcm'
+                    else:
+                        # Если это неизвестный формат, попробуем оригинальные данные
+                        self.logger.warning("Unknown audio format, trying original data")
+                        converted_audio_data = audio_data
+                        # Возможно стоит выбросить исключение для fallback на другой провайдер
+                        raise VoiceServiceError(
+                            f"Неподдерживаемый формат аудио файла. Заголовок: {audio_data[:10].hex()}",
+                            provider=self.provider
+                        )
+
             # Подготовка параметров запроса
             params = {
                 "lang": self.config.language or "ru-RU",
-                "format": self._get_yandex_format(file_info),
+                "format": yandex_format,
                 "sampleRateHertz": getattr(self.config, 'sample_rate', 16000),
             }
 
@@ -178,7 +251,7 @@ class YandexSTTService(STTServiceBase):
                 self.stt_url,
                 headers=headers,
                 params=params,
-                data=audio_data
+                data=converted_audio_data
             ) as response:
                 
                 if response.status != 200:
@@ -353,40 +426,3 @@ class YandexSTTService(STTServiceBase):
         """Обработка невалидных аудиоданных"""
         self.logger.warning("Invalid audio data provided")
         return "Невалидные аудиоданные"
-    
-    def _validate_language(self, language: str) -> bool:
-        """Валидация языка для Yandex STT"""
-        supported_languages = ["ru-RU", "en-US", "tr-TR", "kk-KZ"]
-        return language in supported_languages
-    
-    def _validate_model(self, model: str) -> bool:
-        """Валидация модели для Yandex STT"""
-        supported_models = ["general", "general:rc", "general:deprecated"]
-        return model in supported_models
-    
-    def _get_headers(self) -> dict:
-        """Получение заголовков для API запросов"""
-        return {
-            "Authorization": f"Api-Key {self.api_key}",
-            "Content-Type": "application/json"
-        }
-    
-    def _build_recognition_request(self, audio_data: bytes, format: str, sample_rate: int, language: str) -> dict:
-        """Построение запроса для распознавания речи"""
-        import base64
-        
-        return {
-            "config": {
-                "specification": {
-                    "languageCode": language,
-                    "model": self.config.model or "general",
-                    "audioEncoding": format,
-                    "sampleRateHertz": sample_rate,
-                    "audioChannelCount": 1
-                },
-                "languageCode": language
-            },
-            "audio": {
-                "content": base64.b64encode(audio_data).decode('utf-8')
-            }
-        }

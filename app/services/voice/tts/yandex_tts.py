@@ -112,7 +112,9 @@ class YandexTTSService(TTSServiceBase):
                 provider=self.provider
             )
 
-        start_time = self.logger.info("Starting Yandex SpeechKit TTS synthesis")
+        import time
+        start_time = time.time()
+        self.logger.info("Starting Yandex SpeechKit TTS synthesis")
 
         try:
             # Валидация длины текста (Yandex лимит 5000 символов)
@@ -145,6 +147,8 @@ class YandexTTSService(TTSServiceBase):
             # Переопределяем параметрами из вызова
             data.update(kwargs)
 
+            self.logger.debug(f"TTS request data: {data}")
+
             # Выполняем запрос к API
             timeout_seconds = getattr(settings, 'VOICE_PROCESSING_TIMEOUT', 30)
             
@@ -154,8 +158,11 @@ class YandexTTSService(TTSServiceBase):
                 data=data
             ) as response:
                 
+                self.logger.debug(f"TTS response status: {response.status}")
+                
                 if response.status != 200:
                     error_text = await response.text()
+                    self.logger.error(f"Yandex TTS API error {response.status}: {error_text}")
                     raise VoiceServiceError(
                         f"Yandex TTS API error {response.status}: {error_text}",
                         provider=self.provider
@@ -163,24 +170,28 @@ class YandexTTSService(TTSServiceBase):
 
                 # Получаем аудиоданные
                 audio_data = await response.read()
+                self.logger.debug(f"Received audio data: {len(audio_data)} bytes")
 
-            processing_time = 0  # Yandex не возвращает время обработки
+            processing_time = time.time() - start_time
             
             return VoiceProcessingResult(
                 success=True,
                 provider_used=self.provider,
                 processing_time=processing_time,
+                audio_data=audio_data,  # Возвращаем аудиоданные в правильном поле
                 metadata={
                     "voice": data["voice"],
                     "language": data["lang"],
                     "format": data["format"],
                     "speed": data["speed"],
                     "text_length": len(text),
-                    "audio_size": len(audio_data),
-                    "audio_data": audio_data  # Сохраняем данные в метаданных
+                    "audio_size": len(audio_data)
                 }
             )
 
+        except VoiceServiceError:
+            # Передаем VoiceServiceError как есть
+            raise
         except Exception as e:
             self.logger.error(f"Yandex TTS synthesis failed: {e}", exc_info=True)
             raise VoiceServiceError(

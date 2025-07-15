@@ -86,7 +86,8 @@ class Settings:
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
     
     # Yandex SpeechKit API
-    YANDEX_IAM_TOKEN: Optional[str] = os.getenv("YANDEX_IAM_TOKEN")
+    _yandex_iam_token = os.getenv("YANDEX_IAM_TOKEN")
+    YANDEX_IAM_TOKEN: SecretStr | None = SecretStr(_yandex_iam_token) if _yandex_iam_token else None
     YANDEX_FOLDER_ID: str = os.getenv("YANDEX_FOLDER_ID", "aje4vtb0ecrp0glbscsr")
     _yandex_api_key = os.getenv("YANDEX_API_KEY")
     YANDEX_API_KEY: SecretStr | None = SecretStr(_yandex_api_key) if _yandex_api_key else None
