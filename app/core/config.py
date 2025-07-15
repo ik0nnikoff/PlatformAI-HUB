@@ -75,7 +75,7 @@ class Settings:
     AGENT_INACTIVITY_CHECK_INTERVAL: int = int(os.getenv("AGENT_INACTIVITY_CHECK_INTERVAL", "60")) # seconds (1 minute)
 
     # WPPConnect Server Configuration
-    WPPCONNECT_URL: str = os.getenv("WPPCONNECT_URL", "http://localhost:8081")
+    WPPCONNECT_URL: str = os.getenv("WPPCONNECT_URL", "http://localhost:21465")
     WPPCONNECT_SOCKETIO_PATH: str = os.getenv("WPPCONNECT_SOCKETIO_PATH", "/socket.io/")
     WPPCONNECT_RECONNECT_ATTEMPTS: int = int(os.getenv("WPPCONNECT_RECONNECT_ATTEMPTS", "5"))
     WPPCONNECT_RECONNECT_DELAY: int = int(os.getenv("WPPCONNECT_RECONNECT_DELAY", "5")) # seconds
