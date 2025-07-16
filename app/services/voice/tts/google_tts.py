@@ -88,7 +88,8 @@ class GoogleTTSService(TTSServiceBase):
                 provider=self.provider
             )
 
-        start_time = self.logger.info("Starting Google Cloud TTS synthesis")
+        start_time = time.time()
+        self.logger.info("Starting Google Cloud TTS synthesis")
 
         try:
             # Валидация длины текста
