@@ -127,6 +127,24 @@ wheels = [
 ]
 
 [[package]]
+name = "anthropic"
+version = "0.57.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "jiter" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d7/75/6261a1a8d92aed47e27d2fcfb3a411af73b1435e6ae1186da02b760565d0/anthropic-0.57.1.tar.gz", hash = "sha256:7815dd92245a70d21f65f356f33fc80c5072eada87fb49437767ea2918b2c4b0", size = 423775 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e5/cf/ca0ba77805aec6171629a8b665c7dc224dab374539c3d27005b5d8c100a0/anthropic-0.57.1-py3-none-any.whl", hash = "sha256:33afc1f395af207d07ff1bffc0a3d1caac53c371793792569c5d2f09283ea306", size = 292779 },
+]
+
+[[package]]
 name = "anyio"
 version = "4.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -853,6 +871,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/3b/65/0873b430c2ad885bde9649bfcdc9e87dca0ad400da4ff1495f62911baa36/google_cloud_texttospeech-2.27.0.tar.gz", hash = "sha256:94a382c95b7cc58efd2505a24c2968e2614fc6bdf9d76fb9a819d4ed29ae188e", size = 182332 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d8/40/1560257fb77b601c0801b370411e0b849b278a90e6232b46c5b84489fb67/google_cloud_texttospeech-2.27.0-py3-none-any.whl", hash = "sha256:0f7c5fe05281beb6d005ea191f61c913085e8439e5ffd2d5d21e29d106150b54", size = 189408 },
+]
+
+[[package]]
+name = "google-cloud-vision"
+version = "3.10.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-auth" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/14/7e/6bf616c5bf22a0d7943082318a99f5cb09046605e4077dc5366a80326a12/google_cloud_vision-3.10.2.tar.gz", hash = "sha256:649380faab8933440b632bf88072c0c382a08d49ab02bc0b4fba821882ae1765", size = 570339 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/39/aa/db9febba7b5bd9c9d772e935a5c495fb2b4ee05299e46c6c4b1e7c0b66b2/google_cloud_vision-3.10.2-py3-none-any.whl", hash = "sha256:42a17fbc2219b0a88e325e2c1df6664a8dafcbae66363fb37ebcb511b018fc87", size = 527877 },
 ]
 
 [[package]]
@@ -2260,6 +2293,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aiogram" },
     { name = "alembic" },
+    { name = "anthropic" },
     { name = "asyncpg" },
     { name = "beautifulsoup4" },
     { name = "chatgpt-md-converter" },
@@ -2269,6 +2303,7 @@ dependencies = [
     { name = "fastembed" },
     { name = "google-cloud-speech" },
     { name = "google-cloud-texttospeech" },
+    { name = "google-cloud-vision" },
     { name = "httpx" },
     { name = "ipykernel" },
     { name = "ipywidgets" },
@@ -2282,6 +2317,7 @@ dependencies = [
     { name = "numpy" },
     { name = "openai" },
     { name = "pandas" },
+    { name = "pillow" },
     { name = "pydantic" },
     { name = "pydub" },
     { name = "pymupdf" },
@@ -2307,6 +2343,7 @@ dependencies = [
 requires-dist = [
     { name = "aiogram", specifier = ">=3.18.0" },
     { name = "alembic", specifier = ">=1.15.2" },
+    { name = "anthropic", specifier = ">=0.57.1" },
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "beautifulsoup4", specifier = ">=4.13.3" },
     { name = "chatgpt-md-converter", specifier = ">=0.2.0" },
@@ -2316,6 +2353,7 @@ requires-dist = [
     { name = "fastembed", specifier = ">=0.6.0" },
     { name = "google-cloud-speech", specifier = ">=2.28.0" },
     { name = "google-cloud-texttospeech", specifier = ">=2.18.0" },
+    { name = "google-cloud-vision", specifier = ">=3.10.2" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "ipykernel", specifier = ">=6.29.5" },
     { name = "ipywidgets", specifier = ">=8.1.5" },
@@ -2329,6 +2367,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.2.4" },
     { name = "openai", specifier = ">=1.66.3" },
     { name = "pandas", specifier = ">=2.2.3" },
+    { name = "pillow", specifier = ">=11.1.0" },
     { name = "pydantic", specifier = ">=2.10.6" },
     { name = "pydub", specifier = ">=0.25.1" },
     { name = "pymupdf", specifier = ">=1.25.4" },

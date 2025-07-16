@@ -48,6 +48,9 @@ dependencies = [
     "uvicorn[standard]>=0.30.3",
     "yandexcloud>=0.311.0",
     "yandex-speechkit>=0.3.0",
+    "google-cloud-vision>=3.10.2",
+    "anthropic>=0.57.1",
+    "pillow>=11.1.0",
 ]
 
 [tool.uv.sources]

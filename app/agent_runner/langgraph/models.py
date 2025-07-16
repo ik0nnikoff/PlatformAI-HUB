@@ -24,6 +24,8 @@ class AgentState(TypedDict):
         rewrite_count: Number of times the question has been rewritten.
         channel: The communication channel (e.g., 'web', 'telegram').
         user_data: Dictionary containing information about the user.
+        image_urls: List of image URLs to be processed by vision models.
+        image_analysis: Results from image analysis by vision models.
 
         # Configuration passed down from factory/runner
         model_id: str
@@ -48,6 +50,8 @@ class AgentState(TypedDict):
     rewrite_count: int
     channel: str
     user_data: Dict[str, Any]
+    image_urls: List[str]  # URLs of images to be processed
+    image_analysis: List[Dict[str, Any]]  # Results from image analysis
 
     # Configuration fields
     model_id: str

@@ -1,5 +1,5 @@
 import os
-from typing import Optional # Added Optional
+from typing import Optional, List # Added Optional and List
 from dotenv import load_dotenv
 from pydantic import SecretStr # Import SecretStr
 
@@ -110,6 +110,48 @@ class Settings:
     MINIO_SECRET_KEY: str = os.getenv("MINIO_SECRET_KEY", "minioadmin")
     MINIO_SECURE: bool = os.getenv("MINIO_SECURE", "false").lower() == "true"
     MINIO_VOICE_BUCKET_NAME: str = os.getenv("MINIO_VOICE_BUCKET_NAME", "voice-files")
+
+    # Image Processing Configuration
+    IMAGE_MAX_FILE_SIZE_MB: int = int(os.getenv("IMAGE_MAX_FILE_SIZE_MB", "10"))
+    IMAGE_MAX_FILES_COUNT: int = int(os.getenv("IMAGE_MAX_FILES_COUNT", "5"))
+    IMAGE_SUPPORTED_FORMATS: List[str] = os.getenv("IMAGE_SUPPORTED_FORMATS", "jpg,jpeg,png,webp,gif").split(",")
+    MINIO_USER_FILES_BUCKET: str = os.getenv("MINIO_USER_FILES_BUCKET", "user-files")
+    
+    # 🆕 Image Vision API transmission mode
+    # "url" - передавать URL изображений (для production с публичным MinIO)
+    # "binary" - передавать binary данные (для dev/local MinIO)
+    IMAGE_VISION_MODE: str = os.getenv("IMAGE_VISION_MODE", "binary")  # "url" или "binary"
+    
+    # Vision API settings
+    IMAGE_VISION_PROVIDERS: List[str] = os.getenv("IMAGE_VISION_PROVIDERS", "openai,google,claude").split(",")
+    
+    # OpenAI Vision API (uses existing OPENAI_API_KEY)
+    IMAGE_OPENAI_MODEL: str = os.getenv("IMAGE_OPENAI_MODEL", "gpt-4o")
+    
+    # Google Vision API (uses existing GOOGLE_APPLICATION_CREDENTIALS and GOOGLE_CLOUD_PROJECT_ID)
+    
+    # Claude Vision API
+    _anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+    ANTHROPIC_API_KEY: SecretStr | None = SecretStr(_anthropic_api_key) if _anthropic_api_key else None
+    IMAGE_CLAUDE_MODEL: str = os.getenv("IMAGE_CLAUDE_MODEL", "claude-3-sonnet-20240229")
+    
+    def get_available_vision_providers(self) -> List[str]:
+        """Return list of vision providers that have required API keys"""
+        available_providers = []
+        
+        # Check OpenAI
+        if self.OPENAI_API_KEY:
+            available_providers.append("openai")
+            
+        # Check Google
+        if self.GOOGLE_APPLICATION_CREDENTIALS and self.GOOGLE_CLOUD_PROJECT_ID:
+            available_providers.append("google")
+            
+        # Check Claude
+        if self.ANTHROPIC_API_KEY:
+            available_providers.append("claude")
+            
+        return available_providers
 
 settings = Settings()
 

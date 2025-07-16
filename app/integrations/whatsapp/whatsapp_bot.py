@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import uuid
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import aiohttp
 import httpx
 from socketio.async_client import AsyncClient
@@ -68,6 +68,9 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
         
         # Voice orchestrator (will be initialized in setup())
         self.voice_orchestrator = None
+        
+        # Image orchestrator (will be initialized in setup())
+        self.image_orchestrator = None
         
         # 🆕 Agent configuration cache (loaded once at startup)
         self.agent_config: Optional[Dict[str, Any]] = None
@@ -127,6 +130,17 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
                 self.logger.warning(f"Failed to initialize voice orchestrator: {e}")
                 # Voice features will be disabled but bot can still work
                 self.voice_orchestrator = None
+
+            # 🆕 Initialize image orchestrator
+            try:
+                from app.services.media.image_orchestrator import ImageOrchestrator
+                self.image_orchestrator = ImageOrchestrator()
+                await self.image_orchestrator.initialize()
+                self.logger.info("Image orchestrator initialized for WhatsApp bot")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize image orchestrator: {e}")
+                # Image features will be disabled but bot can still work
+                self.image_orchestrator = None
             
             # 🆕 Load agent configuration once at startup
             await self._load_agent_config()
@@ -272,6 +286,16 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
                     self.logger.info("Voice orchestrator cleaned up")
                 except Exception as e:
                     self.logger.error(f"Error cleaning up voice orchestrator: {e}")
+            
+            # 🆕 Cleanup image orchestrator
+            if hasattr(self, 'image_orchestrator') and self.image_orchestrator:
+                try:
+                    await self.image_orchestrator.cleanup()
+                    self.logger.info("Image orchestrator cleaned up")
+                except Exception as e:
+                    self.logger.error(f"Error cleaning up image orchestrator: {e}")
+                finally:
+                    self.image_orchestrator = None
                 
             await super().cleanup()
             
@@ -324,6 +348,11 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             # Handle voice messages
             if message_type in ["ptt", "audio"]:  # ptt = push-to-talk (voice message)
                 await self._handle_voice_message(response, chat_id, sender_info)
+                return
+                
+            # Handle image messages  
+            if message_type == "image":
+                await self._handle_image_message(response, chat_id, sender_info)
                 return
                 
             if not message_text or not chat_id:
@@ -481,7 +510,7 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
                 error_fallback_data["last_name"] = last_name
             return error_fallback_data
 
-    async def _publish_to_agent(self, chat_id: str, platform_user_id: str, message_text: str, user_data: Dict[str, Any]) -> None:
+    async def _publish_to_agent(self, chat_id: str, platform_user_id: str, message_text: str, user_data: Dict[str, Any], image_urls: Optional[List[str]] = None) -> None:
         """
         Публикация сообщения в Redis канал агента
         
@@ -507,6 +536,11 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             "user_data": user_data,
             "channel": "whatsapp"
         }
+        
+        # Add image URLs if provided
+        if image_urls:
+            payload["image_urls"] = image_urls
+            self.logger.info(f"Adding {len(image_urls)} image URLs to WhatsApp message payload")
         
         try:
             await redis_cli.publish(input_channel, json.dumps(payload).encode('utf-8'))
@@ -722,6 +756,129 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
         except Exception as e:
             self.logger.error(f"Reconnection attempt {self.reconnect_attempts} failed: {e}")
     
+    async def _handle_image_message(self, response: Dict[str, Any], chat_id: str, sender_info: Dict[str, Any]) -> None:
+        """
+        Обработка изображений из WhatsApp
+        
+        Args:
+            response: Данные сообщения от wppconnect-server
+            chat_id: ID чата
+            sender_info: Информация об отправителе
+        """
+        try:
+            # Check if image processing is available
+            if not self.image_orchestrator:
+                await self._send_error_message(chat_id, "🖼️ Функции обработки изображений временно недоступны.")
+                return
+            
+            # Extract user information
+            user_name = sender_info.get("pushname", "Unknown")
+            platform_user_id = chat_id
+            
+            # Extract phone number from sender.id
+            sender_id = sender_info.get("id", "")
+            phone_number = None
+            if sender_id and "@c.us" in sender_id:
+                phone_number = sender_id.split("@c.us")[0]
+            
+            # Parse user name
+            name_parts = user_name.strip().split(' ', 1) if user_name and user_name != "Unknown" else ["Unknown"]
+            first_name = name_parts[0]
+            last_name = name_parts[1] if len(name_parts) > 1 else None
+            
+            self.logger.info(f"Received WhatsApp image from {user_name} ({platform_user_id}), phone: {phone_number}")
+            
+            # Start typing indicator
+            if chat_id in self.typing_tasks:
+                self.typing_tasks[chat_id].cancel()
+            self.typing_tasks[chat_id] = asyncio.create_task(self._send_typing_periodically(chat_id))
+            
+            # Get or create user
+            user_data = await self._get_or_create_user(platform_user_id, first_name, last_name, phone_number)
+            if not user_data:
+                self.logger.warning(f"Failed to get/create user for image message: {platform_user_id}")
+                if chat_id in self.typing_tasks:
+                    self.typing_tasks[chat_id].cancel()
+                return
+            
+            # Extract image data from response
+            message_id = response.get("id", response.get("messageId", ""))
+            media_key = response.get("mediaKey", "")
+            mimetype = response.get("mimetype", "image/jpeg")
+            filename = response.get("filename", f"image_{message_id}.jpg")
+            caption = response.get("caption", "")
+            
+            self.logger.debug(f"Image details: messageId={message_id}, mediaKey={media_key[:20] if media_key else 'None'}..., mimetype={mimetype}, filename={filename}")
+            
+            if not media_key:
+                self.logger.error(f"No media key found for image message {message_id}")
+                await self._send_error_message(chat_id, "⚠️ Не удалось получить изображение.")
+                if chat_id in self.typing_tasks:
+                    self.typing_tasks[chat_id].cancel()
+                return
+            
+            # Download image using universal WhatsApp media download method
+            try:
+                image_data = await self._download_whatsapp_media(media_key, mimetype, message_id)
+                
+                if not image_data:
+                    self.logger.error("Failed to download WhatsApp image")
+                    await self._send_error_message(chat_id, "⚠️ Не удалось скачать изображение.")
+                    if chat_id in self.typing_tasks:
+                        self.typing_tasks[chat_id].cancel()
+                    return
+                
+                # Validate image size
+                max_size = getattr(settings, 'IMAGE_MAX_FILE_SIZE_MB', 10) * 1024 * 1024
+                if len(image_data) > max_size:
+                    await self._send_error_message(chat_id, f"📁 Изображение слишком большое. Максимальный размер: {settings.IMAGE_MAX_FILE_SIZE_MB}MB")
+                    if chat_id in self.typing_tasks:
+                        self.typing_tasks[chat_id].cancel()
+                    return
+                
+                # Ensure filename has proper extension
+                if not filename.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
+                    if 'jpeg' in mimetype:
+                        filename += '.jpg'
+                    elif 'png' in mimetype:
+                        filename += '.png'
+                    elif 'gif' in mimetype:
+                        filename += '.gif'
+                    elif 'webp' in mimetype:
+                        filename += '.webp'
+                    else:
+                        filename += '.jpg'  # default
+                
+                # Upload image to MinIO and get URL
+                image_url = await self.image_orchestrator.upload_user_image(
+                    agent_id=self.agent_id,
+                    user_id=platform_user_id,
+                    image_data=image_data,
+                    original_filename=filename
+                )
+                
+                if image_url:
+                    # Prepare message text
+                    message_text = caption or "Пользователь отправил изображение"
+                    
+                    # Send to agent with image URL
+                    await self._publish_to_agent(chat_id, platform_user_id, message_text, user_data, image_urls=[image_url])
+                    self.logger.info(f"WhatsApp image uploaded and message published for chat {chat_id}: {image_url}")
+                else:
+                    await self._send_error_message(chat_id, "⚠️ Не удалось загрузить изображение для обработки.")
+                    
+            except Exception as e:
+                self.logger.error(f"Error downloading/processing WhatsApp image: {e}", exc_info=True)
+                await self._send_error_message(chat_id, "⚠️ Ошибка при обработке изображения.")
+            
+        except Exception as e:
+            self.logger.error(f"Error handling WhatsApp image message: {e}", exc_info=True)
+            await self._send_error_message(chat_id, "⚠️ Ошибка при обработке изображения.")
+        finally:
+            # Stop typing indicator
+            if chat_id in self.typing_tasks:
+                self.typing_tasks[chat_id].cancel()
+
     async def _handle_voice_message(self, response: Dict[str, Any], chat_id: str, sender_info: Dict[str, Any]) -> None:
         """
         Обработка голосового сообщения из WhatsApp
@@ -826,7 +983,7 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             Данные файла или None при ошибке
         """
         try:
-            url = f"/api/{self.session_name}/download-media"
+            url = f"{self.wppconnect_base_url}/api/{self.session_name}/download-media"
             payload = {
                 "messageId": message_id
             }

@@ -97,6 +97,17 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
             safe_tools.append(tool_instance)
             logger.info(f"Added predefined tool (fallback): {tool_name}")
 
+    # Add vision tools if image processing is enabled (always try this, independent of centralized config)
+    try:
+        vision_tools = ToolsRegistry.get_vision_tools()
+        if vision_tools:
+            safe_tools.extend(vision_tools)
+            logger.info(f"Added {len(vision_tools)} vision analysis tools: {[t.name for t in vision_tools]}")
+        else:
+            logger.warning("No vision tools returned from ToolsRegistry")
+    except Exception as e:
+        logger.warning(f"Failed to add vision tools: {e}")
+
 
     # --- Knowledge Base / Retriever Tools ---
     kb_configs = [t for t in tool_settings if t.get("type") == "knowledgeBase"]
@@ -278,4 +289,278 @@ def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[Bas
     tools_list.extend(datastore_tools) 
 
     logger.info(f"Total tools configured: {len(tools_list)} ({len(safe_tools)} safe, {len(datastore_tools)} datastore).")
+    logger.info(f"Tool names: {[tool.name for tool in tools_list]}")
     return tools_list, safe_tools, datastore_tools, datastore_names, max_rewrites
+
+
+# --- Vision Tools ---
+
+@tool
+def analyze_images(
+    image_urls: Annotated[List[str], "List of image URLs to analyze"],
+    analysis_prompt: Annotated[str, "Specific prompt for image analysis"] = "Describe what you see in these images",
+    state: Annotated[Dict, InjectedState] = None
+) -> str:
+    """
+    Analyzes images using available Vision API providers.
+    
+    This tool processes a list of image URLs and returns detailed analysis
+    of their contents using computer vision models like GPT-4V, Google Vision API, or Claude.
+    
+    Args:
+        image_urls: List of URLs pointing to images to be analyzed
+        analysis_prompt: Custom prompt to guide the analysis (optional)
+        state: LangGraph state (injected automatically)
+    
+    Returns:
+        Detailed description of image contents or error message
+    """
+    logger = logging.getLogger(__name__)
+    
+    try:
+        if not image_urls:
+            return "No images provided for analysis."
+        
+        # Check if images are available in state
+        state_image_urls = state.get("image_urls", []) if state else []
+        
+        # Use state images if no specific URLs provided, or validate provided URLs against state
+        if not image_urls and state_image_urls:
+            image_urls = state_image_urls
+        elif image_urls and state_image_urls:
+            # Validate that provided URLs are in state (security check)
+            valid_urls = [url for url in image_urls if url in state_image_urls]
+            if not valid_urls:
+                return "Provided image URLs are not available in current context."
+            image_urls = valid_urls
+        
+        if not image_urls:
+            return "No valid images available for analysis."
+        
+        logger.info(f"Analyzing {len(image_urls)} images with prompt: '{analysis_prompt[:100]}...'")
+        
+        # Check IMAGE_VISION_MODE setting
+        from app.core.config import settings as app_settings
+        vision_mode = getattr(app_settings, 'IMAGE_VISION_MODE', 'binary')
+        logger.info(f"Using vision mode: {vision_mode}")
+        
+        # Since this is a sync tool, we need to handle async operations properly
+        import asyncio
+        
+        try:
+            if vision_mode == "url":
+                # URL mode: Pass URLs directly to Vision APIs (for production with public MinIO)
+                result = _run_async_in_sync(_analyze_images_url_mode, image_urls, analysis_prompt, state, logger)
+            else:
+                # Binary mode: Download images and pass base64 data (for dev/local MinIO)
+                result = _run_async_in_sync(_analyze_images_binary_mode, image_urls, analysis_prompt, state, logger)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error during image analysis: {e}", exc_info=True)
+            return f"Error analyzing images: {str(e)}"
+    
+    except Exception as e:
+        logger.error(f"Unexpected error in analyze_images tool: {e}", exc_info=True)
+        return f"Unexpected error during image analysis: {str(e)}"
+
+
+def _run_async_in_sync(async_func, *args):
+    """
+    Helper function to run async function in sync context
+    """
+    import asyncio
+    import concurrent.futures
+    import threading
+    
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # We're in an async context, run in a separate thread
+            def run_in_thread():
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    return new_loop.run_until_complete(async_func(*args))
+                finally:
+                    new_loop.close()
+            
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_in_thread)
+                return future.result(timeout=60)  # 60 second timeout
+        else:
+            # No loop running, we can use it directly
+            return loop.run_until_complete(async_func(*args))
+    except RuntimeError:
+        # No event loop, create a new one
+        return asyncio.run(async_func(*args))
+
+
+async def _analyze_images_url_mode(image_urls: List[str], analysis_prompt: str, state: Dict, logger) -> str:
+    """
+    URL mode: Pass URLs directly to Vision APIs
+    Used when MinIO is publicly accessible (production)
+    """
+    try:
+        from app.services.media.image_orchestrator import ImageOrchestrator
+        orchestrator = ImageOrchestrator()
+        await orchestrator.initialize()
+        
+        result = await orchestrator.analyze_images(image_urls, analysis_prompt)
+        
+        if result.success and result.analysis:
+            # Store analysis in state
+            if state is not None:
+                if "image_analysis" not in state:
+                    state["image_analysis"] = []
+                state["image_analysis"].append({
+                    "prompt": analysis_prompt,
+                    "image_urls": image_urls,
+                    "analysis": result.analysis,
+                    "provider": result.provider_name,
+                    "mode": "url",
+                    "timestamp": getattr(result, 'timestamp', None)
+                })
+            
+            logger.info(f"Image analysis completed using {result.provider_name} (URL mode)")
+            return result.analysis
+        else:
+            error_msg = result.error_message or "Failed to analyze images"
+            logger.warning(f"Image analysis failed (URL mode): {error_msg}")
+            return f"Image analysis failed: {error_msg}"
+            
+    except Exception as e:
+        logger.error(f"Error during URL mode image analysis: {e}", exc_info=True)
+        return f"Error analyzing images in URL mode: {str(e)}"
+
+
+async def _analyze_images_binary_mode(image_urls: List[str], analysis_prompt: str, state: Dict, logger) -> str:
+    """
+    Binary mode: Download images locally and pass base64 data to Vision APIs
+    Used when MinIO is not publicly accessible (localhost/dev)
+    """
+    try:
+        # Import ImageOrchestrator inside the tool to avoid circular imports
+        from app.services.media.image_orchestrator import ImageOrchestrator
+        import httpx
+        import base64
+        
+        # Initialize orchestrator
+        orchestrator = ImageOrchestrator()
+        await orchestrator.initialize()
+        
+        # Download images and convert to base64 data URLs
+        image_data_urls = []
+        async with httpx.AsyncClient() as client:
+            for image_url in image_urls:
+                try:
+                    response = await client.get(image_url)
+                    if response.status_code == 200:
+                        # Convert to base64 data URL
+                        image_bytes = response.content
+                        image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+                        
+                        # Detect content type
+                        content_type = response.headers.get('content-type', 'image/jpeg')
+                        data_url = f"data:{content_type};base64,{image_base64}"
+                        image_data_urls.append(data_url)
+                        
+                        logger.debug(f"Downloaded and converted image: {len(image_bytes)} bytes")
+                    else:
+                        logger.warning(f"Failed to download image from {image_url}: HTTP {response.status_code}")
+                        return f"Failed to download image: HTTP {response.status_code}"
+                except Exception as e:
+                    logger.error(f"Error downloading image from {image_url}: {e}")
+                    return f"Error downloading image: {str(e)}"
+        
+        if not image_data_urls:
+            return "Failed to download any images for analysis."
+        
+        # Analyze images using data URLs instead of remote URLs
+        result = await orchestrator.analyze_images(image_data_urls, analysis_prompt)
+        
+        if result.success and result.analysis:
+            # Store analysis in state
+            if state is not None:
+                if "image_analysis" not in state:
+                    state["image_analysis"] = []
+                state["image_analysis"].append({
+                    "prompt": analysis_prompt,
+                    "image_urls": image_urls,  # Original URLs for reference
+                    "analysis": result.analysis,
+                    "provider": result.provider_name,
+                    "mode": "binary",
+                    "timestamp": getattr(result, 'timestamp', None)
+                })
+            
+            logger.info(f"Image analysis completed using {result.provider_name} (binary mode)")
+            return result.analysis
+        else:
+            error_msg = result.error_message or "Failed to analyze images"
+            logger.warning(f"Image analysis failed (binary mode): {error_msg}")
+            return f"Image analysis failed: {error_msg}"
+            
+    except Exception as e:
+        logger.error(f"Error during binary mode image analysis: {e}", exc_info=True)
+        return f"Error analyzing images in binary mode: {str(e)}"
+        
+    except Exception as e:
+        logger.error(f"Unexpected error in analyze_images tool: {e}", exc_info=True)
+        return f"Unexpected error during image analysis: {str(e)}"
+
+
+@tool
+def describe_image_content(
+    image_url: Annotated[str, "URL of the image to describe"], 
+    focus: Annotated[str, "What to focus on in the description"] = "general content",
+    state: Annotated[Dict, InjectedState] = None
+) -> str:
+    """
+    Provides detailed description of a single image's content.
+    
+    This tool is optimized for describing one image in detail, with options
+    to focus on specific aspects like text content, objects, people, etc.
+    
+    Args:
+        image_url: URL of the image to describe
+        focus: What aspect to focus on (e.g., "text", "objects", "people", "general content")
+        state: LangGraph state (injected automatically)
+    
+    Returns:
+        Detailed description of the image content
+    """
+    logger = logging.getLogger(__name__)
+    
+    try:
+        if not image_url:
+            return "No image URL provided."
+        
+        # Check if image is available in state
+        state_image_urls = state.get("image_urls", []) if state else []
+        if state_image_urls and image_url not in state_image_urls:
+            return "Requested image is not available in current context."
+        
+        # Create focused prompt based on the focus parameter
+        focus_prompts = {
+            "text": "Extract and transcribe any text visible in this image. Include signs, labels, documents, or any written content.",
+            "objects": "Identify and describe all objects, items, and things visible in this image. Be specific about their appearance, location, and any notable features.",
+            "people": "Describe any people in this image, including their appearance, clothing, actions, and positioning. Be respectful and factual.",
+            "scene": "Describe the overall scene, setting, and environment shown in this image. Include lighting, mood, and context.",
+            "colors": "Analyze the color palette, dominant colors, and color relationships in this image.",
+            "technical": "Provide technical analysis of this image including composition, lighting, style, and photographic aspects.",
+            "general content": "Provide a comprehensive description of everything visible in this image."
+        }
+        
+        analysis_prompt = focus_prompts.get(focus.lower(), focus_prompts["general content"])
+        if focus.lower() not in focus_prompts:
+            analysis_prompt = f"Focus on {focus} in this image: {analysis_prompt}"
+        
+        logger.info(f"Describing image with focus on: {focus}")
+        
+        # Use analyze_images tool for single image
+        return analyze_images([image_url], analysis_prompt, state)
+        
+    except Exception as e:
+        logger.error(f"Error in describe_image_content tool: {e}", exc_info=True)
+        return f"Error describing image: {str(e)}"

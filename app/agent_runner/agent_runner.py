@@ -215,9 +215,14 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
             user_data = payload.get("user_data", {})
             channel = payload.get("channel", "unknown")
             platform_id = payload.get("platform_user_id")
+            image_urls = payload.get("image_urls", [])  # Extract image URLs from payload
 
             interaction_id = str(uuid.uuid4())
             self.logger.debug(f"Generated InteractionID: {interaction_id} for Thread: {chat_id}")
+            
+            # Log image URLs if present
+            if image_urls:
+                self.logger.info(f"Processing message with {len(image_urls)} images for chat_id: {chat_id}")
 
             if not chat_id or user_text is None:
                 self.logger.warning(f"Missing 'text' or 'chat_id' in Redis payload: {payload}")
@@ -240,7 +245,8 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
                 user_data=user_data,
                 thread_id=chat_id,
                 channel=channel,
-                interaction_id=interaction_id
+                interaction_id=interaction_id,
+                image_urls=image_urls
             )
 
             await self._save_history(
@@ -366,18 +372,62 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
             user_data: Dict[str, Any],
             thread_id: str,
             channel: Optional[str] = None,
-            interaction_id: Optional[str] = None
+            interaction_id: Optional[str] = None,
+            image_urls: Optional[List[str]] = None
             ) -> Tuple[str, Optional[BaseMessage]]:
         """
+        Вызывает агента LangGraph для обработки пользовательского ввода и возвращает ответ.
+        
+        Если присутствуют изображения, добавляет информацию об этом в пользовательское сообщение,
+        чтобы LLM агент знал о необходимости их анализа.
         """
+        
+        # Modify user input if images are present to inform the LLM
+        enhanced_user_input = user_input
+        message_content = user_input
+        
+        if image_urls:
+            image_count = len(image_urls)
+            self.logger.info(f"Enhanced user input with image information: {image_count} images attached")
+            
+            # Check IMAGE_VISION_MODE to determine how to handle images
+            if settings.IMAGE_VISION_MODE == "url":
+                # URL mode: Create multimodal message with image URLs for direct Vision API
+                self.logger.info(f"Using URL mode - creating multimodal message with {image_count} images")
+                # Create multimodal content with images for direct Vision API
+                content_parts = [{"type": "text", "text": user_input}]
+                for url in image_urls:
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": url}
+                    })
+                message_content = content_parts
+                enhanced_user_input = user_input  # Keep original text for graph input
+            else:
+                # Binary mode: Use text instructions for Vision tools
+                self.logger.info(f"Using binary mode - creating text instructions for Vision tools")
+                # More explicit instruction for LLM to use vision tools
+                if user_input.strip():
+                    image_info = f"[ВАЖНО: Пользователь прикрепил {image_count} изображение(я). ОБЯЗАТЕЛЬНО вызови функцию analyze_images с этими URL: {image_urls} для анализа изображений перед ответом.] "
+                    enhanced_user_input = image_info + user_input
+                else:
+                    # If no text, create a specific request for image analysis
+                    enhanced_user_input = f"Пожалуйста, проанализируй {image_count} изображение(я), которые я прикрепил. Используй функцию analyze_images для их анализа."
+                
+                # Use text instructions only
+                message_content = enhanced_user_input
+            
+            self.logger.info(f"Image processing mode: {settings.IMAGE_VISION_MODE}. Message type: {'multimodal' if isinstance(message_content, list) else 'text'}")
+        
         graph_input = {
-            "messages": history_db + [HumanMessage(content=user_input)],
+            "messages": history_db + [HumanMessage(content=message_content)],
             "user_data": user_data,
             "channel": channel,
             "original_question": user_input,
-            "question": user_input,
+            "question": enhanced_user_input,
             "rewrite_count": 0,
             "documents": [],
+            "image_urls": image_urls or [],  # Add image URLs to graph input
             # "interaction_id": interaction_id,
             "token_usage_events": [],
             # Конфигурация извлекается напрямую из agent_config

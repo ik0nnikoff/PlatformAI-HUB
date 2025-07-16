@@ -417,6 +417,9 @@ class ToolsRegistry:
         'auth_tool': auth_tool,
         'get_user_info_tool': get_user_info_tool,
         'voice_capabilities_tool': voice_capabilities_tool,
+        # Vision tools will be imported lazily to avoid circular imports
+        # 'analyze_images': analyze_images,
+        # 'describe_image_content': describe_image_content,
         # 'get_bonus_points': get_bonus_points,
     }
     
@@ -434,6 +437,27 @@ class ToolsRegistry:
     def get_predefined_names(cls) -> List[str]:
         """Get names of all predefined tools."""
         return list(cls.PREDEFINED_TOOLS.keys())
+    
+    @classmethod
+    def get_vision_tools(cls) -> List[BaseTool]:
+        """
+        Get vision analysis tools with lazy import to avoid circular dependencies.
+        
+        Returns:
+            List[BaseTool]: List of vision analysis tools
+        """
+        try:
+            # Import vision tools lazily to avoid circular imports
+            from app.agent_runner.langgraph.tools import analyze_images, describe_image_content
+            tools = [analyze_images, describe_image_content]
+            logger.info(f"Successfully loaded {len(tools)} vision tools: {[t.name for t in tools]}")
+            return tools
+        except ImportError as e:
+            logger.warning(f"Failed to import vision tools: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error loading vision tools: {e}", exc_info=True)
+            return []
     
     @classmethod
     def create_api_tool(cls, api_config: Dict[str, Any], 
