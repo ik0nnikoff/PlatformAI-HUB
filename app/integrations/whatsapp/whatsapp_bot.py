@@ -6,10 +6,13 @@ WhatsApp Integration Bot для PlatformAI-HUB
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
+import uuid
 from typing import Optional, Dict, Any
+import aiohttp
 import httpx
 from socketio.async_client import AsyncClient
 
@@ -66,6 +69,9 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
         # Voice orchestrator (will be initialized in setup())
         self.voice_orchestrator = None
         
+        # 🆕 Agent configuration cache (loaded once at startup)
+        self.agent_config: Optional[Dict[str, Any]] = None
+        
         # Reconnection tracking
         self.reconnect_attempts = 0
         self.max_reconnect_attempts = settings.WPPCONNECT_RECONNECT_ATTEMPTS
@@ -121,6 +127,9 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
                 self.logger.warning(f"Failed to initialize voice orchestrator: {e}")
                 # Voice features will be disabled but bot can still work
                 self.voice_orchestrator = None
+            
+            # 🆕 Load agent configuration once at startup
+            await self._load_agent_config()
             
             self.logger.info(f"WhatsApp integration setup completed for session {self.session_name}")
             
@@ -933,42 +942,9 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
                 minio_key=f"whatsapp/{chat_id}/{str(uuid.uuid4())}.ogg"
             )
             
-            # Load real agent config from API
-            try:
-                import httpx
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(f"http://localhost:8001/api/v1/agents/{self.agent_id}/config")
-                    if response.status_code == 200:
-                        agent_config = response.json()
-                        self.logger.debug(f"Loaded agent config for voice processing: {agent_config}")
-                    else:
-                        self.logger.error(f"Failed to load agent config: {response.status_code}")
-                        # Fallback to minimal config
-                        agent_config = {
-                            "config": {
-                                "simple": {
-                                    "settings": {
-                                        "voice_settings": {
-                                            "enabled": False
-                                        }
-                                    }
-                                }
-                            }
-                        }
-            except Exception as e:
-                self.logger.error(f"Error loading agent config: {e}")
-                # Fallback to minimal config
-                agent_config = {
-                    "config": {
-                        "simple": {
-                            "settings": {
-                                "voice_settings": {
-                                    "enabled": False
-                                }
-                            }
-                        }
-                    }
-                }
+            # 🆕 Use cached agent config instead of loading from API each time
+            agent_config = self.agent_config or self._get_fallback_agent_config()
+            self.logger.debug(f"Using cached agent config for voice processing")
             
             # Use global voice orchestrator if available, otherwise create temporary one
             orchestrator = self.voice_orchestrator
@@ -1087,3 +1063,53 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
         except Exception as e:
             self.logger.error(f"Error sending WhatsApp voice message: {e}", exc_info=True)
             return False
+
+    async def _load_agent_config(self) -> None:
+        """
+        Загружает конфигурацию агента один раз при инициализации интеграции
+        """
+        try:
+            self.logger.debug(f"Loading agent config for {self.agent_id}")
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.get(f"http://{settings.MANAGER_HOST}:{settings.MANAGER_PORT}/api/v1/agents/{self.agent_id}/config")
+                if response.status_code == 200:
+                    self.agent_config = response.json()
+                    self.logger.info(f"Successfully loaded agent config for {self.agent_id}")
+                    
+                    # Check if voice is enabled
+                    voice_enabled = (
+                        self.agent_config
+                        .get("config", {})
+                        .get("simple", {})
+                        .get("settings", {})
+                        .get("voice_settings", {})
+                        .get("enabled", False)
+                    )
+                    self.logger.info(f"Voice features enabled for agent {self.agent_id}: {voice_enabled}")
+                    
+                else:
+                    self.logger.error(f"Failed to load agent config: HTTP {response.status_code}")
+                    # Set fallback config
+                    self.agent_config = self._get_fallback_agent_config()
+                    
+        except Exception as e:
+            self.logger.error(f"Error loading agent config: {e}")
+            # Set fallback config
+            self.agent_config = self._get_fallback_agent_config()
+    
+    def _get_fallback_agent_config(self) -> Dict[str, Any]:
+        """
+        Возвращает базовую конфигурацию агента в случае ошибки загрузки
+        """
+        return {
+            "config": {
+                "simple": {
+                    "settings": {
+                        "voice_settings": {
+                            "enabled": False
+                        }
+                    }
+                }
+            }
+        }
