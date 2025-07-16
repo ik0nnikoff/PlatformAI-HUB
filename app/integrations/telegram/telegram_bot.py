@@ -2,12 +2,13 @@ import asyncio
 import json
 import logging
 import os
-from typing import Optional, Dict, Any
+import time
+from typing import Optional, Dict, Any, List
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton, User
+from aiogram.types import Message, ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton, User, PhotoSize
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatAction
 from aiogram.exceptions import TelegramBadRequest
@@ -17,6 +18,8 @@ from app.core.config import settings
 from app.core.base.service_component import ServiceComponentBase
 from app.db.crud import user_crud
 from app.api.schemas.common_schemas import IntegrationType
+from app.services.voice import VoiceServiceOrchestrator
+from app.services.redis_wrapper import RedisService
 
 
 # Constants
@@ -53,6 +56,22 @@ class TelegramIntegrationBot(ServiceComponentBase):
         self.dp: Optional[Dispatcher] = None
 
         self.typing_tasks: Dict[int, asyncio.Task] = {} # To manage typing indicator tasks
+        
+        # Voice processing orchestrator
+        self.voice_orchestrator: Optional[VoiceServiceOrchestrator] = None
+        
+        # Image processing orchestrator
+        self.image_orchestrator = None  # Will be initialized later
+        
+        # 🆕 Agent configuration cache (loaded once at startup)
+        self.agent_config: Optional[Dict[str, Any]] = None
+        
+        # 🆕 Photo grouping for handling multiple photos sent together
+        self.photo_groups: Dict[str, List[Message]] = {}  # media_group_id -> messages
+        self.photo_buffers: Dict[int, List[Message]] = {}  # user_id -> buffered messages  
+        self.photo_timers: Dict[int, asyncio.Task] = {}  # user_id -> timer task
+        self.photo_group_timeout = 2.0  # seconds to wait for additional photos
+        
         self.logger.info(f"TelegramIntegrationBot initialized. PID: {os.getpid()}")
 
     def _request_contact_markup(self) -> ReplyKeyboardMarkup:
@@ -79,7 +98,7 @@ class TelegramIntegrationBot(ServiceComponentBase):
                 del self.typing_tasks[chat_id]
 
 
-    async def _publish_to_agent(self, chat_id: int, platform_user_id: str, message_text: str, user_data: dict):
+    async def _publish_to_agent(self, chat_id: int, platform_user_id: str, message_text: str, user_data: dict, image_urls: Optional[List[str]] = None):
         try:
             redis_cli = await self.redis_client # Use inherited client
         except RuntimeError as e:
@@ -96,6 +115,12 @@ class TelegramIntegrationBot(ServiceComponentBase):
             "user_data": user_data,
             "channel": "telegram"
         }
+        
+        # Add image URLs if provided
+        if image_urls:
+            payload["image_urls"] = image_urls
+            self.logger.info(f"Adding {len(image_urls)} image URLs to message payload")
+        
         try:
             await redis_cli.publish(input_channel, json.dumps(payload).encode('utf-8'))
             self.logger.info(f"Published message to {input_channel} for chat {chat_id}")
@@ -325,6 +350,320 @@ class TelegramIntegrationBot(ServiceComponentBase):
                 self.typing_tasks[chat_id].cancel()
                 # No need to await here, _send_typing_periodically handles its own cleanup on cancel
 
+    async def _handle_voice_message(self, message: Message):
+        """Handle voice and audio messages from users"""
+        if not self.bot:
+            return
+        
+        chat_id = message.chat.id
+        platform_user_id = str(message.from_user.id)
+        
+        # Start typing indicator
+        if chat_id in self.typing_tasks:
+            self.typing_tasks[chat_id].cancel()
+        self.typing_tasks[chat_id] = asyncio.create_task(self._send_typing_periodically(chat_id))
+        
+        try:
+            # Check if voice processing is available
+            if not self.voice_orchestrator:
+                await message.answer("🔇 Голосовые функции временно недоступны.")
+                return
+            
+            # Get voice/audio file info
+            voice_file = None
+            if message.voice:
+                voice_file = message.voice
+                file_type = "voice"
+                self.logger.info(f"Received voice message from {platform_user_id}: {voice_file.duration}s, {voice_file.file_size} bytes")
+            elif message.audio:
+                voice_file = message.audio  
+                file_type = "audio"
+                self.logger.info(f"Received audio message from {platform_user_id}: {voice_file.duration}s, {voice_file.file_size} bytes")
+            else:
+                await message.answer("⚠️ Неподдерживаемый тип аудиофайла.")
+                return
+            
+            # Validate file size
+            max_size = getattr(settings, 'VOICE_MAX_FILE_SIZE_MB', 25) * 1024 * 1024  # Convert to bytes
+            if voice_file.file_size > max_size:
+                await message.answer(f"📁 Файл слишком большой. Максимальный размер: {settings.VOICE_MAX_FILE_SIZE_MB}MB")
+                return
+            
+            # Validate duration
+            max_duration = getattr(settings, 'VOICE_MAX_DURATION', 120)
+            if voice_file.duration > max_duration:
+                await message.answer(f"⏱️ Аудио слишком длинное. Максимальная длительность: {max_duration} секунд")
+                return
+            
+            # Download the file
+            file_info = await self.bot.get_file(voice_file.file_id)
+            if not file_info.file_path:
+                await message.answer("⚠️ Не удалось получить аудиофайл.")
+                return
+            
+            # Download file content
+            audio_data = await self.bot.download_file(file_info.file_path)
+            if not audio_data:
+                await message.answer("⚠️ Не удалось скачать аудиофайл.")
+                return
+            
+            # Get user authorization info
+            is_authorized = await self._check_user_authorization(platform_user_id)
+            user_data = {"is_authenticated": is_authorized, "user_id": platform_user_id}
+            
+            # Get user details if available
+            if is_authorized and self.db_session_factory:
+                async with self.db_session_factory() as session:
+                    db_user = await user_crud.get_user_by_platform_id(session, platform="telegram", platform_user_id=platform_user_id)
+                    if db_user:
+                        user_data.update({
+                            "phone_number": db_user.phone_number,
+                            "first_name": db_user.first_name,
+                            "last_name": db_user.last_name, 
+                            "username": db_user.username
+                        })
+            
+            # 🆕 Use cached agent config instead of loading from API each time
+            agent_config = self.agent_config or self._get_fallback_agent_config()
+            self.logger.debug(f"Using cached agent config for voice processing")
+            
+            # Process voice message
+            
+            # Initialize voice services for this agent if not already done
+            try:
+                await self.voice_orchestrator.initialize_voice_services_for_agent(self.agent_id, agent_config)
+                self.logger.debug(f"Voice services initialized for agent {self.agent_id}")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize voice services for agent {self.agent_id}: {e}")
+                # Continue anyway, maybe services are already initialized
+            
+            # Determine filename based on file type
+            filename = f"voice_{int(time.time())}.ogg" if file_type == "voice" else f"audio_{int(time.time())}.mp3"
+            
+            # Process the voice message with orchestrator
+            result = await self.voice_orchestrator.process_voice_message(
+                agent_id=self.agent_id,
+                user_id=platform_user_id,
+                audio_data=audio_data.read(),
+                original_filename=filename,
+                agent_config=agent_config
+            )
+            
+            if result.success and result.text:
+                # Send recognized text to agent as a regular message
+                self.logger.info(f"Voice transcription successful: '{result.text[:100]}...'")
+                await self._publish_to_agent(chat_id, platform_user_id, result.text, user_data)
+            else:
+                error_msg = result.error_message or "Не удалось распознать речь"
+                await message.answer(f"🔇 {error_msg}")
+                self.logger.warning(f"Voice processing failed: {error_msg}")
+            
+        except Exception as e:
+            self.logger.error(f"Error processing voice message from chat {chat_id}: {e}", exc_info=True)
+            try:
+                await message.answer("⚠️ Ошибка при обработке голосового сообщения.")
+            except Exception as e_reply:
+                self.logger.error(f"Failed to send voice error reply to chat {chat_id}: {e_reply}")
+        finally:
+            # Stop typing indicator
+            await asyncio.sleep(1)
+            if chat_id in self.typing_tasks:
+                self.typing_tasks[chat_id].cancel()
+
+    async def _handle_photo_message(self, message: Message):
+        """Handle photo messages from users - with grouping support"""
+        if not self.bot:
+            return
+        
+        chat_id = message.chat.id
+        platform_user_id = str(message.from_user.id)
+        user_id = message.from_user.id
+        
+        # Check if this photo is part of a media group (album)
+        if message.media_group_id:
+            await self._handle_media_group_photo(message)
+            return
+        
+        # Check if image processing is available
+        if not self.image_orchestrator:
+            await message.answer("🖼️ Функции обработки изображений временно недоступны.")
+            return
+            
+        # For non-media group photos, use temporal grouping
+        # Cancel any existing timer for this user
+        if user_id in self.photo_timers:
+            self.photo_timers[user_id].cancel()
+            
+        # Add photo to buffer
+        if user_id not in self.photo_buffers:
+            self.photo_buffers[user_id] = []
+        self.photo_buffers[user_id].append(message)
+        
+        # Start/restart timer to process buffered photos
+        self.photo_timers[user_id] = asyncio.create_task(
+            self._process_photo_buffer_after_delay(user_id)
+        )
+        
+        self.logger.info(f"Received photo from {platform_user_id}: buffered (total: {len(self.photo_buffers[user_id])})")
+
+    async def _handle_media_group_photo(self, message: Message):
+        """Handle photos that are part of a media group (album)"""
+        if not message.media_group_id:
+            return
+            
+        media_group_id = message.media_group_id
+        
+        # Add to media group buffer
+        if media_group_id not in self.photo_groups:
+            self.photo_groups[media_group_id] = []
+        self.photo_groups[media_group_id].append(message)
+        
+        # Set a timer to process this media group (in case we don't receive all photos)
+        await asyncio.sleep(0.5)  # Small delay to collect all photos in group
+        
+        if media_group_id in self.photo_groups:
+            messages = self.photo_groups.pop(media_group_id)
+            await self._process_photo_group(messages)
+
+    async def _process_photo_buffer_after_delay(self, user_id: int):
+        """Process buffered photos after a delay"""
+        try:
+            await asyncio.sleep(self.photo_group_timeout)
+            
+            if user_id in self.photo_buffers and self.photo_buffers[user_id]:
+                messages = self.photo_buffers[user_id].copy()
+                self.photo_buffers[user_id].clear()
+                
+                await self._process_photo_group(messages)
+                
+        except asyncio.CancelledError:
+            # Timer was cancelled, this is normal
+            pass
+        except Exception as e:
+            self.logger.error(f"Error processing photo buffer for user {user_id}: {e}", exc_info=True)
+        finally:
+            # Clean up timer
+            if user_id in self.photo_timers:
+                del self.photo_timers[user_id]
+
+    async def _process_photo_group(self, messages: List[Message]):
+        """Process a group of photos as a single message"""
+        if not messages:
+            return
+            
+        # Use the first message for chat and user info
+        first_message = messages[0]
+        chat_id = first_message.chat.id
+        platform_user_id = str(first_message.from_user.id)
+        
+        # Start typing indicator
+        if chat_id in self.typing_tasks:
+            self.typing_tasks[chat_id].cancel()
+        self.typing_tasks[chat_id] = asyncio.create_task(self._send_typing_periodically(chat_id))
+        
+        try:
+            # Get user authorization info
+            is_authorized = await self._check_user_authorization(platform_user_id)
+            user_data = {"is_authenticated": is_authorized, "user_id": platform_user_id}
+            
+            # Get user details if available
+            if is_authorized and self.db_session_factory:
+                async with self.db_session_factory() as session:
+                    db_user = await user_crud.get_user_by_platform_id(session, platform="telegram", platform_user_id=platform_user_id)
+                    if db_user:
+                        user_data.update({
+                            "phone_number": db_user.phone_number,
+                            "first_name": db_user.first_name,
+                            "last_name": db_user.last_name,
+                            "username": db_user.username
+                        })
+            
+            image_urls = []
+            processed_count = 0
+            
+            # Process each photo in the group
+            for message in messages:
+                try:
+                    if not message.photo:
+                        continue
+                        
+                    # Select the largest photo size
+                    photo: PhotoSize = max(message.photo, key=lambda p: p.file_size or 0)
+                    
+                    self.logger.info(f"Processing photo {processed_count + 1}/{len(messages)} from {platform_user_id}: {photo.width}x{photo.height}, {photo.file_size} bytes")
+                    
+                    # Validate file size
+                    max_size = getattr(settings, 'IMAGE_MAX_FILE_SIZE_MB', 10) * 1024 * 1024
+                    if photo.file_size and photo.file_size > max_size:
+                        self.logger.warning(f"Photo {processed_count + 1} too large: {photo.file_size} bytes")
+                        continue
+                    
+                    # Download the photo
+                    file_info = await self.bot.get_file(photo.file_id)
+                    if not file_info.file_path:
+                        self.logger.warning(f"Could not get file path for photo {processed_count + 1}")
+                        continue
+                    
+                    # Download file content
+                    image_data = await self.bot.download_file(file_info.file_path)
+                    if not image_data:
+                        self.logger.warning(f"Could not download photo {processed_count + 1}")
+                        continue
+                    
+                    # Determine filename
+                    original_filename = file_info.file_path.split('/')[-1] if file_info.file_path else f"photo_{processed_count + 1}_{int(time.time())}.jpg"
+                    if not original_filename.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
+                        original_filename += '.jpg'
+                    
+                    # Upload image to MinIO and get URL
+                    image_url = await self.image_orchestrator.upload_user_image(
+                        agent_id=self.agent_id,
+                        user_id=platform_user_id,
+                        image_data=image_data.read(),
+                        original_filename=original_filename
+                    )
+                    
+                    if image_url:
+                        image_urls.append(image_url)
+                        processed_count += 1
+                        self.logger.info(f"Successfully uploaded photo {processed_count}: {image_url}")
+                    else:
+                        self.logger.warning(f"Failed to upload photo {processed_count + 1}")
+                        
+                except Exception as e:
+                    self.logger.error(f"Error processing photo {processed_count + 1}: {e}", exc_info=True)
+                    continue
+            
+            if image_urls:
+                # Prepare caption combining all captions
+                captions = [msg.caption for msg in messages if msg.caption]
+                if captions:
+                    combined_caption = " | ".join(captions)
+                else:
+                    combined_caption = f"Пользователь отправил {len(image_urls)} изображений"
+                
+                # Send all images to agent in one message
+                await self._publish_to_agent(chat_id, platform_user_id, combined_caption, user_data, image_urls=image_urls)
+                self.logger.info(f"Adding {len(image_urls)} image URLs to message payload")
+                self.logger.info(f"Photo group uploaded and message published for chat {chat_id}: {len(image_urls)} images")
+            else:
+                await first_message.answer("⚠️ Не удалось обработать ни одного изображения.")
+                
+        except Exception as e:
+            self.logger.error(f"Error processing photo group for chat {chat_id}: {e}", exc_info=True)
+            try:
+                await first_message.answer("⚠️ Ошибка при обработке изображений.")
+            except Exception as e_reply:
+                self.logger.error(f"Failed to send photo group error reply to chat {chat_id}: {e_reply}")
+        finally:
+            # Stop typing indicator
+            await asyncio.sleep(1)
+            if chat_id in self.typing_tasks:
+                self.typing_tasks[chat_id].cancel()
+
+    async def _handle_media_group_message(self, messages: List[Message]):
+        """Handle media group (album) messages from users - delegate to photo group processor"""
+        await self._process_photo_group(messages)
 
     async def _register_handlers(self):
         """Registers aiogram message handlers."""
@@ -335,6 +674,9 @@ class TelegramIntegrationBot(ServiceComponentBase):
         self.dp.message(CommandStart())(self._handle_start_command)
         self.dp.message(Command("login"))(self._handle_login_command)
         self.dp.message(F.contact)(self._handle_contact)
+        self.dp.message(F.voice)(self._handle_voice_message)  # Voice message handler
+        self.dp.message(F.audio)(self._handle_voice_message)  # Audio message handler
+        self.dp.message(F.photo)(self._handle_photo_message)  # Photo message handler
         self.dp.message(F.text)(self._handle_text_message)
         # Add other handlers as needed
 
@@ -411,8 +753,49 @@ class TelegramIntegrationBot(ServiceComponentBase):
                                 except Exception as e_task_cancel:
                                     self.logger.error(f"Error awaiting cancelled typing task for chat {chat_id}: {e_task_cancel}", exc_info=True)
 
-                        self.logger.info(f"Sending message from agent to chat {chat_id}: '{response[:50]}...'")
-                        await self.bot.send_message(chat_id, response)
+                        # Check if audio response is included
+                        audio_url = payload.get("audio_url")
+                        voice_sent_successfully = False
+                        
+                        if audio_url:
+                            self.logger.info(f"Sending audio response to chat {chat_id}: {audio_url}")
+                            try:
+                                # Download audio file and send as voice message
+                                import aiohttp
+                                from aiogram.types import BufferedInputFile
+                                
+                                async with aiohttp.ClientSession() as session:
+                                    async with session.get(audio_url) as resp:
+                                        if resp.status == 200:
+                                            audio_data = await resp.read()
+                                            
+                                            # Create BufferedInputFile for voice message
+                                            voice_file = BufferedInputFile(
+                                                audio_data,
+                                                filename="voice_response.mp3"
+                                            )
+                                            
+                                            # Send as voice message without caption
+                                            await self.bot.send_voice(
+                                                chat_id=chat_id,
+                                                voice=voice_file
+                                            )
+                                            voice_sent_successfully = True
+                                            self.logger.info(f"Voice message sent successfully to chat {chat_id}")
+                                        else:
+                                            self.logger.error(f"Failed to download audio from {audio_url}: HTTP {resp.status}")
+                                            
+                            except TelegramBadRequest as e:
+                                if "VOICE_MESSAGES_FORBIDDEN" in str(e):
+                                    self.logger.warning(f"Voice messages are forbidden for chat {chat_id}, falling back to text")
+                                else:
+                                    self.logger.error(f"Telegram API error sending voice to chat {chat_id}: {e}")
+                            except Exception as e:
+                                self.logger.error(f"Error sending audio response to chat {chat_id}: {e}", exc_info=True)
+                        
+                        # Send text response only if voice wasn't sent successfully
+                        if not voice_sent_successfully:
+                            await self.bot.send_message(chat_id, response)
 
                 else:
                     self.logger.warning(f"Received message from agent for chat {chat_id} without response or error: {payload}")
@@ -450,6 +833,30 @@ class TelegramIntegrationBot(ServiceComponentBase):
         self.bot = Bot(token=self.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
         self.dp = Dispatcher()
         self.logger.info(f"Aiogram Bot and Dispatcher initialized.")
+
+        # Initialize voice orchestrator
+        try:
+            redis_service = RedisService()
+            await redis_service.initialize()
+            self.voice_orchestrator = VoiceServiceOrchestrator(redis_service, self.logger)
+            await self.voice_orchestrator.initialize()
+            self.logger.info("Voice orchestrator initialized for Telegram bot")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize voice orchestrator: {e}")
+            # Voice features will be disabled but bot can still work
+
+        # Initialize image orchestrator
+        try:
+            from app.services.media.image_orchestrator import ImageOrchestrator
+            self.image_orchestrator = ImageOrchestrator()
+            await self.image_orchestrator.initialize()
+            self.logger.info("Image orchestrator initialized for Telegram bot")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize image orchestrator: {e}")
+            # Image features will be disabled but bot can still work
+
+        # 🆕 Load agent configuration once at startup
+        await self._load_agent_config()
 
         await self._register_handlers()
 
@@ -512,13 +919,97 @@ class TelegramIntegrationBot(ServiceComponentBase):
             self.typing_tasks.clear()
             self.logger.info("Active typing tasks processed for cancellation.")
 
+        # Cancel photo group timers
+        if self.photo_timers:
+            self.logger.info(f"Cancelling {len(self.photo_timers)} photo group timers...")
+            for user_id, task in list(self.photo_timers.items()):
+                if task and not task.done():
+                    task.cancel()
+            await asyncio.gather(*(task for task in self.photo_timers.values() if task and not task.done()), return_exceptions=True)
+            self.photo_timers.clear()
+            
+        # Clear photo buffers
+        self.photo_groups.clear()
+        self.photo_buffers.clear()
+
         if self.bot and self.bot.session:
             self.logger.info(f"Closing Aiogram bot session.")
             await self.bot.session.close()
             self.logger.info(f"Aiogram bot session closed.")
+        
+        # Cleanup voice orchestrator
+        if self.voice_orchestrator:
+            try:
+                await self.voice_orchestrator.cleanup()
+                self.logger.info("Voice orchestrator cleaned up")
+            except Exception as e:
+                self.logger.warning(f"Error cleaning up voice orchestrator: {e}")
+            finally:
+                self.voice_orchestrator = None
+        
+        # Cleanup image orchestrator
+        if self.image_orchestrator:
+            try:
+                await self.image_orchestrator.cleanup()
+                self.logger.info("Image orchestrator cleaned up")
+            except Exception as e:
+                self.logger.warning(f"Error cleaning up image orchestrator: {e}")
+            finally:
+                self.image_orchestrator = None
         
         self.bot = None
         self.dp = None
 
         await super().cleanup() # Calls ServiceComponentBase.cleanup()
         self.logger.info(f"TelegramIntegrationBot cleanup finished.")
+
+    async def _load_agent_config(self) -> None:
+        """
+        Загружает конфигурацию агента один раз при инициализации интеграции
+        """
+        try:
+            import httpx
+            self.logger.debug(f"Loading agent config for {self.agent_id}")
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.get(f"http://{settings.MANAGER_HOST}:{settings.MANAGER_PORT}/api/v1/agents/{self.agent_id}/config")
+                if response.status_code == 200:
+                    self.agent_config = response.json()
+                    self.logger.info(f"Successfully loaded agent config for {self.agent_id}")
+                    
+                    # Check if voice is enabled
+                    voice_enabled = (
+                        self.agent_config
+                        .get("config", {})
+                        .get("simple", {})
+                        .get("settings", {})
+                        .get("voice_settings", {})
+                        .get("enabled", False)
+                    )
+                    self.logger.info(f"Voice features enabled for agent {self.agent_id}: {voice_enabled}")
+                    
+                else:
+                    self.logger.error(f"Failed to load agent config: HTTP {response.status_code}")
+                    # Set fallback config
+                    self.agent_config = self._get_fallback_agent_config()
+                    
+        except Exception as e:
+            self.logger.error(f"Error loading agent config: {e}")
+            # Set fallback config
+            self.agent_config = self._get_fallback_agent_config()
+    
+    def _get_fallback_agent_config(self) -> Dict[str, Any]:
+        """
+        Возвращает базовую конфигурацию агента в случае ошибки загрузки
+        """
+        return {
+            "config": {
+                "simple": {
+                    "settings": {
+                        "voice_settings": {
+                            "enabled": False
+                        }
+                    }
+                }
+            }
+        }

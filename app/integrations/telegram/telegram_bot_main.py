@@ -11,8 +11,8 @@ from app.integrations.telegram.telegram_bot import TelegramIntegrationBot
 
 
 def setup_logging_for_agent(agent_id: str) -> logging.LoggerAdapter:
-        
-    module_logger = logging.getLogger(f"TELEGRAM_BOT:{args.agent_id}")
+    """Настройка логирования для Telegram бота"""
+    module_logger = logging.getLogger(f"TELEGRAM_BOT:{agent_id}")
     adapter = logging.LoggerAdapter(module_logger, {'agent_id': agent_id})
     return adapter
 

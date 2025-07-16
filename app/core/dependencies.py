@@ -9,6 +9,9 @@ from app.services.redis_service import get_redis_pool
 
 logger = logging.getLogger(__name__)
 
+# Global instance cache for ImageOrchestrator
+_image_orchestrator_instance = None
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI зависимость для получения сессии базы данных."""
     if not SessionLocal:
@@ -52,3 +55,23 @@ async def get_redis_client() -> AsyncGenerator[redis.Redis, None]:
     finally:
         if client:
             await client.close() # Закрываем соединение, возвращая его в пул
+
+
+async def get_image_orchestrator():
+    """
+    FastAPI зависимость для получения экземпляра ImageOrchestrator.
+    Использует глобальный экземпляр (singleton pattern) для эффективности.
+    """
+    global _image_orchestrator_instance
+    
+    if _image_orchestrator_instance is None:
+        try:
+            from app.services.media.image_orchestrator import ImageOrchestrator
+            _image_orchestrator_instance = ImageOrchestrator()
+            await _image_orchestrator_instance.initialize()
+            logger.info("ImageOrchestrator initialized in dependencies")
+        except Exception as e:
+            logger.error(f"Failed to initialize ImageOrchestrator: {e}", exc_info=True)
+            raise
+    
+    return _image_orchestrator_instance

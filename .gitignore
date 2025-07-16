@@ -13,3 +13,4 @@ wheels/
 .vscode
 docker-PAI/data
 logs/app.log
+.github

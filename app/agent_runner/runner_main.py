@@ -10,8 +10,8 @@ from app.core.logging_config import setup_logging
 
 
 def setup_logging_for_agent(agent_id: str) -> logging.LoggerAdapter:
-        
-    module_logger = logging.getLogger(f"AGENT:{args.agent_id}")
+    """Настройка логирования для агента"""
+    module_logger = logging.getLogger(f"AGENT:{agent_id}")
     adapter = logging.LoggerAdapter(module_logger, {'agent_id': agent_id})
     return adapter
 
