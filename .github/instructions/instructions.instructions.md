@@ -11,10 +11,9 @@
 ### Оценка неопределённости
 **Прежде чем ответить, оцени неопределённость своего ответа. Если она больше 0.1, задай мне уточняющие вопросы, пока она не станет 0.1 или ниже.**
 
-### Требования к коду
-**Архитектурные принципы**: ООП, удобная структура проекта, удобство дополнения, редактирования и расширения функционала. Разделение кода по классам и функционалу по файлам (каталогам). Не дублировать код, писать унифицированно, профессионально, вдумчиво, достигать консистентности.
+### Принципы архитектуры и требования к коду
 
-**Принципы архитектуры**:
+**Архитектурные принципы**:
 - Объектно-ориентированное программирование (ООП)
 - Четкое разделение ответственности между классами
 - Логическое группирование функционала по файлам и каталогам
@@ -23,6 +22,7 @@
 - Профессиональный подход к реализации
 - Консистентность во всем проекте
 - Простота расширения и модификации функционала
+- Удобство дополнения, редактирования и расширения функционала
 
 **Принципы SOLID (ОБЯЗАТЕЛЬНЫЕ)**:
 - **S - Single Responsibility**: Каждый класс отвечает только за одну задачу
@@ -42,7 +42,7 @@
 4. **Codacy MCP** - анализ качества кода (обязательно для всех изменений)
 5. **Playwright MCP** - автоматизация браузера и тестирование
 
-### Лучшие практики использования MCP:
+### Краткий обзор MCP серверов:
 
 #### Sequential Thinking MCP
 **Когда использовать**: Сложные архитектурные решения, отладка системных проблем, рефакторинг
@@ -58,12 +58,16 @@
 - Создавай связи между компонентами системы
 - Документируй причины архитектурных решений
 - Сохраняй решения проблем для повторного использования
+- Ищи существующие решения перед созданием новых
+- Обращайся к Memory MCP для получения контекста проекта и восстановления памяти
 
 #### Context7 MCP
-**Когда использовать**: Работа с новыми библиотеками, изучение паттернов
+**Когда использовать**: Работа с библиотеками, изучение паттернов, примеров, документации
 **Принципы**:
-- Изучай документацию ПЕРЕД использованием новых библиотек
+- Изучай документацию ПЕРЕД использованием библиотек
 - Ищи лучшие практики и паттерны
+- Используй для поиска конкретных решений
+- Изучай примеры использования библиотек
 - Фокусируйся на конкретных задачах (async patterns, error handling)
 
 #### Codacy MCP
@@ -345,12 +349,12 @@ class Settings:
 Проект использует оркестраторы для централизованного управления медиа-контентом:
 - **VoiceServiceOrchестrator** (`app/services/voice/voice_service_orchestrator.py`)
 - **ImageOrchестrator** (`app/services/media/image_orchestrator.py`)
-- **DocumentOrchestrator** (`app/services/media/document_orchestrator.py`)
+- **DocumentOrchестrator** (`app/services/media/document_orchestrator.py`)
 
 Все оркестраторы следуют паттерну мульти-провайдерной архитектуры с fallback механизмами.
 
 ### Голосовые сообщения
-**Архитектура**: VoiceServiceOrchестrator с мульти-провайдерной системой (OpenAI → Google → Yandex)
+**Архитектура**: VoiceServiceOrчестrator с мульти-провайдерной системой (OpenAI → Google → Yandex)
 
 **Компоненты системы**:
 - **OpenAIVoiceService**: STT/TTS через OpenAI Whisper и TTS API
@@ -360,14 +364,14 @@ class Settings:
 
 **Алгоритм обработки**:
 1. Интеграция получает голосовое сообщение (OGG, MP3, WAV, OPUS, FLAC, AAC)
-2. VoiceServiceOrchестrator загружает файл в MinIO bucket `voice-files`
+2. VoiceServiceOrчестrator загружает файл в MinIO bucket `voice-files`
 3. Аудио конвертируется в WAV через pydub для совместимости
 4. STT обработка с fallback: OpenAI → Google → Yandex (по приоритету)
 5. Результат кэшируется в Redis (TTL 24 часа) и отправляется агенту
 6. При необходимости TTS ответа: обратная цепочка провайдеров
 7. Аудио ответ загружается в MinIO и отправляется пользователю
 
-**Методы VoiceServiceOrchестrator**:
+**Методы VoiceServiceOrчестrator**:
 - `transcribe_audio(file_path, language="auto")`: STT с автоопределением языка
 - `synthesize_speech(text, voice_settings)`: TTS с настройками голоса
 - `get_supported_formats()`: Список поддерживаемых аудио форматов
@@ -376,7 +380,7 @@ class Settings:
 **Кэширование**: Redis ключи `stt_cache:{file_hash}` и `tts_cache:{text_hash}` с TTL 24 часа
 
 ### Изображения  
-**Архитектура**: ImageOrchестrator с Vision API провайдерами (OpenAI GPT-4V → Google Vision → Claude Vision)
+**Архитектура**: ImageOrчестrator с Vision API провайдерами (OpenAI GPT-4V → Google Vision → Claude Vision)
 
 **Компоненты системы**:
 - **OpenAIVisionProvider**: GPT-4V для анализа изображений
@@ -394,15 +398,16 @@ class Settings:
 7. Результат анализа включается в ответ агента пользователю
 
 **Методы ImageOrчестrator**:
-- `analyze_image(image_url, prompt, provider=None)`: Анализ с выбором провайдера
-- `generate_presigned_url(object_name, expires_hours=1)`: Безопасные URL
-- `convert_to_base64(image_path)`: Base64 конвертация для inline использования
-- `get_image_metadata(image_path)`: Извлечение метаданных (размер, формат, EXIF)
+- `process_images(images_data, agent_id, user_id)`: Загрузка изображений в MinIO и генерация presigned URLs
+- `analyze_images(image_urls, prompt)`: Анализ изображений через Vision API с fallback
+- `process_and_analyze_images()`: Полный цикл обработки и анализа
+- `upload_user_image()`: Загрузка одного изображения с генерацией presigned URL
+- `health_check()`: Проверка состояния провайдеров и MinIO connectivity
 
 **LangGraph Tool**: `analyze_images(image_urls: List[str], analysis_prompt: str)` - анализ через Vision API
 
 ### Документы
-**Архитектура**: DocumentOrchестrator с Marker API (PDF, image, PPT, PPTX, DOC, DOCX, XLS, XLSX, HTML, EPUB files →Markdown) и AI fallback провайдерами
+**Архитектура**: DocumentOrчестrator с Marker API (PDF, image, PPT, PPTX, DOC, DOCX, XLS, XLSX, HTML, EPUB files →Markdown) и AI fallback провайдерами
 
 **Компоненты системы**:
 - **MarkerAPIProvider**: Высококачественная конвертация Документ→Markdown через Marker API
@@ -415,7 +420,7 @@ class Settings:
 
 **Алгоритм обработки**:
 1. Интеграция получает документ через upload endpoint
-2. DocumentOrchестrator валидирует формат и размер файла
+2. DocumentOrчестrator валидирует формат и размер файла
 3. Загрузка в MinIO bucket `user-files` с уникальным именем
 4. Конвертация в Markdown:
    - **Приоритет 1**: Marker API - высокое качество конвертации
@@ -425,7 +430,7 @@ class Settings:
 7. Агент обрабатывает через document tools
 8. Сгенерированные документы сохраняются в MinIO для download
 
-**Методы DocumentOrchестrator**:
+**Методы DocumentOrчестrator**:
 - `process_user_document(document_data, agent_id, user_id)`: Полная обработка документа пользователя с валидацией, загрузкой в MinIO и конвертацией в Markdown
 - `get_document_content(document_info)`: Получение Markdown содержимого документа
 - `generate_document(content, agent_id, user_id, format)`: Создание новых документов (PDF/DOCX)
@@ -444,26 +449,6 @@ class Settings:
 - `summarize_document_tool`: Создание резюме документа
 
 **Кэширование**: Redis ключи `doc_cache:{file_hash}` и `doc_metadata:{doc_id}` с TTL 24 часа
-
-### Изображения
-**Архитектура**: ImageOrchestrator с Vision API провайдерами
-
-**Алгоритм обработки**:
-1. Интеграция получает изображение
-2. Загрузка в MinIO через ImageOrchestrator  
-3. Генерация presigned URL (действует 1 час)
-4. URL передается агенту в поле `image_urls`
-5. Агент анализирует через `analyze_images` tool
-6. Результат анализа включается в ответ
-
-**Методы ImageOrчестrator**:
-- `process_images(images_data, agent_id, user_id)`: Загрузка изображений в MinIO и генерация presigned URLs
-- `analyze_images(image_urls, prompt)`: Анализ изображений через Vision API с fallback
-- `process_and_analyze_images()`: Полный цикл обработки и анализа
-- `upload_user_image()`: Загрузка одного изображения с генерацией presigned URL
-- `health_check()`: Проверка состояния провайдеров и MinIO connectivity
-
-**LangGraph Tool**: `analyze_images(image_urls: List[str], analysis_prompt: str)` - анализ через Vision API
 
 ## LangGraph Tools Architecture
 
@@ -569,15 +554,14 @@ def tool_name(
 - **Testing**: Test files should be created in `tests/` folder
 - Follow established project structure
 
-## Архитектурные принципы
+## Архитектурные принципы проекта
 - CRUD операции в `app/db/crud/`
 - Pydantic схемы в `app/api/schemas/`
 - Роутеры в `app/api/routers/`
 - Бизнес-логика в `app/services/`
 - Конфигурация в `app/core/config.py`
 
-## MCP Серверы
-Доступные MCP серверы для расширенной функциональности:
+## Детальное описание MCP серверов
 
 ### Memory MCP - Граф знаний проекта
 **Назначение**: Персистентная память через локальный граф знаний для долгосрочного хранения информации между сессиями.
