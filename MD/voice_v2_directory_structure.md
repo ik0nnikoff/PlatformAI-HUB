@@ -59,7 +59,7 @@ app/services/voice_v2/                           # Main voice_v2 package
 │
 ├── migration/                                   # Migration support (3 files)
 │   ├── __init__.py                              # [41] Migration exports
-│   ├── config_import.py                         # [42] Config import from backup (≤200 lines)
+│   ├── config_import.py                         # [42] Config import from app/services/voice (≤200 lines)
 │   └── config_migrator.py                       # [43] Config migration (≤150 lines)
 │
 ├── monitoring/                                  # Advanced monitoring (4 files)
@@ -108,7 +108,7 @@ app/services/voice_v2/                           # Main voice_v2 package
 
 ### **5. Production-ready**
 - **monitoring/**: Comprehensive мониторинг
-- **migration/**: Smooth transition от backup
+- **migration/**: Smooth transition от app/services/voice
 - **testing/**: Testing infrastructure
 - **error_tracker.py**: Comprehensive error handling
 
@@ -135,22 +135,22 @@ app/services/voice_v2/                           # Main voice_v2 package
 
 ---
 
-## 🚀 **MIGRATION PATH FROM BACKUP**
+## 🚀 **MIGRATION PATH FROM APP/SERVICES/VOICE**
 
 ### **Direct копирование и адаптация**:
 ```
-backup/voice/base.py                    → core/base.py (adapt)
-backup/voice/voice_orchestrator.py      → core/orchestrator.py (simplify)
-backup/voice/minio_manager.py           → infrastructure/minio_manager.py
-backup/voice/redis_rate_limiter.py      → infrastructure/rate_limiter.py
-backup/voice/voice_metrics.py           → infrastructure/metrics.py
-backup/voice/intent_utils.py            → integration/workflow_helpers.py (parts)
-backup/voice/stt/openai_stt.py          → providers/stt/openai_stt.py
-backup/voice/stt/google_stt.py          → providers/stt/google_stt.py
-backup/voice/stt/yandex_stt.py          → providers/stt/yandex_stt.py
-backup/voice/tts/openai_tts.py          → providers/tts/openai_tts.py
-backup/voice/tts/google_tts.py          → providers/tts/google_tts.py
-backup/voice/tts/yandex_tts.py          → providers/tts/yandex_tts.py
+app/services/voice/base.py                    → core/base.py (adapt)
+app/services/voice/voice_orchestrator.py      → core/orchestrator.py (simplify)
+app/services/voice/minio_manager.py           → infrastructure/minio_manager.py
+app/services/voice/redis_rate_limiter.py      → infrastructure/rate_limiter.py
+app/services/voice/voice_metrics.py           → infrastructure/metrics.py
+app/services/voice/intent_utils.py            → integration/workflow_helpers.py (parts)
+app/services/voice/stt/openai_stt.py          → providers/stt/openai_stt.py
+app/services/voice/stt/google_stt.py          → providers/stt/google_stt.py
+app/services/voice/stt/yandex_stt.py          → providers/stt/yandex_stt.py
+app/services/voice/tts/openai_tts.py          → providers/tts/openai_tts.py
+app/services/voice/tts/google_tts.py          → providers/tts/google_tts.py
+app/services/voice/tts/yandex_tts.py          → providers/tts/yandex_tts.py
 ```
 
 ### **4. Новые компоненты для enterprise-grade**:

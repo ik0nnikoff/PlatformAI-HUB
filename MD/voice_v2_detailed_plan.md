@@ -3,7 +3,7 @@
 ## 🎯 **ЦЕЛИ СОЗДАНИЯ VOICE_V2**
 
 1. **Создание с нуля** - полностью новая система voice без backward compatibility
-2. **Референс backup/voice** - изучение как reference система, реимплементация архитектуры
+2. **Референс app/services/voice** - изучение как reference система, реимплементация архитектуры
 3. **100% качество кода** - SOLID принципы, CCN<8, методы≤50 строк, файлы≤500 строк
 4. **LangGraph control** - агент принимает решения о голосовом ответе
 5. **100% покрытие тестами** - unit tests и LangGraph workflow tests
@@ -12,7 +12,7 @@
 
 ## 📊 **АНАЛИЗ РЕФЕРЕНСНОЙ СИСТЕМЫ**
 
-### **Backup Voice Architecture (Reference)**
+### **App/Services/Voice Architecture (Reference)**
 - **Файлы**: 15 файлов, ~5,000 строк кода
 - **Архитектура**: Простая, функциональная, работающая
 - **Компоненты**:
@@ -38,33 +38,33 @@
 
 ## 🔄 **ФАЗА 1: КОМПЛЕКСНЫЙ АНАЛИЗ REFERENCE СИСТЕМЫ**
 
-### **Подфаза 1.1: Архитектурный Анализ Backup**
-- **1.1.1** Детальное изучение backup компонентов
-  - Анализ всех 15 файлов backup/voice системы
+### **Подфаза 1.1: Архитектурный Анализ App/Services/Voice**
+- **1.1.1** Детальное изучение app/services/voice компонентов
+  - Анализ всех 15 файлов app/services/voice системы
   - **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Алгоритм работы с интеграциями (Telegram/WhatsApp)
   - **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Алгоритм работы в LangGraph workflow
   - **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Message flow от пользователя до voice response
   - **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Voice intent detection и decision making patterns
 - **1.1.2** Анализ архитектурных паттернов
-  - Provider pattern в backup системе
+  - Provider pattern в app/services/voice системе
   - Orchestrator coordination logic
   - Error handling и fallback mechanisms
   - Configuration management approach
 - **1.1.3** Функциональная инвентаризация
-  - Mapping всех capabilities backup системы
+  - Mapping всех capabilities app/services/voice системы
   - Анализ STT/TTS integration patterns
   - Изучение MinIO file management
   - Voice metrics collection и monitoring
 
 ### **Подфаза 1.2: Performance и Quality Analysis**
-- **1.2.1** Performance characteristics backup системы
+- **1.2.1** Performance characteristics app/services/voice системы
   - STT/TTS response time benchmarks
   - Memory usage patterns
   - Concurrent request handling
   - Provider failover times
-- **1.2.2** Code quality анализ backup
-  - Lizard анализ backup файлов
-  - Pylint scoring backup компонентов
+- **1.2.2** Code quality анализ app/services/voice
+  - Lizard анализ app/services/voice файлов
+  - Pylint scoring app/services/voice компонентов
   - Architectural compliance check
   - SOLID principles adherence
 - **1.2.3** Integration patterns анализ
@@ -357,7 +357,7 @@
 - **Pylint**: Score 9.5+/10
 - **Semgrep**: 0 security issues
 - **Test Coverage**: 100% line + branch coverage
-- **Performance**: STT/TTS не хуже backup +10%
+- **Performance**: STT/TTS не хуже app/services/voice +10%
 
 ### **Архитектурные Улучшения**
 - **Простота**: ≤50 файлов vs 113 в current (56% reduction)
@@ -391,18 +391,18 @@
 ## 🎯 **КРИТЕРИИ УСПЕХА**
 
 ### **Обязательные Критерии**
-- ✅ Архитектура основана на backup reference (не current system)
+- ✅ Архитектура основана на app/services/voice reference (не current system)
 - ✅ ≤50 файлов, ≤15,000 строк кода
 - ✅ SOLID principles, CCN<8, методы≤50 строк, файлы≤500 строк
 - ✅ 100% unit test coverage + 100% LangGraph workflow coverage
 - ✅ LangGraph полностью контролирует voice decisions
 - ✅ VoiceServiceOrchestrator только execution logic (STT/TTS)
 - ✅ Все качественные метрики достигнуты (Lizard/Pylint/Semgrep)
-- ✅ Performance не хуже backup +10%
+- ✅ Performance не хуже app/services/voice +10%
 
 ### **Дополнительные Критерии**
 - ✅ Simplified architecture vs current system
-- ✅ Clean migration path от backup
+- ✅ Clean migration path от app/services/voice
 - ✅ Documentation полностью обновлена
 - ✅ CI/CD pipeline интеграция
 - ✅ Production deployment готовность

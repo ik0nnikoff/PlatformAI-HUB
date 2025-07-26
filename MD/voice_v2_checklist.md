@@ -1,7 +1,7 @@
 # 📋 ДЕТАЛЬНЫЙ CHECKLIST - VOICE V2 SIMPLIFIED SYSTEM
 
 **📅 Создан**: 27 июля 2025  
-**🎯 Цель**: Создание простой, производительной voice системы на основе backup референса  
+**🎯 Цель**: Создание простой, производительной voice системы на основе app/services/voice референса  
 **⏱️ Планируемое время**: 2-3 недели  
 **🚀 Приоритет**: Высокий
 
@@ -22,8 +22,8 @@
 ### **Целевые метрики**:
 - [ ] **Количество файлов**: ≤50 файлов (vs 113 в current)
 - [ ] **Строки кода**: ≤15,000 строк (vs ~50,000 в current)
-- [ ] **Производительность STT**: не хуже backup +10%
-- [ ] **Производительность TTS**: не хуже backup +10%
+- [ ] **Производительность STT**: не хуже app/services/voice +10%
+- [ ] **Производительность TTS**: не хуже app/services/voice +10%
 - [ ] **Качество кода**: Pylint 9.5+/10
 - [ ] **Unit test coverage**: 100% всех компонентов voice_v2
 - [ ] **LangGraph workflow tests**: Полное покрытие voice интеграции
@@ -37,9 +37,9 @@
 **Приоритет**: Высокий  
 **Статус**: ⏳ **НЕ НАЧАТА**
 
-### **1.1 Анализ backup референса (4 задачи)**
-- [ ] **1.1.1** Детальное изучение backup архитектуры ⏳ **НЕ НАЧАТО**
-  - [ ] Анализ всех 15 файлов backup системы
+### **1.1 Анализ app/services/voice референса (4 задачи)**
+- [ ] **1.1.1** Детальное изучение app/services/voice архитектуры ⏳ **НЕ НАЧАТО**
+  - [ ] Анализ всех 15 файлов app/services/voice системы
   - [ ] **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Алгоритм работы в интеграциях (Telegram/WhatsApp)
   - [ ] **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Алгоритм работы в LangGraph workflow
   - [ ] **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Message flow от пользователя до voice response
@@ -53,14 +53,14 @@
   - [ ] Metrics collection
   - [ ] Fallback механизмы
 
-- [ ] **1.1.3** Performance benchmarking backup системы ⏳ **НЕ НАЧАТО**
+- [ ] **1.1.3** Performance benchmarking app/services/voice системы ⏳ **НЕ НАЧАТО**
   - [ ] STT latency baseline measurements
   - [ ] TTS latency baseline measurements
   - [ ] Memory usage profiling
   - [ ] Concurrent operations testing
 
 - [ ] **1.1.4** Документирование успешных паттернов ⏳ **НЕ НАЧАТО**
-  - [ ] Architecture patterns из backup
+  - [ ] Architecture patterns из app/services/voice
   - [ ] Error handling strategies
   - [ ] Performance optimization techniques
 
@@ -106,7 +106,7 @@
   - [ ] Performance testing methodology
 
 - [ ] **1.3.4** Migration strategy планирование ⏳ **НЕ НАЧАТО**
-  - [ ] Transition план от backup системы
+  - [ ] Transition план от app/services/voice системы
   - [ ] Application integration points
   - [ ] Risk mitigation strategies
 
@@ -180,19 +180,19 @@
 
 ### **2.3 Infrastructure services (6 задач)**
 - [ ] **2.3.1** infrastructure/minio_manager.py (≤400 строк) ⏳ **НЕ НАЧАТО**
-  - [ ] Адаптация из backup/voice/minio_manager.py
+  - [ ] Адаптация из app/services/voice/minio_manager.py
   - [ ] Асинхронные file operations
   - [ ] Presigned URLs management
   - [ ] ✅ **UNIT TESTS**: 100% coverage с mocked MinIO operations
 
 - [ ] **2.3.2** infrastructure/rate_limiter.py (≤250 строк) ⏳ **НЕ НАЧАТО**
-  - [ ] Адаптация из backup/voice/redis_rate_limiter.py
+  - [ ] Адаптация из app/services/voice/redis_rate_limiter.py
   - [ ] Distributed sliding window algorithm
   - [ ] Performance-optimized Redis operations
   - [ ] ✅ **UNIT TESTS**: 100% coverage с mocked Redis operations
 
 - [ ] **2.3.3** infrastructure/metrics.py (≤300 строк) ⏳ **НЕ НАЧАТО**
-  - [ ] Адаптация из backup/voice/voice_metrics.py
+  - [ ] Адаптация из app/services/voice/voice_metrics.py
   - [ ] Real-time performance metrics
   - [ ] Provider-specific metrics tracking
   - [ ] ✅ **UNIT TESTS**: 100% coverage metrics collection и storage
@@ -249,19 +249,19 @@
   - [ ] ✅ **UNIT TESTS**: Base class functionality
 
 - [ ] **3.1.2** providers/stt/openai_stt.py (≤350 строк) ⏳ **НЕ НАЧАТО**
-  - [ ] Адаптация из backup/voice/stt/openai_stt.py
+  - [ ] Адаптация из app/services/voice/stt/openai_stt.py
   - [ ] Performance optimization для concurrent requests
   - [ ] Enhanced error handling и recovery
   - [ ] ✅ **UNIT TESTS**: 100% coverage с mocked OpenAI API calls
 
 - [ ] **3.1.3** providers/stt/google_stt.py (≤350 строк) ⏳ **НЕ НАЧАТО**
-  - [ ] Адаптация из backup/voice/stt/google_stt.py
+  - [ ] Адаптация из app/services/voice/stt/google_stt.py
   - [ ] Connection pooling optimization
   - [ ] Streaming support для long audio
   - [ ] ✅ **UNIT TESTS**: 100% coverage с mocked Google Cloud API
 
 - [ ] **3.1.4** providers/stt/yandex_stt.py (≤400 строк) ⏳ **НЕ НАЧАТО**
-  - [ ] Адаптация из backup/voice/stt/yandex_stt.py
+  - [ ] Адаптация из app/services/voice/stt/yandex_stt.py
   - [ ] API Key authentication (НЕ IAM Token)
   - [ ] Performance tuning для российских условий
   - [ ] ✅ **UNIT TESTS**: 100% coverage с mocked Yandex SpeechKit API
@@ -283,19 +283,19 @@
   - [ ] ✅ **UNIT TESTS**: Base class functionality
 
 - [ ] **3.2.2** providers/tts/openai_tts.py (≤400 строк) ⏳ **НЕ НАЧАТО**
-  - [ ] Адаптация из backup/voice/tts/openai_tts.py
+  - [ ] Адаптация из app/services/voice/tts/openai_tts.py
   - [ ] Voice quality optimization
   - [ ] Parallel generation для длинных текстов
   - [ ] ✅ **UNIT TESTS**: 100% coverage с mocked OpenAI TTS API
 
 - [ ] **3.2.3** providers/tts/google_tts.py (≤350 строк) ⏳ **НЕ НАЧАТО**
-  - [ ] Адаптация из backup/voice/tts/google_tts.py
+  - [ ] Адаптация из app/services/voice/tts/google_tts.py
   - [ ] Advanced voice configuration
   - [ ] Performance optimization
   - [ ] ✅ **UNIT TESTS**: 100% coverage с mocked Google Cloud TTS API
 
 - [ ] **3.2.4** providers/tts/yandex_tts.py (≤400 строк) ⏳ **НЕ НАЧАТО**
-  - [ ] Адаптация из backup/voice/tts/yandex_tts.py
+  - [ ] Адаптация из app/services/voice/tts/yandex_tts.py
   - [ ] API Key authentication optimization
   - [ ] Natural voice quality tuning
   - [ ] ✅ **UNIT TESTS**: 100% coverage с mocked Yandex SpeechKit TTS API
@@ -342,12 +342,12 @@
 
 - [ ] **4.1.2** LangGraph workflow анализ ⏳ **НЕ НАЧАТО**
   - [ ] **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Полный message flow в LangGraph
-  - [ ] **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Voice decision making в backup системе
+  - [ ] **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Voice decision making в app/services/voice системе
   - [ ] **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Agent state management для voice
 
 - [ ] **4.1.3** Platform integration анализ ⏳ **НЕ НАЧАТО**
-  - [ ] **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Как backup voice работает в Telegram
-  - [ ] **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Как backup voice работает в WhatsApp
+  - [ ] **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Как app/services/voice работает в Telegram
+  - [ ] **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Как app/services/voice работает в WhatsApp
   - [ ] Message processing workflow анализ
 
 - [ ] **4.1.4** Decision logic extraction ⏳ **НЕ НАЧАТО**
@@ -500,9 +500,9 @@
   - [ ] Resource usage под stress conditions
 
 - [ ] **5.3.2** Performance benchmarking ⏳ **НЕ НАЧАТО**
-  - [ ] Latency benchmarks против backup
+  - [ ] Latency benchmarks против app/services/voice
   - [ ] Memory usage validation
-  - [ ] Comparison с backup performance baseline
+  - [ ] Comparison с app/services/voice performance baseline
 
 - [ ] **5.3.3** Final validation ⏳ **НЕ НАЧАТО**
   - [ ] All tests passing (unit, integration, e2e)
@@ -546,7 +546,7 @@
   - [ ] Testing guidelines
 
 - [ ] **6.2.3** Migration documentation ⏳ **НЕ НАЧАТО**
-  - [ ] Migration guide от backup системы
+  - [ ] Migration guide от app/services/voice системы
   - [ ] Configuration migration examples
   - [ ] Best practices guide
 
@@ -572,10 +572,10 @@
 - [ ] **Developer friendly**: Easy extension для new providers
 
 ### **Функциональные критерии**
-- [ ] **Full backup functionality**: Все возможности backup системы
+- [ ] **Full app/services/voice functionality**: Все возможности app/services/voice системы
 - [ ] **LangGraph control**: Agent полностью контролирует voice decisions
 - [ ] **Platform compatibility**: Telegram/WhatsApp работают корректно
-- [ ] **Performance maintained**: No degradation от backup performance
+- [ ] **Performance maintained**: No degradation от app/services/voice performance
 
 ### **Integration критерии**
 - [ ] **Seamless LangGraph integration**: Clean API между agent и orchestrator
@@ -593,21 +593,21 @@
 **ГОТОВ К НАЧАЛУ ФАЗЫ 1** 🚀
 
 ### **Приоритетные задачи:**
-1. **Фаза 1.1.1**: Детальное изучение 15 файлов backup системы
+1. **Фаза 1.1.1**: Детальное изучение 15 файлов app/services/voice системы
 2. **Фаза 1.1.2**: Комплексное изучение алгоритмов работы в интеграциях
 3. **Фаза 1.2.1**: Архитектурное планирование voice_v2 структуры
 
 ### **Критические зависимости:**
-- [ ] Доступ к backup/voice/ директории для анализа
+- [ ] Доступ к app/services/voice/ директории для анализа
 - [ ] Performance testing tools setup
 - [ ] Development environment готовность
 
 ### **Риски и mitigation:**
-- **Риск 1**: Performance degradation → Continuous benchmarking против backup
+- **Риск 1**: Performance degradation → Continuous benchmarking против app/services/voice
 - **Риск 2**: Over-engineering возврат → Strict SOLID compliance + CCN<8
 - **Риск 3**: Integration сложности → Incremental testing каждой фазы
 
-**ЦЕЛЬ**: Простая, производительная voice система на базе проверенного backup референса 🎯
+**ЦЕЛЬ**: Простая, производительная voice система на базе проверенного app/services/voice референса 🎯
 
 ---
 
