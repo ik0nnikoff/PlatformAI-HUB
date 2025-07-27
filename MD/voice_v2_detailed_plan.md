@@ -1,5 +1,13 @@
 # 📋 ПЛАН СОЗДАНИЯ VOICE_V2 SYSTEM
 
+**📅 Обновлен**: 27 июля 2025  
+**🎯 Статус**: Синхронизирован с voice_v2_checklist.md  
+**📋 Источник истины**: voice_v2_checklist.md (более детальный и практичный)
+
+> **⚠️ ВАЖНО**: Данный план является **СПРАВОЧНЫМ ДОКУМЕНТОМ**  
+> **Основной документ для работы**: `MD/voice_v2_checklist.md`  
+> План обновлен для соответствия структуре чек-листа
+
 ## 🎯 **ЦЕЛИ СОЗДАНИЯ VOICE_V2**
 
 1. **Создание с нуля** - полностью новая система voice без backward compatibility
@@ -15,19 +23,13 @@
 ### **App/Services/Voice Architecture (Reference)**
 - **Файлы**: 15 файлов, ~5,000 строк кода
 - **Архитектура**: Простая, функциональная, работающая
+- **Провайдеры**: Только OpenAI, Google, Yandex (3 провайдера)
 - **Компоненты**:
   - `VoiceServiceOrchestrator` - центральный координатор (1,040 строк)
   - STT провайдеры: OpenAI, Google, Yandex (~300-450 строк каждый)
   - TTS провайдеры: OpenAI, Google, Yandex (~300-400 строк каждый)
   - Поддерживающие сервисы: MinIO, RateLimiter, Metrics
   - Утилиты: base.py, intent_utils.py
-
-### **Current Voice System (Избыточная)**
-- **Файлы**: 113 файлов, ~50,000 строк кода (10x избыточность)
-- **Проблемы**: Оверинжиниринг, сложная иерархия, DI контейнеры
-- **Lizard анализ**: 145 нарушений CCN, 49 методов >50 строк
-- **Pylint**: 89 неиспользуемых импортов, 17 критических ошибок
-- **Semgrep**: 5 security issues (MD5 usage)
 
 ### **Voice_V2 Target System**
 - **Файлы**: ≤50 файлов, ≤15,000 строк кода
@@ -36,167 +38,264 @@
 
 ---
 
-## 🔄 **ФАЗА 1: КОМПЛЕКСНЫЙ АНАЛИЗ REFERENCE СИСТЕМЫ**
+## 🎯 **ФАЗА 1: АРХИТЕКТУРНОЕ ПЛАНИРОВАНИЕ И РЕФЕРЕНС АНАЛИЗ** ✅
 
-### **Подфаза 1.1: Архитектурный Анализ App/Services/Voice**
-- **1.1.1** Детальное изучение app/services/voice компонентов
-  - Анализ всех 15 файлов app/services/voice системы
-  - **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Алгоритм работы с интеграциями (Telegram/WhatsApp)
-  - **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Алгоритм работы в LangGraph workflow
-  - **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Message flow от пользователя до voice response
-  - **КОМПЛЕКСНОЕ ИЗУЧЕНИЕ**: Voice intent detection и decision making patterns
-- **1.1.2** Анализ архитектурных паттернов
-  - Provider pattern в app/services/voice системе
-  - Orchestrator coordination logic
-  - Error handling и fallback mechanisms
-  - Configuration management approach
-- **1.1.3** Функциональная инвентаризация
-  - Mapping всех capabilities app/services/voice системы
-  - Анализ STT/TTS integration patterns
-  - Изучение MinIO file management
-  - Voice metrics collection и monitoring
+**Статус**: ✅ **ЗАВЕРШЕНА** (100% - 12/12 задач)  
+**Базовые документы**: Созданы все Phase_1_X_X документы для референса
 
-### **Подфаза 1.2: Performance и Quality Analysis**
-- **1.2.1** Performance characteristics app/services/voice системы
-  - STT/TTS response time benchmarks
-  - Memory usage patterns
-  - Concurrent request handling
-  - Provider failover times
-- **1.2.2** Code quality анализ app/services/voice
-  - Lizard анализ app/services/voice файлов
-  - Pylint scoring app/services/voice компонентов
-  - Architectural compliance check
-  - SOLID principles adherence
-- **1.2.3** Integration patterns анализ
-  - LangGraph tool integration approach
-  - Redis Pub/Sub communication patterns
-  - WebSocket/SSE response mechanisms
-  - Error propagation strategies
+### **1.1 Анализ app/services/voice референса**
+> **📋 СЛЕДУЕТ**: Детальному анализу reference системы как основы
 
----
+- ✅ **1.1.1** Детальное изучение app/services/voice архитектуры
+  - **📄 Отчет**: `MD/Phase_1_1_1_voice_architecture_analysis.md`
+- ✅ **1.1.2** Определение core functionality  
+  - **📄 Отчет**: `MD/Phase_1_1_2_core_functionality_analysis.md`
+- ✅ **1.1.3** Performance benchmarking app/services/voice системы
+  - **📄 Отчет**: `MD/Phase_1_1_3_performance_analysis.md`
+- ✅ **1.1.4** Документирование успешных паттернов
+  - **📄 Отчет**: `MD/Phase_1_1_4_architecture_patterns.md`
 
-## 🏗️ **ФАЗА 2: АРХИТЕКТУРНЫЙ ДИЗАЙН VOICE_V2**
+### **1.2 Проектирование voice_v2 архитектуры**
+> **📋 СЛЕДУЕТ**: Архитектурному дизайну на основе SOLID принципов
 
-### **Подфаза 2.1: Core Architecture Design**
-- **2.1.1** Orchestrator architecture design
-  - Simplified VoiceServiceOrchestrator design
-  - Provider coordination без excess abstraction
-  - Clean separation от intent detection logic
-  - LangGraph integration points definition
-- **2.1.2** Provider architecture design
-  - Unified STT/TTS provider interfaces
-  - Factory pattern для provider instantiation
-  - Connection pooling и resource management
-  - Error handling и circuit breaker patterns
-- **2.1.3** Configuration system design
-  - Voice settings schema definition
-  - Provider configuration management
-  - Runtime configuration updates
-  - Validation и type safety
+- ✅ **1.2.1** Определение file structure (≤50 файлов)
+  - **📄 Отчет**: `MD/Phase_1_2_1_file_structure_design.md`
+- ✅ **1.2.2** SOLID принципы планирование
+  - **📄 Отчет**: `MD/Phase_1_2_2_solid_principles.md`
+- ✅ **1.2.3** Performance-first подход
+  - **📄 Отчет**: `MD/Phase_1_2_3_performance_optimization.md`
+- ✅ **1.2.4** LangGraph integration планирование  
+  - **📄 Отчет**: `MD/Phase_1_2_4_langgraph_integration.md`
 
-### **Подфаза 2.2: Infrastructure Design**
-- **2.2.1** File management architecture
-  - MinIO integration patterns
-  - Audio file lifecycle management
-  - Presigned URL generation
-  - Cleanup и retention policies
-- **2.2.2** Caching и performance design
-  - Redis caching strategies
-  - STT/TTS result caching
-  - Rate limiting mechanisms
-  - Performance monitoring
-- **2.2.3** Error handling и resilience
-  - Provider fallback mechanisms
-  - Circuit breaker implementation
-  - Error categorization и recovery
-  - Monitoring и alerting
+### **1.3 Валидация фазы**
+> **📋 СЛЕДУЕТ**: Архитектурной валидации и стратегическому планированию
 
-### **Подфаза 2.3: LangGraph Integration Design**
-- **2.3.1** Intent detection transfer
-  - Voice decision making в LangGraph nodes
-  - Agent state integration
-  - Workflow routing logic
-  - User preference management
-- **2.3.2** Voice tools redesign
-  - Enhanced voice_capabilities_tool
-  - Fine-grained voice control
-  - Response customization options
-  - Tool parameter optimization
-- **2.3.3** Workflow integration
-  - Voice node positioning в workflow
-  - Conditional voice activation
-  - Error handling в workflow context
-  - Performance optimization
+- ✅ **1.3.1** Архитектурный review
+  - **📄 Отчет**: `MD/Phase_1_3_1_architecture_review.md`
+- ✅ **1.3.2** Планирование documentation
+  - **📄 Отчет**: `MD/Phase_1_3_2_documentation_planning.md`
+- ✅ **1.3.3** Testing strategy планирование
+  - **📄 Отчет**: `MD/Phase_1_3_3_testing_strategy.md`
+- ✅ **1.3.4** Migration strategy планирование
+  - **📄 Отчет**: `MD/Phase_1_3_4_migration_strategy.md`
 
 ---
 
-## 🔧 **ФАЗА 3: CORE COMPONENTS IMPLEMENTATION**
+## 🔄 **ФАЗА 2: БАЗОВЫЕ КОМПОНЕНТЫ И ИНФРАСТРУКТУРА** ⏳
 
-> **📋 БАЗИРУЕТСЯ НА:**
-> - **Архитектурные принципы**: `MD/Phase_1_3_1_architecture_review.md` - SOLID compliance и performance targets
-> - **Структура файлов**: `MD/Phase_1_2_1_file_structure_design.md` - точная организация 50 файлов
-> - **SOLID принципы**: `MD/Phase_1_2_2_solid_principles.md` - конкретные примеры реализации
-> - **Performance требования**: `MD/Phase_1_2_3_performance_optimization.md` - целевые метрики
+**Статус**: ⏳ **В ПРОЦЕССЕ** (Phase 2.2 завершена, переходим к 2.3)  
+**Цель**: Объединение архитектурного дизайна и core implementation
 
-### **Подфаза 3.1: Base Classes и Interfaces**
-- **3.1.1** Core abstractions ⚠️ **СЛЕДОВАТЬ**: Phase_1_2_2_solid_principles.md - SRP и DIP patterns
-  - BaseSTTProvider abstract class
-  - BaseTTSProvider abstract class  
-  - VoiceServiceBase shared functionality
-  - Exception hierarchy design
-- **3.1.2** Configuration management ⚠️ **СЛЕДОВАТЬ**: Phase_1_3_1_architecture_review.md - Config validation patterns
-  - VoiceConfig Pydantic schemas
-  - Provider configuration classes
-  - Environment variable integration
-  - Configuration validation
-- **3.1.3** Constants и enums ⚠️ **СЛЕДОВАТЬ**: Phase_1_2_3_performance_optimization.md - Performance thresholds
-  - Audio format definitions
-  - Provider type enumerations
-  - Error code constants  
-  - Performance thresholds (Redis ≤200µs, Intent ≤8µs, Metrics ≤1ms)
+> **🎯 ОБЯЗАТЕЛЬНО ИСПОЛЬЗОВАТЬ РЕЗУЛЬТАТЫ PHASE 1:**
+> - **Phase_1_3_1_architecture_review.md** → SOLID compliance во всех компонентах
+> - **Phase_1_2_1_file_structure_design.md** → точная структура 50 файлов  
+> - **Phase_1_2_2_solid_principles.md** → конкретные примеры SRP, DIP, ISP
+> - **Phase_1_2_3_performance_optimization.md** → async patterns, connection pooling
 
-### **Подфаза 3.2: Orchestrator Implementation**
-- **3.2.1** VoiceServiceOrchestrator core ⚠️ **СЛЕДОВАТЬ**: Phase_1_3_1_architecture_review.md - SOLID patterns
-  - Provider coordination logic (SRP principle)
-  - Request routing mechanisms
-  - Response aggregation
-  - Error handling orchestration
-- **3.2.2** Audio processing pipeline ⚠️ **СЛЕДОВАТЬ**: Phase_1_2_3_performance_optimization.md - Async patterns
-  - File format conversion (async operations)
-  - Audio quality optimization  
-  - Streaming support implementation
-  - Concurrent request handling (connection pooling)
-- **3.2.3** Integration interfaces ⚠️ **СЛЕДОВАТЬ**: Phase_1_2_4_langgraph_integration.md - Clean separation
-  - LangGraph tool interface (decisions в LangGraph, execution в voice_v2)
-  - Redis communication layer
-  - WebSocket/SSE response handling
-  - Metrics collection integration
+### **2.1 Создание core структуры**
+> **📋 БАЗИРУЕТСЯ НА**: `MD/Phase_1_2_1_file_structure_design.md`, `MD/Phase_1_2_2_solid_principles.md`
 
-### **Подфаза 3.3: Infrastructure Services**
-- **3.3.1** MinIO file manager
-  - Audio file upload/download
-  - Presigned URL generation
-  - File lifecycle management
-  - Storage optimization
-- **3.3.2** Caching layer
-  - Redis caching implementation
-  - Cache invalidation strategies
-  - Performance monitoring
-  - Memory management
-- **3.3.3** Rate limiting
-  - Provider rate limiting
-  - User-based throttling
-  - Distributed rate limiting
-  - Quota management
+- ✅ **2.1.1** Создание директории app/services/voice_v2/
+- ✅ **2.1.2** core/exceptions.py (≤150 строк)
+- ✅ **2.1.3** core/base.py (≤400 строк)  
+- ✅ **2.1.4** core/interfaces.py (≤200 строк)
+- ✅ **2.1.5** core/config.py (≤350 строк)
+- ✅ **2.1.6** core/schemas.py (≤250 строк)
+
+### **2.2 Orchestrator implementation**
+> **📋 БАЗИРУЕТСЯ НА**: `MD/Phase_1_2_4_langgraph_integration.md`, `MD/Phase_1_2_3_performance_optimization.md`
+
+- ✅ **2.2.1** core/orchestrator.py (≤500 строк) - execution only, NO decision making
+- ✅ **2.2.2** core/factory.py - Dependency Injection Factory (≤520 строк)
+- ⏳ **2.2.3** Orchestrator testing
+
+### **2.3 Infrastructure services**
+> **📋 БАЗИРУЕТСЯ НА**: `MD/Phase_1_2_3_performance_optimization.md` - Infrastructure optimization patterns
+
+- ⏳ **2.3.1** infrastructure/minio_manager.py (≤400 строк) - адаптация из app/services/voice
+- ⏳ **2.3.2** infrastructure/rate_limiter.py (≤250 строк) - Redis sliding window
+- ⏳ **2.3.3** infrastructure/metrics.py (≤300 строк) - real-time metrics
+- ⏳ **2.3.4** infrastructure/cache.py (≤250 строк) - intelligent caching
+- ⏳ **2.3.5** infrastructure/circuit_breaker.py (≤200 строк) - failure detection
+- ⏳ **2.3.6** infrastructure/health_checker.py (≤200 строк) - provider monitoring
+
+### **2.4 Utilities и helpers**
+> **📋 БАЗИРУЕТСЯ НА**: `MD/Phase_1_2_3_performance_optimization.md` - Performance-optimized utilities
+
+- ⏳ **2.4.1** utils/audio.py (≤250 строк) - audio format conversion
+- ⏳ **2.4.2** utils/helpers.py (≤200 строк) - common utilities  
+- ⏳ **2.4.3** utils/validators.py (≤150 строк) - validation functions
 
 ---
 
-## 🎙️ **ФАЗА 4: STT/TTS PROVIDERS IMPLEMENTATION**
+## 🚀 **ФАЗА 3: STT/TTS ПРОВАЙДЕРЫ IMPLEMENTATION** ⏳
 
-> **📋 БАЗИРУЕТСЯ НА:**
-> - **Provider architecture**: `MD/Phase_1_3_1_architecture_review.md` - Liskov Substitution compliance
-> - **Performance targets**: `MD/Phase_1_2_3_performance_optimization.md` - Provider response time benchmarks
-> - **Reference patterns**: `MD/Phase_1_1_4_architecture_patterns.md` - успешные patterns из app/services/voice
+**Статус**: ⏳ **НЕ НАЧАТА**  
+**Цель**: Реализация провайдеров на основе app/services/voice reference
+
+> **🎯 ОБЯЗАТЕЛЬНО ИСПОЛЬЗОВАТЬ РЕЗУЛЬТАТЫ PHASE 1:**
+> - **Phase_1_3_1_architecture_review.md** → LSP compliance для provider interfaces  
+> - **Phase_1_1_4_architecture_patterns.md** → успешные patterns из app/services/voice
+> - **Phase_1_2_3_performance_optimization.md** → async patterns и connection pooling
+
+### **3.1 STT провайдеры**
+> **📋 БАЗИРУЕТСЯ НА**: app/services/voice/stt/ reference implementation
+
+- ⏳ **3.1.1** providers/stt/base_stt.py (≤200 строк) - LSP compliance
+- ⏳ **3.1.2** providers/stt/openai_stt.py (≤350 строк) - адаптация reference
+- ⏳ **3.1.3** providers/stt/google_stt.py (≤350 строк) - connection pooling  
+- ⏳ **3.1.4** providers/stt/yandex_stt.py (≤400 строк) - API Key auth
+- ⏳ **3.1.5** STT provider integration - factory pattern
+- ⏳ **3.1.6** STT testing и validation - 100% coverage
+
+### **3.2 TTS провайдеры**
+> **📋 БАЗИРУЕТСЯ НА**: app/services/voice/tts/ reference implementation
+
+- ⏳ **3.2.1** providers/tts/base_tts.py (≤200 строк) - LSP compliance
+- ⏳ **3.2.2** providers/tts/openai_tts.py (≤400 строк) - voice optimization
+- ⏳ **3.2.3** providers/tts/google_tts.py (≤350 строк) - advanced configuration
+- ⏳ **3.2.4** providers/tts/yandex_tts.py (≤400 строк) - natural voice quality
+- ⏳ **3.2.5** TTS provider integration - factory pattern
+- ⏳ **3.2.6** TTS testing и validation - 100% coverage
+
+### **3.3 Provider infrastructure**
+> **📋 БАЗИРУЕТСЯ НА**: `MD/Phase_1_2_3_performance_optimization.md` - Connection management
+
+- ⏳ **3.3.1** providers/factory.py (≤300 строк) - dynamic loading
+- ⏳ **3.3.2** providers/connection_manager.py (≤250 строк) - pooling
+- ⏳ **3.3.3** Provider quality assurance - Codacy + security scan
+
+---
+
+## 🧠 **ФАЗА 4: LANGGRAPH INTEGRATION И WORKFLOW** ⏳
+
+**Статус**: ⏳ **НЕ НАЧАТА**  
+**Цель**: Clean separation - LangGraph decisions, voice_v2 execution
+
+> **🎯 ОБЯЗАТЕЛЬНО ИСПОЛЬЗОВАТЬ РЕЗУЛЬТАТЫ PHASE 1:**
+> - **Phase_1_2_4_langgraph_integration.md** → детальный план интеграции с LangGraph
+> - **Phase_1_3_1_architecture_review.md** → clean separation of concerns pattern
+
+### **4.1 Анализ current voice integration**
+> **📋 БАЗИРУЕТСЯ НА**: `MD/Phase_1_2_4_langgraph_integration.md` - Current integration analysis
+
+- ⏳ **4.1.1** Voice capabilities tool анализ - decision making extraction
+- ⏳ **4.1.2** LangGraph workflow анализ - message flow понимание
+- ⏳ **4.1.3** Platform integration анализ - Telegram/WhatsApp integration
+- ⏳ **4.1.4** Decision logic extraction - voice intent patterns
+- ⏳ **4.1.5** Performance impact assessment - optimization opportunities
+
+### **4.2 LangGraph tools creation**
+> **📋 БАЗИРУЕТСЯ НА**: `MD/Phase_1_2_4_langgraph_integration.md` - Clean separation pattern
+
+- ⏳ **4.2.1** integration/voice_execution_tool.py (≤200 строк) - execution only
+- ⏳ **4.2.2** Voice capabilities tool refactoring - remove decision logic
+- ⏳ **4.2.3** integration/agent_interface.py (≤150 строк) - clean API
+- ⏳ **4.2.4** integration/workflow_helpers.py (≤150 строк) - utility functions
+- ⏳ **4.2.5** LangGraph workflow updates - agent decision nodes
+
+### **4.3 LangGraph testing**
+> **📋 БАЗИРУЕТСЯ НА**: `MD/Phase_1_3_3_testing_strategy.md` - LangGraph testing approach
+
+- ⏳ **4.3.1** LangGraph workflow unit tests - 100% tool coverage
+- ⏳ **4.3.2** LangGraph integration tests - decision accuracy
+- ⏳ **4.3.3** End-to-end workflow tests - complete validation
+- ⏳ **4.3.4** LangGraph performance validation - response time
+- ⏳ **4.3.5** LangGraph integration validation - no degradation
+
+### **4.4 Platform integration updates**
+> **📋 БАЗИРУЕТСЯ НА**: `MD/Phase_1_3_4_migration_strategy.md` - Platform migration
+
+- ⏳ **4.4.1** Telegram integration обновление - voice_v2 replacement
+- ⏳ **4.4.2** WhatsApp integration обновление - new architecture
+- ⏳ **4.4.3** Integration testing - end-to-end validation
+- ⏳ **4.4.4** Migration validation - legacy removal
+- ⏳ **4.4.5** Application-wide integration - full functionality
+
+---
+
+## 🔧 **ФАЗА 5: PRODUCTION DEPLOYMENT И OPTIMIZATION** ⏳
+
+**Статус**: ⏳ **НЕ НАЧАТА**  
+**Цель**: Production readiness и complete migration
+
+> **🎯 ОБЯЗАТЕЛЬНО ИСПОЛЬЗОВАТЬ РЕЗУЛЬТАТЫ PHASE 1:**
+> - **Phase_1_3_4_migration_strategy.md** → zero-downtime migration plan
+> - **Phase_1_2_3_performance_optimization.md** → production performance targets
+
+### **5.1 Production readiness**
+> **📋 БАЗИРУЕТСЯ НА**: `MD/Phase_1_3_4_migration_strategy.md` - Production setup
+
+- ⏳ **5.1.1** Configuration management - environment-specific
+- ⏳ **5.1.2** Performance optimization - fine-tuning
+- ⏳ **5.1.3** Security и compliance - audit validation
+
+### **5.2 Complete migration**
+> **📋 БАЗИРУЕТСЯ НА**: `MD/Phase_1_3_4_migration_strategy.md` - Zero-downtime approach
+
+- ⏳ **5.2.1** Full application migration - replace old system
+- ⏳ **5.2.2** Legacy cleanup - remove app/services/voice/
+- ⏳ **5.2.3** Application restart и validation - production deployment
+- ⏳ **5.2.4** Post-migration validation - performance monitoring
+
+### **5.3 Load testing и validation**
+> **📋 БАЗИРУЕТСЯ НА**: `MD/Phase_1_2_3_performance_optimization.md` - Performance targets
+
+- ⏳ **5.3.1** Load testing - concurrent users simulation
+- ⏳ **5.3.2** Performance benchmarking - baseline comparison
+- ⏳ **5.3.3** Final validation - all criteria met
+
+---
+
+## 🧪 **ФАЗА 6: QUALITY ASSURANCE И DOCUMENTATION** ⏳
+
+**Статус**: ⏳ **НЕ НАЧАТА**  
+**Цель**: Final quality validation и comprehensive documentation
+
+> **🎯 ОБЯЗАТЕЛЬНО ИСПОЛЬЗОВАТЬ РЕЗУЛЬТАТЫ PHASE 1:**
+> - **Phase_1_3_3_testing_strategy.md** → testing procedures
+> - **Phase_1_3_2_documentation_planning.md** → documentation standards
+
+### **6.1 Code quality validation**
+> **📋 БАЗИРУЕТСЯ НА**: `MD/Phase_1_3_1_architecture_review.md` - Quality standards
+
+- ⏳ **6.1.1** Architecture compliance check - SOLID + CCN<8
+- ⏳ **6.1.2** Test coverage validation - 100% coverage
+
+### **6.2 Documentation**
+> **📋 БАЗИРУЕТСЯ НА**: `MD/Phase_1_3_2_documentation_planning.md` - Documentation approach
+
+- ⏳ **6.2.1** Technical documentation - architecture overview
+- ⏳ **6.2.2** Developer guide - extension guidelines
+- ⏳ **6.2.3** Migration documentation - transition guide
+
+---
+
+## 📊 **SUCCESS CRITERIA & VALIDATION**
+
+### **Количественные критерии** (из checklist)
+- ≤50 файлов в voice_v2 компоненте  
+- ≤15,000 строк общего кода
+- 100% unit tests pass + coverage
+- CCN < 8 для всех методов
+- Pylint score ≥ 9.5/10
+- Zero security issues
+
+### **Функциональные критерии**
+- Full app/services/voice functionality preserved
+- LangGraph полностью контролирует voice decisions
+- Platform compatibility (Telegram/WhatsApp)
+- Performance maintained or improved
+
+---
+
+## 🎯 **СЛЕДУЮЩИЕ ШАГИ**
+
+**ТЕКУЩИЙ ФОКУС**: Phase 2.3.1 - infrastructure/minio_manager.py  
+**ИСТОЧНИК ИСТИНЫ**: `MD/voice_v2_checklist.md`  
+**РЕФЕРЕНСНЫЕ ДОКУМЕНТЫ**: Phase_1_X_X файлы для конкретных решений
+
+**📋 ПОМНИТЕ**: Этот план - справочный материал. Операционные задачи выполняются по чек-листу.
 
 ### **Подфаза 4.1: STT Providers**
 - **4.1.1** OpenAI STT implementation ⚠️ **СЛЕДОВАТЬ**: Phase_1_3_1_architecture_review.md - LSP compliance
