@@ -1,0 +1,32 @@
+{
+  "Redis Performance": {
+    "operations": {
+      "SET 100 keys": 0.031874895095825195,
+      "GET 100 keys": 0.027278661727905273,
+      "ZADD 50 operations": 0.013193368911743164,
+      "Cleanup": 0.038031816482543945
+    },
+    "success": true
+  },
+  "Intent Detector Performance": {
+    "avg_detection_time": 1.1515617370605468e-05,
+    "total_detection_time": 0.00011515617370605469,
+    "detected_count": 6,
+    "total_tests": 10,
+    "settings_extraction_time": 0.0,
+    "success": true
+  },
+  "Metrics Collector Performance": {
+    "avg_record_time": 0.0018462657928466797,
+    "max_record_time": 0.0031938552856445312,
+    "min_record_time": 0.0014719963073730469,
+    "stats_retrieval_time": 0.002213716506958008,
+    "metrics_count": 10,
+    "success": true
+  },
+  "Voice Orchestrator Performance": {
+    "orchestrator_init_time": 0.0078067779541015625,
+    "agent_config_time": 4.506111145019531e-05,
+    "success": true
+  }
+}

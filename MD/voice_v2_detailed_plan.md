@@ -132,36 +132,42 @@
 
 ## 🔧 **ФАЗА 3: CORE COMPONENTS IMPLEMENTATION**
 
+> **📋 БАЗИРУЕТСЯ НА:**
+> - **Архитектурные принципы**: `MD/Phase_1_3_1_architecture_review.md` - SOLID compliance и performance targets
+> - **Структура файлов**: `MD/Phase_1_2_1_file_structure_design.md` - точная организация 50 файлов
+> - **SOLID принципы**: `MD/Phase_1_2_2_solid_principles.md` - конкретные примеры реализации
+> - **Performance требования**: `MD/Phase_1_2_3_performance_optimization.md` - целевые метрики
+
 ### **Подфаза 3.1: Base Classes и Interfaces**
-- **3.1.1** Core abstractions
+- **3.1.1** Core abstractions ⚠️ **СЛЕДОВАТЬ**: Phase_1_2_2_solid_principles.md - SRP и DIP patterns
   - BaseSTTProvider abstract class
-  - BaseTTSProvider abstract class
-  - VoiceProvider interface definitions
+  - BaseTTSProvider abstract class  
+  - VoiceServiceBase shared functionality
   - Exception hierarchy design
-- **3.1.2** Configuration management
+- **3.1.2** Configuration management ⚠️ **СЛЕДОВАТЬ**: Phase_1_3_1_architecture_review.md - Config validation patterns
   - VoiceConfig Pydantic schemas
-  - Provider settings validation
-  - Runtime configuration updates
+  - Provider configuration classes
   - Environment variable integration
-- **3.1.3** Constants и enums
+  - Configuration validation
+- **3.1.3** Constants и enums ⚠️ **СЛЕДОВАТЬ**: Phase_1_2_3_performance_optimization.md - Performance thresholds
   - Audio format definitions
-  - Provider type enums
-  - Error code constants
-  - Performance thresholds
+  - Provider type enumerations
+  - Error code constants  
+  - Performance thresholds (Redis ≤200µs, Intent ≤8µs, Metrics ≤1ms)
 
 ### **Подфаза 3.2: Orchestrator Implementation**
-- **3.2.1** VoiceServiceOrchestrator core
-  - Provider coordination logic
+- **3.2.1** VoiceServiceOrchestrator core ⚠️ **СЛЕДОВАТЬ**: Phase_1_3_1_architecture_review.md - SOLID patterns
+  - Provider coordination logic (SRP principle)
   - Request routing mechanisms
   - Response aggregation
   - Error handling orchestration
-- **3.2.2** Audio processing pipeline
-  - File format conversion
-  - Audio quality optimization
+- **3.2.2** Audio processing pipeline ⚠️ **СЛЕДОВАТЬ**: Phase_1_2_3_performance_optimization.md - Async patterns
+  - File format conversion (async operations)
+  - Audio quality optimization  
   - Streaming support implementation
-  - Concurrent request handling
-- **3.2.3** Integration interfaces
-  - LangGraph tool interface
+  - Concurrent request handling (connection pooling)
+- **3.2.3** Integration interfaces ⚠️ **СЛЕДОВАТЬ**: Phase_1_2_4_langgraph_integration.md - Clean separation
+  - LangGraph tool interface (decisions в LangGraph, execution в voice_v2)
   - Redis communication layer
   - WebSocket/SSE response handling
   - Metrics collection integration
@@ -187,17 +193,22 @@
 
 ## 🎙️ **ФАЗА 4: STT/TTS PROVIDERS IMPLEMENTATION**
 
+> **📋 БАЗИРУЕТСЯ НА:**
+> - **Provider architecture**: `MD/Phase_1_3_1_architecture_review.md` - Liskov Substitution compliance
+> - **Performance targets**: `MD/Phase_1_2_3_performance_optimization.md` - Provider response time benchmarks
+> - **Reference patterns**: `MD/Phase_1_1_4_architecture_patterns.md` - успешные patterns из app/services/voice
+
 ### **Подфаза 4.1: STT Providers**
-- **4.1.1** OpenAI STT implementation
-  - Whisper API integration
+- **4.1.1** OpenAI STT implementation ⚠️ **СЛЕДОВАТЬ**: Phase_1_3_1_architecture_review.md - LSP compliance
+  - Whisper API integration (единый interface contract)
   - Audio format optimization
   - Language detection
-  - Performance tuning
-- **4.1.2** Google STT implementation
-  - Cloud Speech-to-Text integration
+  - Performance tuning (connection pooling)
+- **4.1.2** Google STT implementation ⚠️ **СЛЕДОВАТЬ**: Phase_1_2_3_performance_optimization.md - Async patterns  
+  - Cloud Speech-to-Text integration (async operations)
   - Streaming recognition support
   - Language model optimization
-  - Error handling enhancement
+  - Error handling enhancement (fallback mechanisms)
 - **4.1.3** Yandex STT implementation
   - SpeechKit API integration
   - API key authentication
@@ -242,22 +253,24 @@
 
 ## 🤖 **ФАЗА 5: LANGGRAPH INTEGRATION**
 
+> **📋 БАЗИРУЕТСЯ НА:**
+> - **LangGraph integration design**: `MD/Phase_1_2_4_langgraph_integration.md` - детальный план интеграции
+> - **Migration strategy**: `MD/Phase_1_3_4_migration_strategy.md` - feature flag подход
+> - **Architecture separation**: `MD/Phase_1_3_1_architecture_review.md` - clean separation of concerns
+
 ### **Подфаза 5.1: Intent Detection Migration**
-- **5.1.1** Voice decision node creation
-  - LangGraph node для voice decisions
-  - Agent state integration
-  - User preference processing
+- **5.1.1** Voice decision node creation ⚠️ **СЛЕДОВАТЬ**: Phase_1_2_4_langgraph_integration.md - Node architecture
+  - LangGraph node для voice decisions (полный контроль агентом)
   - Context-aware decision making
-- **5.1.2** Orchestrator simplification
-  - Removal intent detection logic
-  - Clean execution-only interface
-  - LangGraph communication protocols
+  - User preference integration
+- **5.1.2** Orchestrator simplification ⚠️ **СЛЕДОВАТЬ**: Phase_1_3_1_architecture_review.md - SRP principle
+  - Removal intent detection logic (только execution)
   - Simplified API design
-- **5.1.3** Workflow integration
-  - Voice node positioning
-  - Conditional routing logic
-  - Error handling в workflow
-  - Performance optimization
+  - Clean tool interface
+- **5.1.3** Workflow integration ⚠️ **СЛЕДОВАТЬ**: Phase_1_2_4_langgraph_integration.md - Performance optimization
+  - Voice node positioning в workflow
+  - Memory management через PostgreSQL checkpointer
+  - Performance optimization (state management)
 
 ### **Подфаза 5.2: Voice Tools Enhancement**
 - **5.2.1** voice_capabilities_tool redesign
@@ -295,58 +308,55 @@
 
 ---
 
-## 🧪 **ФАЗА 6: TESTING И QUALITY ASSURANCE**
+## 🧪 **ФАЗА 6: TESTING И OPTIMIZATION**
 
-### **Подфаза 6.1: Unit Testing (100% Coverage)**
-- **6.1.1** Core components testing
-  - Orchestrator comprehensive tests
-  - Provider implementation tests
-  - Configuration validation tests
-  - Error handling verification
-- **6.1.2** Infrastructure testing
-  - MinIO manager testing
-  - Caching layer validation
-  - Rate limiting verification
-  - Performance monitoring tests
-- **6.1.3** Integration testing
-  - Provider integration tests
-  - LangGraph tool testing
-  - Workflow integration validation
-  - End-to-end scenario testing
+> **📋 БАЗИРУЕТСЯ НА:**
+> - **Testing strategy**: `MD/Phase_1_3_3_testing_strategy.md` - comprehensive testing framework
+> - **Performance benchmarks**: `MD/Phase_1_2_3_performance_optimization.md` - конкретные цели
+> - **Documentation plan**: `MD/Phase_1_3_2_documentation_planning.md` - documentation standards
 
-### **Подфаза 6.2: LangGraph Workflow Testing (100% Coverage)**
-- **6.2.1** Voice decision testing
-  - Intent detection validation
-  - Decision logic verification
-  - Edge case handling
-  - Performance benchmarking
-- **6.2.2** Workflow integration testing
-  - Complete workflow execution
-  - Error recovery testing
-  - Performance under load
-  - Concurrent user scenarios
-- **6.2.3** Tool functionality testing
-  - Voice tools comprehensive testing
-  - Parameter validation
-  - Response quality verification
-  - Integration stability
+### **Подфаза 6.1: Unit Testing Implementation**
+- **6.1.1** Core component tests ⚠️ **СЛЕДОВАТЬ**: Phase_1_3_3_testing_strategy.md - Testing pyramid
+  - VoiceOrchestrator unit tests (70% testing pyramid base)
+  - Provider interface tests
+  - Mock implementation tests
+- **6.1.2** Provider testing ⚠️ **СЛЕДОВАТЬ**: Phase_1_3_3_testing_strategy.md - Provider test examples
+  - OpenAI provider tests с mocked API
+  - Google provider tests с async patterns
+  - Yandex provider tests с error handling
+- **6.1.3** Integration testing ⚠️ **СЛЕДОВАТЬ**: Phase_1_3_3_testing_strategy.md - LangGraph integration tests
+  - LangGraph workflow tests (20% testing pyramid)
+  - End-to-end voice flow tests  
+  - Performance regression tests
 
-### **Подфаза 6.3: Quality Assurance**
-- **6.3.1** Code quality validation
-  - Lizard complexity analysis
-  - Pylint scoring verification
-  - Semgrep security scanning
-  - SOLID principles compliance
-- **6.3.2** Performance validation
-  - Response time benchmarking
-  - Memory usage profiling
-  - Concurrent load testing
-  - Scalability validation
-- **6.3.3** Production readiness
-  - Deployment testing
-  - Monitoring setup validation
-  - Documentation completeness
-  - Migration path verification
+### **Подфаза 6.2: Performance Optimization**
+- **6.2.1** Benchmark implementation ⚠️ **СЛЕДОВАТЬ**: Phase_1_2_3_performance_optimization.md - Performance targets
+  - Redis operations: ≤200µs/op (30-46% improvement targets)
+  - Intent detection: ≤8µs/request
+  - Metrics collection: ≤1ms/record
+  - Orchestrator init: ≤5ms
+- **6.2.2** Load testing ⚠️ **СЛЕДОВАТЬ**: Phase_1_3_3_testing_strategy.md - Load testing framework
+  - Concurrent request handling
+  - Provider failover testing
+  - Memory usage optimization
+- **6.2.3** Production readiness ⚠️ **СЛЕДОВАТЬ**: Phase_1_3_4_migration_strategy.md - Production deployment
+  - Health check implementation
+  - Monitoring integration
+  - Migration readiness validation
+
+### **Подфаза 6.3: Documentation и Deployment**
+- **6.3.1** Documentation completion ⚠️ **СЛЕДОВАТЬ**: Phase_1_3_2_documentation_planning.md - Documentation structure
+  - API documentation (OpenAPI spec)
+  - Architecture diagrams (Mermaid)
+  - Integration guides
+- **6.3.2** Migration preparation ⚠️ **СЛЕДОВАТЬ**: Phase_1_3_4_migration_strategy.md - Migration timeline
+  - Feature flag implementation
+  - Parallel deployment setup
+  - Rollback procedures
+- **6.3.3** Production deployment ⚠️ **СЛЕДОВАТЬ**: Phase_1_3_4_migration_strategy.md - Zero-downtime strategy
+  - Gradual rollout (1% → 10% → 30% → 100%)
+  - Performance monitoring
+  - Legacy system sunset
 
 ---
 
@@ -397,6 +407,61 @@
 - ✅ 100% unit test coverage + 100% LangGraph workflow coverage
 - ✅ LangGraph полностью контролирует voice decisions
 - ✅ VoiceServiceOrchestrator только execution logic (STT/TTS)
+
+---
+
+## 📚 **ОБЯЗАТЕЛЬНОЕ ИСПОЛЬЗОВАНИЕ РЕЗУЛЬТАТОВ PHASE 1.3**
+
+### **🔥 КРИТИЧЕСКИ ВАЖНО:** 
+
+**ВСЕ разработчики ОБЯЗАНЫ изучить и использовать результаты Phase 1.3 на КАЖДОМ этапе:**
+
+#### **🏗️ Architecture & SOLID Principles**
+- **`MD/Phase_1_3_1_architecture_review.md`** → Architectural decisions, SOLID compliance patterns
+- **`MD/Phase_1_2_2_solid_principles.md`** → Конкретные примеры SRP, DIP, ISP, LSP реализации
+
+#### **⚡ Performance Optimization**
+- **`MD/Phase_1_2_3_performance_optimization.md`** → Performance targets:
+  - Redis operations: ≤200µs/op (37% improvement)
+  - Intent detection: ≤8µs/request (30% improvement) 
+  - Metrics collection: ≤1ms/record (46% improvement)
+  - Orchestrator init: ≤5ms (36% improvement)
+
+#### **🤖 LangGraph Integration**
+- **`MD/Phase_1_2_4_langgraph_integration.md`** → Clean separation pattern:
+  - LangGraph Agent: ALL decision making
+  - Voice_v2 Orchestrator: ТОЛЬКО execution
+  - PostgreSQL checkpointer для memory
+
+#### **🧪 Testing Strategy**  
+- **`MD/Phase_1_3_3_testing_strategy.md`** → Testing pyramid:
+  - 70% Unit tests (component isolation)
+  - 20% Integration tests (LangGraph workflows)
+  - 10% Test infrastructure (mocks)
+
+#### **🔄 Migration Plan**
+- **`MD/Phase_1_3_4_migration_strategy.md`** → Zero-downtime migration:
+  - Feature flag controlled rollout
+  - Parallel implementation approach
+  - Gradual cutover: 1% → 10% → 30% → 100%
+
+#### **📋 File Structure**
+- **`MD/Phase_1_2_1_file_structure_design.md`** → Точная организация 50 файлов
+
+#### **📖 Documentation Standards**
+- **`MD/Phase_1_3_2_documentation_planning.md`** → API specs, diagrams, examples
+
+### **⚠️ ВАЖНО: НЕ ИГНОРИРУЙТЕ ЭТИ ДОКУМЕНТЫ!**
+
+Эти документы содержат:
+- ✅ Валидированные архитектурные решения
+- ✅ Performance benchmarks и targets  
+- ✅ Проверенные patterns из app/services/voice
+- ✅ Comprehensive testing approach
+- ✅ Risk mitigation strategies
+- ✅ Production deployment план
+
+**Результат Phase 1.3 = ФУНДАМЕНТ для качественной реализации voice_v2 системы!** 🎯
 - ✅ Все качественные метрики достигнуты (Lizard/Pylint/Semgrep)
 - ✅ Performance не хуже app/services/voice +10%
 
