@@ -14,3 +14,4 @@ wheels/
 docker-PAI/data
 logs/app.log
 .codacy
+.env
