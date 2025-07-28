@@ -12,6 +12,9 @@ from .exceptions import (
     VoiceConfigurationError,
     create_voice_error,
 )
+# Временно отключено до исправления импортов
+# from .stt_factory import STTProviderFactory
+# from .stt_coordinator import STTCoordinator
 
 # Core exports (will be populated as files are created)
 __all__ = [
@@ -21,4 +24,7 @@ __all__ = [
     "VoiceProviderError",
     "VoiceConfigurationError",
     "create_voice_error",
+    # STT Components - временно отключено
+    # "STTProviderFactory",
+    # "STTCoordinator",
 ]

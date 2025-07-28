@@ -52,6 +52,11 @@ class PerformanceTimer:
         
         end_time = self.end_time or time.perf_counter()
         return (end_time - self.start_time) * 1000
+    
+    @property
+    def elapsed_seconds(self) -> float:
+        """Время выполнения в секундах."""
+        return self.elapsed_ms / 1000.0
 
 
 class MetricsHelpers:

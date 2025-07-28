@@ -27,7 +27,7 @@ try:
 except ImportError:
     PYDUB_AVAILABLE = False
     
-from app.api.schemas.voice_schemas import AudioFormat
+from ..core.interfaces import AudioFormat
 
 
 # ==================== КОНСТАНТЫ И КОНФИГУРАЦИЯ ====================
@@ -49,8 +49,8 @@ class AudioMimeTypes:
         AudioFormat.OGG: "audio/ogg",
         AudioFormat.OPUS: "audio/opus",
         AudioFormat.FLAC: "audio/flac",
-        AudioFormat.AAC: "audio/aac",
-        AudioFormat.PCM: "audio/pcm"
+        AudioFormat.M4A: "audio/mp4",  # M4A вместо AAC
+        AudioFormat.WEBM: "audio/webm"  # WEBM вместо PCM
     }
 
 

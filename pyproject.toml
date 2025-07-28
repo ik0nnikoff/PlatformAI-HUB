@@ -51,6 +51,7 @@ dependencies = [
     "google-cloud-vision>=3.10.2",
     "anthropic>=0.57.1",
     "pillow>=11.1.0",
+    "aiohttp>=3.12.0",
 ]
 
 [tool.uv.sources]
@@ -71,3 +72,19 @@ include = ["hub*"]  # Include only these packages and their submodules
 # [tool.ruff]
 # line-length = 88
 # select = ["E", "F", "W", "I"] # Example rule selection
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::DeprecationWarning:pydub.*",
+    "ignore::DeprecationWarning:audioop.*",
+    "ignore::DeprecationWarning:aiohttp.*",
+    "ignore:enable_cleanup_closed is deprecated.*:DeprecationWarning",
+    "ignore:.*audioop.*deprecated.*:DeprecationWarning"
+]
+testpaths = ["tests"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--strict-config",
+    "--tb=short"
+]

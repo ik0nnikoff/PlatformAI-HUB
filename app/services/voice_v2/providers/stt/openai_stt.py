@@ -352,7 +352,6 @@ class OpenAISTTProvider(BaseSTTProvider):
                 limit=self.connection_pool_size,
                 limit_per_host=self.per_host_connections,
                 keepalive_timeout=self.keepalive_timeout,
-                enable_cleanup_closed=True,
                 use_dns_cache=True
             )
             

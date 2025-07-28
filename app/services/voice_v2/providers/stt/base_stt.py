@@ -97,7 +97,9 @@ class BaseSTTProvider(ABC):
         caps = await self.get_capabilities()
         fmt = audio_path.suffix.lower().lstrip('.')
         
-        if fmt not in caps.supported_formats:
+        # Convert AudioFormat enums to strings for comparison
+        supported_formats = [af.value for af in caps.supported_formats]
+        if fmt not in supported_formats:
             raise AudioProcessingError(f"Format {fmt} unsupported")
         
         if request.quality not in caps.supports_quality_levels:

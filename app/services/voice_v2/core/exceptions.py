@@ -48,6 +48,130 @@ class VoiceServiceError(Exception):
         if self.context:
             return f"{self.message} (Code: {self.error_code}, Context: {self.context})"
         return f"{self.message} (Code: {self.error_code})"
+
+
+class ProviderInitializationError(VoiceServiceError):
+    """
+    Exception raised when provider initialization fails
+    
+    Single Responsibility: Provider initialization failures
+    """
+    
+    def __init__(self, provider_name: str, reason: str, context: Optional[Dict[str, Any]] = None):
+        """
+        Initialize provider initialization error
+        
+        Args:
+            provider_name: Name of the provider that failed to initialize
+            reason: Reason for initialization failure
+            context: Additional error context
+        """
+        message = f"Failed to initialize provider '{provider_name}': {reason}"
+        error_code = "PROVIDER_INITIALIZATION_ERROR"
+        super().__init__(message, error_code, context)
+        self.provider_name = provider_name
+        self.reason = reason
+
+
+class ProviderNotFoundError(VoiceServiceError):
+    """
+    Exception raised when requested provider is not found
+    
+    Single Responsibility: Provider lookup failures
+    """
+    
+    def __init__(self, provider_name: str, available_providers: Optional[list] = None):
+        """
+        Initialize provider not found error
+        
+        Args:
+            provider_name: Name of the provider that was not found
+            available_providers: List of available providers
+        """
+        message = f"Provider '{provider_name}' not found"
+        if available_providers:
+            message += f". Available providers: {', '.join(available_providers)}"
+        
+        error_code = "PROVIDER_NOT_FOUND"
+        context = {"provider_name": provider_name, "available_providers": available_providers}
+        super().__init__(message, error_code, context)
+        self.provider_name = provider_name
+        self.available_providers = available_providers or []
+
+
+class ConfigurationError(VoiceServiceError):
+    """
+    Exception raised for configuration validation errors
+    
+    Single Responsibility: Configuration validation failures
+    """
+    
+    def __init__(self, field: str, value: Any, reason: str):
+        """
+        Initialize configuration error
+        
+        Args:
+            field: Configuration field that failed validation
+            value: Invalid value that was provided
+            reason: Reason why the value is invalid
+        """
+        message = f"Invalid configuration for '{field}': {reason}"
+        error_code = "CONFIGURATION_ERROR"
+        context = {"field": field, "value": value, "reason": reason}
+        super().__init__(message, error_code, context)
+        self.field = field
+        self.value = value
+        self.reason = reason
+
+
+class ConnectionError(VoiceServiceError):
+    """
+    Exception raised for connection-related errors
+    
+    Single Responsibility: Connection failures
+    """
+    
+    def __init__(self, provider_name: str, endpoint: str, reason: str):
+        """
+        Initialize connection error
+        
+        Args:
+            provider_name: Name of the provider with connection issues
+            endpoint: Endpoint that failed to connect
+            reason: Reason for connection failure
+        """
+        message = f"Connection error for provider '{provider_name}' to '{endpoint}': {reason}"
+        error_code = "CONNECTION_ERROR"
+        context = {"provider_name": provider_name, "endpoint": endpoint, "reason": reason}
+        super().__init__(message, error_code, context)
+        self.provider_name = provider_name
+        self.endpoint = endpoint
+        self.reason = reason
+
+
+class HealthCheckError(VoiceServiceError):
+    """
+    Exception raised for health check failures
+    
+    Single Responsibility: Health monitoring failures
+    """
+    
+    def __init__(self, provider_name: str, check_type: str, details: str):
+        """
+        Initialize health check error
+        
+        Args:
+            provider_name: Name of the provider that failed health check
+            check_type: Type of health check that failed
+            details: Details about the failure
+        """
+        message = f"Health check failed for provider '{provider_name}' ({check_type}): {details}"
+        error_code = "HEALTH_CHECK_ERROR"
+        context = {"provider_name": provider_name, "check_type": check_type, "details": details}
+        super().__init__(message, error_code, context)
+        self.provider_name = provider_name
+        self.check_type = check_type
+        self.details = details
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert exception to dictionary for logging/serialization"""
