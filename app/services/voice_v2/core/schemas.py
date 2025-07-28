@@ -20,7 +20,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 from pathlib import Path
 import hashlib
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from enum import Enum
 
 from .interfaces import ProviderType, AudioFormat
@@ -52,8 +52,7 @@ class VoiceOperationMetric(BaseModel):
     duration_ms: float = Field(..., ge=0, description="Operation duration")
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="Metric timestamp")
     
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class STTRequest(BaseModel):
@@ -91,8 +90,7 @@ class STTRequest(BaseModel):
         """Alias for generate_cache_key for compatibility"""
         return self.generate_cache_key()
     
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class TTSRequest(BaseModel):
@@ -122,8 +120,7 @@ class TTSRequest(BaseModel):
         """Alias for generate_cache_key for compatibility"""
         return self.generate_cache_key()
     
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class STTResponse(BaseModel):
@@ -145,8 +142,7 @@ class STTResponse(BaseModel):
             raise ValueError("Transcribed text cannot be empty")
         return v.strip()
     
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class TTSResponse(BaseModel):
@@ -168,8 +164,7 @@ class TTSResponse(BaseModel):
             raise ValueError("Audio URL cannot be empty")
         return v.strip()
     
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class PerformanceMetrics(BaseModel):
@@ -183,8 +178,7 @@ class PerformanceMetrics(BaseModel):
     error_type: Optional[str] = Field(default=None, description="Error type if failed")
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="Metrics timestamp")
     
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class ProviderStatus(BaseModel):
@@ -198,8 +192,7 @@ class ProviderStatus(BaseModel):
     circuit_breaker_open: bool = Field(default=False, description="Circuit breaker status")
     average_response_time_ms: Optional[float] = Field(default=None, ge=0, description="Average response time")
     
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class VoiceServiceHealth(BaseModel):
@@ -223,8 +216,7 @@ class VoiceServiceHealth(BaseModel):
             return 0.0
         return (self.successful_requests / self.total_requests) * 100
     
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class ErrorResponse(BaseModel):
@@ -238,8 +230,7 @@ class ErrorResponse(BaseModel):
     request_id: Optional[str] = Field(default=None, description="Request identifier for tracking")
     details: Dict[str, Any] = Field(default_factory=dict, description="Additional error details")
     
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class CacheStats(BaseModel):
@@ -264,8 +255,7 @@ class CacheStats(BaseModel):
             return 0.0
         return self.hits / total
     
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class ProviderCapabilities(BaseModel):
@@ -279,8 +269,7 @@ class ProviderCapabilities(BaseModel):
     supports_streaming: bool = Field(default=False, description="Streaming support")
     supports_real_time: bool = Field(default=False, description="Real-time processing support")
     
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class VoiceFileInfo(BaseModel):
@@ -293,5 +282,4 @@ class VoiceFileInfo(BaseModel):
     upload_time: datetime = Field(..., description="Upload timestamp")
     metadata: Dict[str, str] = Field(default_factory=dict, description="Additional metadata")
     
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")

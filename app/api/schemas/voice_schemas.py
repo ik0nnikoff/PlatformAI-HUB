@@ -4,7 +4,7 @@
 
 from enum import Enum
 from typing import Optional, Dict, Any, List
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class VoiceProvider(str, Enum):
@@ -93,13 +93,15 @@ class STTConfig(BaseModel):
     sample_rate_hertz: int = Field(default=16000, description="Частота дискретизации в Гц")
     custom_params: Dict[str, Any] = Field(default_factory=dict, description="Дополнительные параметры провайдера")
 
-    @validator('max_duration')
+    @field_validator('max_duration')
+    @classmethod
     def validate_max_duration(cls, v):
         if v <= 0 or v > 600:  # 10 minutes max
             raise ValueError('max_duration должен быть от 1 до 600 секунд')
         return v
 
-    @validator('sample_rate_hertz')
+    @field_validator('sample_rate_hertz')
+    @classmethod
     def validate_sample_rate(cls, v):
         valid_rates = [8000, 16000, 22050, 44100, 48000]
         if v not in valid_rates:
@@ -120,13 +122,15 @@ class TTSConfig(BaseModel):
     sample_rate: int = Field(default=22050, description="Частота дискретизации")
     custom_params: Dict[str, Any] = Field(default_factory=dict, description="Дополнительные параметры провайдера")
 
-    @validator('speed')
+    @field_validator('speed')
+    @classmethod
     def validate_speed(cls, v):
         if v < 0.25 or v > 4.0:
             raise ValueError('speed должен быть от 0.25 до 4.0')
         return v
 
-    @validator('pitch')
+    @field_validator('pitch')
+    @classmethod
     def validate_pitch(cls, v):
         if v < -20.0 or v > 20.0:
             raise ValueError('pitch должен быть от -20.0 до 20.0')
@@ -165,19 +169,22 @@ class VoiceSettings(BaseModel):
         description="Список настроенных провайдеров"
     )
 
-    @validator('max_file_size_mb')
+    @field_validator('max_file_size_mb')
+    @classmethod
     def validate_max_file_size(cls, v):
         if v <= 0 or v > 100:
             raise ValueError('max_file_size_mb должен быть от 1 до 100 МБ')
         return v
 
-    @validator('cache_ttl_hours')
+    @field_validator('cache_ttl_hours')
+    @classmethod
     def validate_cache_ttl(cls, v):
         if v < 1 or v > 168:  # 1 week max
             raise ValueError('cache_ttl_hours должен быть от 1 до 168 часов')
         return v
 
-    @validator('rate_limit_per_minute')
+    @field_validator('rate_limit_per_minute')
+    @classmethod
     def validate_rate_limit(cls, v):
         if v <= 0 or v > 100:
             raise ValueError('rate_limit_per_minute должен быть от 1 до 100')

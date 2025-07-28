@@ -183,12 +183,72 @@ class VoiceConfigurationError(VoiceServiceError):
         )
 
 
+class ProviderNotAvailableError(VoiceServiceError):
+    """
+    Provider availability exception
+    
+    Single Responsibility: Handle provider unavailability
+    Used when provider is disabled, not configured, or unreachable
+    """
+    
+    def __init__(self, provider: str, reason: Optional[str] = None):
+        """
+        Initialize provider not available error
+        
+        Args:
+            provider: Provider name that is unavailable
+            reason: Optional reason for unavailability
+        """
+        context = {"provider": provider, "reason": reason}
+        
+        message = f"Provider '{provider}' is not available"
+        if reason:
+            message += f": {reason}"
+            
+        super().__init__(
+            message=message,
+            error_code="PROVIDER_NOT_AVAILABLE",
+            context=context
+        )
+
+
+class AudioProcessingError(VoiceServiceError):
+    """
+    Audio processing exception
+    
+    Single Responsibility: Handle audio file processing errors
+    Used for format issues, size limits, corruption, etc.
+    """
+    
+    def __init__(self, message: str, audio_file: Optional[str] = None):
+        """
+        Initialize audio processing error
+        
+        Args:
+            message: Error description
+            audio_file: Path to the problematic audio file
+        """
+        context = {"audio_file": audio_file} if audio_file else {}
+        
+        super().__init__(
+            message=message,
+            error_code="AUDIO_PROCESSING_ERROR",
+            context=context
+        )
+
+
+# Compatibility aliases
+ConfigurationError = VoiceConfigurationError
+
+
 # Exception mapping for quick lookup
 EXCEPTION_MAP = {
     "timeout": VoiceServiceTimeout,
     "provider": VoiceProviderError,
     "config": VoiceConfigurationError,
     "base": VoiceServiceError,
+    "provider_unavailable": ProviderNotAvailableError,
+    "audio_processing": AudioProcessingError,
 }
 
 
