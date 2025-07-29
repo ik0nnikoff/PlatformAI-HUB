@@ -34,13 +34,13 @@ def setup_logging_for_agent(agent_id: str) -> logging.LoggerAdapter:
 def get_whatsapp_settings(integration_settings: str, log_adapter) -> tuple[str, str]:
     """
     Извлекает настройки WhatsApp из JSON строки integration_settings
-    
+
     Returns:
         tuple: (session_name, token)
     """
     session_name: str = ""
     token: str = ""
-    
+
     try:
         integration_settings_data = json.loads(integration_settings)
         if isinstance(integration_settings_data, dict):
@@ -65,13 +65,13 @@ def get_whatsapp_settings(integration_settings: str, log_adapter) -> tuple[str, 
     if not session_name:
         log_adapter.critical("CRITICAL: WhatsApp session_name not found in --integration-settings. Bot cannot start.")
         sys.exit(1)
-    
+
     return session_name, token
 
 
 async def main_async_runner(agent_id: str, integration_settings: str):
     """Основная асинхронная функция для запуска WhatsApp интеграции"""
-    
+
     log_adapter = setup_logging_for_agent(agent_id)
     log_adapter.info(f"Starting WhatsApp integration for Agent ID: {agent_id}")
 
