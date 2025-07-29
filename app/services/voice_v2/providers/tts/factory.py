@@ -25,19 +25,19 @@ logger = logging.getLogger(__name__)
 class TTSProviderFactory:
     """
     Factory class for creating TTS provider instances
-    
+
     Supports:
     - Dynamic provider loading
     - Configuration validation
     - Provider registry management
     """
-    
+
     _PROVIDER_REGISTRY = {
         "openai": OpenAITTSProvider,
         "google": GoogleTTSProvider,
         "yandex": YandexTTSProvider,
     }
-    
+
     @classmethod
     def create_provider(
         cls,
@@ -46,14 +46,14 @@ class TTSProviderFactory:
     ) -> BaseTTSProvider:
         """
         Create TTS provider instance
-        
+
         Args:
             provider_name: Name of the provider (openai, google, yandex)
             config: Provider configuration
-            
+
         Returns:
             Configured TTS provider instance
-            
+
         Raises:
             ProviderNotFoundError: If provider not registered
             VoiceConfigurationError: If configuration invalid
@@ -64,21 +64,21 @@ class TTSProviderFactory:
                 f"TTS provider '{provider_name}' not found. "
                 f"Available providers: {available}"
             )
-        
+
         try:
             provider_class = cls._PROVIDER_REGISTRY[provider_name]
             return provider_class(config)
-            
+
         except Exception as e:
             raise VoiceConfigurationError(
                 f"Failed to create TTS provider '{provider_name}': {e}"
             )
-    
+
     @classmethod
     def get_available_providers(cls) -> List[str]:
         """Get list of available TTS provider names"""
         return list(cls._PROVIDER_REGISTRY.keys())
-    
+
     @classmethod
     def register_provider(
         cls,
@@ -87,7 +87,7 @@ class TTSProviderFactory:
     ) -> None:
         """
         Register new TTS provider
-        
+
         Args:
             name: Provider name
             provider_class: Provider class (must inherit from BaseTTSProvider)
@@ -96,7 +96,7 @@ class TTSProviderFactory:
             raise VoiceConfigurationError(
                 f"Provider class must inherit from BaseTTSProvider"
             )
-        
+
         cls._PROVIDER_REGISTRY[name] = provider_class
         logger.info(f"Registered TTS provider: {name}")
 

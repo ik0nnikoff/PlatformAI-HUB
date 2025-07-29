@@ -21,10 +21,10 @@ class VoiceSTTManager(ISTTManager):
     def __init__(self, provider_manager, cache_manager, metrics_collector, connection_manager):
         """
         Initialize STT manager
-        
+
         Args:
             provider_manager: Provider management instance
-            cache_manager: Cache management instance 
+            cache_manager: Cache management instance
             metrics_collector: Metrics collection instance
             connection_manager: Connection management instance
         """
@@ -124,7 +124,7 @@ class VoiceSTTManager(ISTTManager):
         """Get cached STT result"""
         if not self._cache_manager:
             return None
-            
+
         try:
             # Create cache key from request
             cache_key = f"stt:{request.audio_file}:{request.language or 'auto'}"
@@ -137,7 +137,7 @@ class VoiceSTTManager(ISTTManager):
         """Cache STT result"""
         if not self._cache_manager:
             return
-            
+
         try:
             cache_key = f"stt:{request.audio_file}:{request.language or 'auto'}"
             await self._cache_manager.cache_result(cache_key, result, ttl=86400)  # 24 hours
@@ -170,17 +170,17 @@ class VoiceSTTManager(ISTTManager):
         """Handle provider error"""
         if self._metrics_collector:
             self._metrics_collector.record_provider_error(provider_type)
-        
+
         # Update connection manager about the error
         if self._connection_manager:
             await self._connection_manager.handle_provider_error(provider_type)
 
     async def _execute_with_performance_tracking(
-        self, 
-        operation_func, 
+        self,
+        operation_func,
         operation_type: VoiceOperation,
         provider_type: ProviderType,
-        *args, 
+        *args,
         **kwargs
     ):
         """Execute operation with performance tracking"""
@@ -191,7 +191,7 @@ class VoiceSTTManager(ISTTManager):
         try:
             result = await operation_func(*args, **kwargs)
             processing_time = asyncio.get_event_loop().time() - start_time
-            
+
             # Record metrics
             self._metrics_collector.record_operation_metrics(
                 operation_type,
@@ -199,11 +199,11 @@ class VoiceSTTManager(ISTTManager):
                 processing_time,
                 success=True
             )
-            
+
             return result
         except Exception as e:
             processing_time = asyncio.get_event_loop().time() - start_time
-            
+
             # Record failed metrics
             self._metrics_collector.record_operation_metrics(
                 operation_type,
@@ -211,7 +211,7 @@ class VoiceSTTManager(ISTTManager):
                 processing_time,
                 success=False
             )
-            
+
             raise e
 
     async def get_health_status(self) -> dict:
@@ -219,8 +219,8 @@ class VoiceSTTManager(ISTTManager):
         return {
             "initialized": self._initialized,
             "available_providers": [
-                provider_type.value 
-                for provider_type in ProviderType 
+                provider_type.value
+                for provider_type in ProviderType
                 if self._is_provider_available(provider_type)
             ],
             "component": "stt_manager"

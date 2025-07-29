@@ -37,9 +37,9 @@ from .performance import (
 __all__ = [
     # Audio utilities
     "AudioProcessor",
-    "AudioMetadata", 
+    "AudioMetadata",
     "ConversionResult",
-    
+
     # Helper utilities
     "HashGenerator",
     "FileUtilities",
@@ -47,7 +47,7 @@ __all__ = [
     "ErrorHandlingHelpers",
     "sanitize_filename",
     "format_bytes",
-    
+
     # Performance utilities
     "PerformanceTimer",
     "MetricsHelpers",
@@ -58,7 +58,7 @@ __all__ = [
 
 __all__ = [
     "AudioProcessor",
-    "AudioMetadata", 
+    "AudioMetadata",
     "ConversionResult",
     "AudioLimits",
     "AudioMimeTypes",

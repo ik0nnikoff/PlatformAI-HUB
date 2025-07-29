@@ -21,10 +21,10 @@ class VoiceTTSManager(ITTSManager):
     def __init__(self, provider_manager, cache_manager, metrics_collector, connection_manager):
         """
         Initialize TTS manager
-        
+
         Args:
             provider_manager: Provider management instance
-            cache_manager: Cache management instance 
+            cache_manager: Cache management instance
             metrics_collector: Metrics collection instance
             connection_manager: Connection management instance
         """
@@ -122,7 +122,7 @@ class VoiceTTSManager(ITTSManager):
         """Get cached TTS result"""
         if not self._cache_manager:
             return None
-            
+
         try:
             # Create cache key from request
             cache_key = f"tts:{request.text}:{request.voice}:{request.format}"
@@ -135,7 +135,7 @@ class VoiceTTSManager(ITTSManager):
         """Cache TTS result"""
         if not self._cache_manager:
             return
-            
+
         try:
             cache_key = f"tts:{request.text}:{request.voice}:{request.format}"
             await self._cache_manager.cache_result(cache_key, result, ttl=86400)  # 24 hours
@@ -168,17 +168,17 @@ class VoiceTTSManager(ITTSManager):
         """Handle provider error"""
         if self._metrics_collector:
             self._metrics_collector.record_provider_error(provider_type)
-        
+
         # Update connection manager about the error
         if self._connection_manager:
             await self._connection_manager.handle_provider_error(provider_type)
 
     async def _execute_with_performance_tracking(
-        self, 
-        operation_func, 
+        self,
+        operation_func,
         operation_type: VoiceOperation,
         provider_type: ProviderType,
-        *args, 
+        *args,
         **kwargs
     ):
         """Execute operation with performance tracking"""
@@ -189,7 +189,7 @@ class VoiceTTSManager(ITTSManager):
         try:
             result = await operation_func(*args, **kwargs)
             processing_time = asyncio.get_event_loop().time() - start_time
-            
+
             # Record metrics
             self._metrics_collector.record_operation_metrics(
                 operation_type,
@@ -197,11 +197,11 @@ class VoiceTTSManager(ITTSManager):
                 processing_time,
                 success=True
             )
-            
+
             return result
         except Exception as e:
             processing_time = asyncio.get_event_loop().time() - start_time
-            
+
             # Record failed metrics
             self._metrics_collector.record_operation_metrics(
                 operation_type,
@@ -209,7 +209,7 @@ class VoiceTTSManager(ITTSManager):
                 processing_time,
                 success=False
             )
-            
+
             raise e
 
     async def get_health_status(self) -> dict:
@@ -217,8 +217,8 @@ class VoiceTTSManager(ITTSManager):
         return {
             "initialized": self._initialized,
             "available_providers": [
-                provider_type.value 
-                for provider_type in ProviderType 
+                provider_type.value
+                for provider_type in ProviderType
                 if self._is_provider_available(provider_type)
             ],
             "component": "tts_manager"

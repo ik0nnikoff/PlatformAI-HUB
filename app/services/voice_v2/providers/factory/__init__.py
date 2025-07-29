@@ -15,7 +15,7 @@ from .factory import EnhancedVoiceProviderFactory
 
 __all__ = [
     "ProviderCategory",
-    "ProviderType", 
+    "ProviderType",
     "ProviderStatus",
     "ProviderHealthInfo",
     "ProviderInfo",

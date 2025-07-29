@@ -77,7 +77,7 @@ class VoiceServiceBase(ABC):
     def _generate_cache_key(self, *args) -> str:
         """Генерация ключа для кэширования"""
         content = "|".join(str(arg) for arg in args)
-        return hashlib.md5(content.encode()).hexdigest()
+        return hashlib.sha256(content.encode()).hexdigest()
 
     async def _with_timeout(self, coro, timeout_seconds: float):
         """Выполнить корутину с таймаутом"""

@@ -67,14 +67,14 @@ class CircuitBreakerMetrics:
     last_failure_time: Optional[float] = None
     last_success_time: Optional[float] = None
     average_response_time: float = 0.0
-    
+
     @property
     def failure_rate(self) -> float:
         """Calculate current failure rate"""
         if self.total_requests == 0:
             return 0.0
         return self.failed_requests / self.total_requests
-    
+
     @property
     def success_rate(self) -> float:
         """Calculate current success rate"""
@@ -83,27 +83,27 @@ class CircuitBreakerMetrics:
 
 class CircuitBreakerInterface(ABC):
     """Abstract interface for circuit breaker implementations"""
-    
+
     @abstractmethod
     async def call(self, func: Callable, *args, **kwargs) -> Any:
         """Execute function through circuit breaker"""
         pass
-    
+
     @abstractmethod
     async def is_available(self) -> bool:
         """Check if circuit breaker allows requests"""
         pass
-    
+
     @abstractmethod
     def get_state(self) -> CircuitBreakerState:
         """Get current circuit breaker state"""
         pass
-    
+
     @abstractmethod
     def get_metrics(self) -> CircuitBreakerMetrics:
         """Get circuit breaker metrics"""
         pass
-    
+
     @abstractmethod
     async def reset(self) -> None:
         """Reset circuit breaker to CLOSED state"""
@@ -116,12 +116,12 @@ T = TypeVar('T')
 class BaseCircuitBreaker(CircuitBreakerInterface, Generic[T]):
     """
     Base circuit breaker implementation following SOLID principles
-    
+
     SRP: Handles only circuit breaker logic
     OCP: Extensible through configuration
     LSP: Substitutable with other circuit breaker implementations
     """
-    
+
     def __init__(
         self,
         name: str,
@@ -136,34 +136,34 @@ class BaseCircuitBreaker(CircuitBreakerInterface, Generic[T]):
         self._last_failure_time: Optional[float] = None
         self._state_lock = asyncio.Lock()
         self._request_history: List[tuple[float, bool]] = []  # (timestamp, success)
-    
+
     async def call(self, func: Callable[..., T], *args, **kwargs) -> T:
         """
         Execute function through circuit breaker with failure protection
-        
+
         Implementation follows performance targets:
         - Circuit breaker decision: ≤1µs
         - State transitions: ≤5µs
         """
         start_time = time.perf_counter()
-        
+
         # Fast path: check availability without lock
         if not await self._fast_availability_check():
             raise VoiceServiceError(
                 f"Circuit breaker '{self.name}' is OPEN"
             )
-        
+
         try:
             # Execute the function with timeout
             result = await asyncio.wait_for(
                 func(*args, **kwargs),
                 timeout=self.config.timeout_duration
             )
-            
+
             # Record success
             await self._record_success(time.perf_counter() - start_time)
             return result
-            
+
         except (asyncio.TimeoutError, TimeoutError):
             await self._record_failure(time.perf_counter() - start_time)
             raise VoiceServiceError(
@@ -172,16 +172,16 @@ class BaseCircuitBreaker(CircuitBreakerInterface, Generic[T]):
         except Exception:
             await self._record_failure(time.perf_counter() - start_time)
             raise
-    
+
     async def _fast_availability_check(self) -> bool:
         """Fast availability check without lock for performance"""
         current_time = time.time()
-        
+
         if self._state == CircuitBreakerState.CLOSED:
             return True
         elif self._state == CircuitBreakerState.OPEN:
             # Check if recovery timeout has passed
-            if (self._last_failure_time and 
+            if (self._last_failure_time and
                 current_time - self._last_failure_time >= self.config.recovery_timeout):
                 # Transition to HALF_OPEN (with lock for safety)
                 async with self._state_lock:
@@ -191,7 +191,7 @@ class BaseCircuitBreaker(CircuitBreakerInterface, Generic[T]):
             return False
         else:  # HALF_OPEN
             return True
-    
+
     async def _record_success(self, response_time: float) -> None:
         """Record successful operation"""
         async with self._state_lock:
@@ -199,22 +199,22 @@ class BaseCircuitBreaker(CircuitBreakerInterface, Generic[T]):
             self._metrics.successful_requests += 1
             self._metrics.total_requests += 1
             self._metrics.last_success_time = time.time()
-            
+
             # Reset failure count on success in CLOSED state
             if self._state == CircuitBreakerState.CLOSED:
                 self._failure_count = 0
-            
+
             # Update average response time
             self._update_average_response_time(response_time)
-            
+
             # Update request history
             self._update_request_history(True)
-            
+
             # State transition logic
             if self._state == CircuitBreakerState.HALF_OPEN:
                 if self._success_count >= self.config.success_threshold:
                     await self._transition_to_closed()
-    
+
     async def _record_failure(self, response_time: float) -> None:
         """Record failed operation"""
         async with self._state_lock:
@@ -223,13 +223,13 @@ class BaseCircuitBreaker(CircuitBreakerInterface, Generic[T]):
             self._metrics.total_requests += 1
             self._metrics.last_failure_time = time.time()
             self._last_failure_time = self._metrics.last_failure_time
-            
+
             # Update average response time
             self._update_average_response_time(response_time)
-            
+
             # Update request history
             self._update_request_history(False)
-            
+
             # State transition logic
             if self._state == CircuitBreakerState.CLOSED:
                 # Check failure threshold (consecutive failures)
@@ -242,7 +242,7 @@ class BaseCircuitBreaker(CircuitBreakerInterface, Generic[T]):
             elif self._state == CircuitBreakerState.HALF_OPEN:
                 # Any failure in HALF_OPEN state reopens the circuit
                 await self._transition_to_open()
-    
+
     def _update_average_response_time(self, response_time: float) -> None:
         """Update running average of response time"""
         total_requests = self._metrics.total_requests
@@ -252,43 +252,43 @@ class BaseCircuitBreaker(CircuitBreakerInterface, Generic[T]):
             # Exponential moving average
             alpha = 0.1  # Smoothing factor
             self._metrics.average_response_time = (
-                alpha * response_time + 
+                alpha * response_time +
                 (1 - alpha) * self._metrics.average_response_time
             )
-    
+
     def _update_request_history(self, success: bool) -> None:
         """Update sliding window request history"""
         current_time = time.time()
         self._request_history.append((current_time, success))
-        
+
         # Remove old entries outside sliding window
         cutoff_time = current_time - 300  # 5 minutes sliding window
         self._request_history = [
             (timestamp, success) for timestamp, success in self._request_history
             if timestamp > cutoff_time
         ]
-        
+
         # Limit history size for performance
         if len(self._request_history) > self.config.sliding_window_size:
             self._request_history = self._request_history[-self.config.sliding_window_size:]
-    
+
     def _calculate_sliding_window_failure_rate(self) -> float:
         """Calculate failure rate in sliding window"""
         if not self._request_history:
             return 0.0
-        
+
         total_requests = len(self._request_history)
         failed_requests = sum(1 for _, success in self._request_history if not success)
-        
+
         return failed_requests / total_requests
-    
+
     async def _transition_to_open(self) -> None:
         """Transition to OPEN state"""
         if self._state != CircuitBreakerState.OPEN:
             self._state = CircuitBreakerState.OPEN
             self._metrics.state_transitions += 1
             self._success_count = 0  # Reset success count
-    
+
     async def _transition_to_half_open(self) -> None:
         """Transition to HALF_OPEN state"""
         if self._state != CircuitBreakerState.HALF_OPEN:
@@ -296,7 +296,7 @@ class BaseCircuitBreaker(CircuitBreakerInterface, Generic[T]):
             self._metrics.state_transitions += 1
             self._success_count = 0  # Reset success count for testing
             self._failure_count = 0  # Reset failure count for fresh start
-    
+
     async def _transition_to_closed(self) -> None:
         """Transition to CLOSED state"""
         if self._state != CircuitBreakerState.CLOSED:
@@ -304,19 +304,19 @@ class BaseCircuitBreaker(CircuitBreakerInterface, Generic[T]):
             self._metrics.state_transitions += 1
             self._failure_count = 0  # Reset failure count
             self._success_count = 0  # Reset success count
-    
+
     async def is_available(self) -> bool:
         """Check if circuit breaker allows requests"""
         return await self._fast_availability_check()
-    
+
     def get_state(self) -> CircuitBreakerState:
         """Get current circuit breaker state"""
         return self._state
-    
+
     def get_metrics(self) -> CircuitBreakerMetrics:
         """Get circuit breaker metrics"""
         return self._metrics
-    
+
     async def reset(self) -> None:
         """Reset circuit breaker to CLOSED state"""
         async with self._state_lock:
@@ -331,14 +331,14 @@ class BaseCircuitBreaker(CircuitBreakerInterface, Generic[T]):
 class ProviderCircuitBreaker(BaseCircuitBreaker):
     """
     Circuit breaker specifically for voice providers
-    
+
     ISP: Specialized interface for provider-specific circuit breaking
     """
-    
+
     def __init__(self, provider_type: ProviderType, config: Optional[CircuitBreakerConfig] = None):
         super().__init__(f"provider_{provider_type.value}", config)
         self.provider_type = provider_type
-    
+
     @asynccontextmanager
     async def protect(self, operation_name: str = "unknown"):
         """Context manager for protecting provider operations"""
@@ -346,7 +346,7 @@ class ProviderCircuitBreaker(BaseCircuitBreaker):
             raise VoiceServiceError(
                 f"Provider {self.provider_type.value} circuit breaker is OPEN"
             )
-        
+
         start_time = time.perf_counter()
         try:
             yield
@@ -359,18 +359,18 @@ class ProviderCircuitBreaker(BaseCircuitBreaker):
 class CircuitBreakerManager:
     """
     Manager for multiple circuit breakers following DIP principle
-    
+
     DIP: Depends on CircuitBreakerInterface abstraction
     SRP: Manages circuit breaker lifecycle and coordination
     """
-    
+
     def __init__(self):
         self._circuit_breakers: Dict[str, CircuitBreakerInterface] = {}
         self._provider_breakers: Dict[ProviderType, ProviderCircuitBreaker] = {}
         self._global_config = get_config().circuit_breaker if hasattr(get_config(), 'circuit_breaker') else CircuitBreakerConfig()
-    
+
     def register_provider_circuit_breaker(
-        self, 
+        self,
         provider_type: ProviderType,
         config: Optional[CircuitBreakerConfig] = None
     ) -> ProviderCircuitBreaker:
@@ -379,19 +379,19 @@ class CircuitBreakerManager:
         self._provider_breakers[provider_type] = circuit_breaker
         self._circuit_breakers[f"provider_{provider_type.value}"] = circuit_breaker
         return circuit_breaker
-    
+
     def get_provider_circuit_breaker(self, provider_type: ProviderType) -> Optional[ProviderCircuitBreaker]:
         """Get circuit breaker for a provider"""
         return self._provider_breakers.get(provider_type)
-    
+
     def register_circuit_breaker(self, name: str, circuit_breaker: CircuitBreakerInterface) -> None:
         """Register a custom circuit breaker"""
         self._circuit_breakers[name] = circuit_breaker
-    
+
     def get_circuit_breaker(self, name: str) -> Optional[CircuitBreakerInterface]:
         """Get circuit breaker by name"""
         return self._circuit_breakers.get(name)
-    
+
     async def get_all_available_providers(self) -> List[ProviderType]:
         """Get list of providers with available circuit breakers"""
         available_providers = []
@@ -399,11 +399,11 @@ class CircuitBreakerManager:
             if await circuit_breaker.is_available():
                 available_providers.append(provider_type)
         return available_providers
-    
+
     async def get_system_health(self) -> Dict[str, Dict[str, Any]]:
         """Get health status of all circuit breakers"""
         health_status = {}
-        
+
         for name, circuit_breaker in self._circuit_breakers.items():
             metrics = circuit_breaker.get_metrics()
             health_status[name] = {
@@ -415,9 +415,9 @@ class CircuitBreakerManager:
                 "average_response_time": metrics.average_response_time,
                 "state_transitions": metrics.state_transitions
             }
-        
+
         return health_status
-    
+
     async def reset_all(self) -> None:
         """Reset all circuit breakers"""
         for circuit_breaker in self._circuit_breakers.values():
@@ -439,7 +439,7 @@ def get_circuit_breaker_manager() -> CircuitBreakerManager:
 async def initialize_provider_circuit_breakers() -> None:
     """Initialize circuit breakers for all voice providers"""
     manager = get_circuit_breaker_manager()
-    
+
     # Initialize circuit breakers for all provider types
     for provider_type in ProviderType:
         manager.register_provider_circuit_breaker(provider_type)
@@ -452,11 +452,11 @@ def circuit_breaker_protect(provider_type: ProviderType):
         async def wrapper(*args, **kwargs):
             manager = get_circuit_breaker_manager()
             circuit_breaker = manager.get_provider_circuit_breaker(provider_type)
-            
+
             if circuit_breaker is None:
                 # No circuit breaker configured, execute directly
                 return await func(*args, **kwargs)
-            
+
             return await circuit_breaker.call(func, *args, **kwargs)
         return wrapper
     return decorator

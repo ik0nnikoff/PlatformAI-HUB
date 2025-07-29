@@ -5,7 +5,7 @@ Modular voice orchestration with specialized managers following SOLID principles
 
 from .types import (
     IProviderManager,
-    ISTTManager, 
+    ISTTManager,
     ITTSManager,
     IOrchestratorManager
 )
@@ -19,16 +19,16 @@ from .base_orchestrator import VoiceServiceOrchestrator
 __all__ = [
     # Interfaces
     "IProviderManager",
-    "ISTTManager", 
+    "ISTTManager",
     "ITTSManager",
     "IOrchestratorManager",
-    
+
     # Implementations
     "VoiceProviderManager",
-    "VoiceSTTManager", 
+    "VoiceSTTManager",
     "VoiceTTSManager",
     "VoiceOrchestratorManager",
-    
+
     # Main Orchestrator
     "VoiceServiceOrchestrator"
 ]

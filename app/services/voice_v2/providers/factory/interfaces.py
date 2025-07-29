@@ -20,35 +20,35 @@ class IEnhancedProviderFactory(ABC):
     Implements Interface Segregation Principle - comprehensive interface для advanced factory operations.
     Follows LSP - all implementations должны быть fully substitutable.
     """
-    
+
     @abstractmethod
     async def create_provider(
-        self, 
-        provider_name: str, 
+        self,
+        provider_name: str,
         config: Dict[str, Any]
     ) -> Union["BaseSTTProvider", "BaseTTSProvider"]:
         """Create provider instance with enhanced error handling"""
         raise NotImplementedError
-    
+
     @abstractmethod
     def register_provider(self, provider_info: "ProviderInfo") -> None:
         """Register new provider in registry"""
         raise NotImplementedError
-    
+
     @abstractmethod
     def get_available_providers(
-        self, 
+        self,
         category: Optional[ProviderCategory] = None,
         enabled_only: bool = True
     ) -> List["ProviderInfo"]:
         """Get list of available providers with filtering"""
         raise NotImplementedError
-    
+
     @abstractmethod
     async def health_check(self, provider_name: Optional[str] = None) -> Dict[str, "ProviderHealthInfo"]:
         """Enhanced provider health check"""
         raise NotImplementedError
-    
+
     @abstractmethod
     def get_provider_info(self, provider_name: str) -> Optional["ProviderInfo"]:
         """Get provider metadata"""

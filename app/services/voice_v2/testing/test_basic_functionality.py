@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 import sys
 import os
 
-# Add the project root to Python path  
+# Add the project root to Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..')))
 
 from app.services.voice_v2.providers.stt.models import (
@@ -32,34 +32,34 @@ def temp_audio_file():
 
 class TestBasicFunctionality:
     """Basic functionality tests"""
-    
+
     def test_stt_request_creation(self, temp_audio_file):
         """Test STTRequest creation with valid file"""
         request = STTRequest(
             audio_file_path=temp_audio_file,
             language="en-US"
         )
-        
+
         assert str(request.audio_file_path) == temp_audio_file
         assert request.language == "en-US"
         assert request.quality == STTQuality.STANDARD  # default value
-    
+
     def test_stt_response_creation(self):
         """Test STTResult creation"""
         result = STTResult(
-            text="Test transcription", 
+            text="Test transcription",
             confidence=0.95,
             language_detected="en-US",
             processing_time=1.5,
             word_count=2
         )
-        
+
         assert result.text == "Test transcription"
         assert result.confidence == 0.95
         assert result.language_detected == "en-US"
         assert result.processing_time == 1.5
         assert result.word_count == 2
-    
+
     def test_provider_capabilities_creation(self):
         """Test STTCapabilities creation"""
         capabilities = STTCapabilities(
@@ -71,13 +71,13 @@ class TestBasicFunctionality:
             supports_quality_levels=[STTQuality.STANDARD, STTQuality.HIGH],
             supports_language_detection=True
         )
-        
+
         assert capabilities.provider_type == ProviderType.OPENAI
         assert AudioFormat.WAV in capabilities.supported_formats
         assert "en-US" in capabilities.supported_languages
         assert capabilities.max_file_size_mb == 100.0
         assert capabilities.supports_language_detection is True
-    
+
     @pytest.mark.asyncio
     async def test_mock_provider_interface(self):
         """Test mock provider interface"""
@@ -90,15 +90,15 @@ class TestBasicFunctionality:
             processing_time=1.0,
             word_count=2
         )
-        
+
         # Test mock call
         request = STTRequest(
             audio_file_path="/tmp/test.wav",
             language="en-US"
         )
-        
+
         result = await mock_provider.transcribe_audio(request)
-        
+
         assert result.text == "Mock transcription"
         assert result.confidence == 0.95
         assert result.language_detected == "en-US"

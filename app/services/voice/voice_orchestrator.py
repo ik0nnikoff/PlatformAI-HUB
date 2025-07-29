@@ -842,7 +842,7 @@ class VoiceServiceOrchestrator(VoiceConfigMixin):
         """
         import hashlib
         cache_data = f"{file_info.size_bytes}:{file_info.mime_type}:{voice_settings.providers[0].provider.value if voice_settings.providers else 'none'}"
-        cache_hash = hashlib.md5(cache_data.encode()).hexdigest()
+        cache_hash = hashlib.sha256(cache_data.encode()).hexdigest()
         return f"stt_cache:{cache_hash}"
 
     async def _get_cached_stt_result(self, cache_key: str) -> Optional[VoiceProcessingResult]:

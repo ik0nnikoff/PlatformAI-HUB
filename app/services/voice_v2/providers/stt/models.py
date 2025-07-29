@@ -16,7 +16,7 @@ from ...core.interfaces import ProviderType, AudioFormat
 class STTQuality(Enum):
     """STT quality levels for provider selection."""
     LOW = "low"
-    STANDARD = "standard" 
+    STANDARD = "standard"
     HIGH = "high"
     PREMIUM = "premium"
 

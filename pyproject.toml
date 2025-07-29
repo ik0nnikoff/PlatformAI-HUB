@@ -52,6 +52,11 @@ dependencies = [
     "anthropic>=0.57.1",
     "pillow>=11.1.0",
     "aiohttp>=3.12.0",
+    # Security fixes for CVEs
+    "h11>=0.16.0",
+    "jupyter-core>=5.8.1", 
+    "protobuf>=5.29.5",
+    "tornado>=6.5",
 ]
 
 [tool.uv.sources]
@@ -60,7 +65,7 @@ dependencies = [
 # my-private-repo = { url = "https://my-private-repo.example.com/simple" }
 
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=65.5.1"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

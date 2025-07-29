@@ -19,18 +19,18 @@ logger = logging.getLogger(__name__)
 class VoiceProviderManager(IProviderManager):
     """
     Manages voice provider access and health checks
-    
+
     Responsibilities:
     - Provider instance creation and caching
-    - Enhanced Factory integration  
+    - Enhanced Factory integration
     - Legacy provider fallback
     - Provider health monitoring
     """
-    
+
     def __init__(
         self,
         stt_providers: Optional[Dict[ProviderType, FullSTTProvider]] = None,
-        tts_providers: Optional[Dict[ProviderType, FullTTSProvider]] = None, 
+        tts_providers: Optional[Dict[ProviderType, FullTTSProvider]] = None,
         enhanced_factory: Optional[EnhancedVoiceProviderFactory] = None,
         config: Optional[VoiceConfig] = None
     ):
@@ -38,11 +38,11 @@ class VoiceProviderManager(IProviderManager):
         self._tts_providers = tts_providers or {}
         self._enhanced_factory = enhanced_factory
         self._config = config
-        
+
         # Enhanced Factory caches
         self._factory_stt_cache: Dict[str, FullSTTProvider] = {}
         self._factory_tts_cache: Dict[str, FullTTSProvider] = {}
-        
+
     async def get_stt_provider(self, provider_name: str) -> Optional[FullSTTProvider]:
         """
         Get STT provider using Enhanced Factory или legacy providers
@@ -158,7 +158,7 @@ class VoiceProviderManager(IProviderManager):
         """Convert ProviderType enum to string name"""
         type_mapping = {
             ProviderType.OPENAI: "openai",
-            ProviderType.GOOGLE: "google", 
+            ProviderType.GOOGLE: "google",
             ProviderType.YANDEX: "yandex"
         }
         return type_mapping.get(provider_type, "unknown")

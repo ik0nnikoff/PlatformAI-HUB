@@ -1,7 +1,7 @@
 """
 Voice_v2 - Next Generation Voice Processing System
 
-A high-performance, SOLID-compliant voice processing system designed for 
+A high-performance, SOLID-compliant voice processing system designed for
 LangGraph integration with 30-46% performance improvement over reference.
 
 Key Features:
@@ -18,14 +18,14 @@ Architecture:
 
 Usage:
     from app.services.voice_v2 import VoiceOrchestrator
-    
+
     orchestrator = VoiceOrchestrator()
     await orchestrator.initialize()
-    
+
     # STT
     result = await orchestrator.transcribe_audio(audio_data)
-    
-    # TTS  
+
+    # TTS
     audio_url = await orchestrator.synthesize_speech(text)
 """
 
@@ -47,13 +47,13 @@ from .core.config import VoiceConfig
 __all__ = [
     # Main orchestrator
     "VoiceServiceOrchestrator",
-    
+
     # Exceptions
     "VoiceServiceError",
-    "VoiceServiceTimeout", 
+    "VoiceServiceTimeout",
     "VoiceProviderError",
     "VoiceConfigurationError",
-    
+
     # Config
     "VoiceConfig",
 ]

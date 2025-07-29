@@ -20,21 +20,21 @@ class ProviderHealthInfo:
     consecutive_failures: int = 0
     last_error: Optional[str] = None
     response_time_avg: float = 0.0
-    
+
     def record_success(self, response_time: float) -> None:
         """Record successful operation"""
         self.status = ProviderStatus.HEALTHY
         self.last_check = datetime.now()
         self.consecutive_failures = 0
         self.response_time_avg = (self.response_time_avg + response_time) / 2
-    
+
     def record_failure(self, error: str) -> None:
         """Record failed operation"""
         self.failure_count += 1
         self.consecutive_failures += 1
         self.last_error = error
         self.last_check = datetime.now()
-        
+
         # Update status based on consecutive failures
         if self.consecutive_failures >= 5:
             self.status = ProviderStatus.UNHEALTHY
@@ -60,7 +60,7 @@ class ProviderInfo:
     priority: int = 100  # Lower number = higher priority
     enabled: bool = True
     health_info: ProviderHealthInfo = field(default_factory=ProviderHealthInfo)
-    
+
     def __post_init__(self):
         """Validate provider info after initialization"""
         if not self.name:

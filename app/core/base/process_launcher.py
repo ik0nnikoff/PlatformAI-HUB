@@ -2,7 +2,7 @@ import asyncio
 import subprocess
 import logging
 import shlex
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any, Union
 import os
 
 logger = logging.getLogger(__name__)
@@ -94,6 +94,11 @@ class ProcessLauncher:
 
         # Преобразование команды в строку для логирования, если это список
         command_str = shlex.join(command) if isinstance(command, list) else command
+
+        # Security: Input validation для предотвращения command injection
+        if not self._validate_command_security(command):
+            logger.error(f"[{process_id}] Security validation failed for command: {command_str}")
+            return None, None, None
 
         logger.debug(f"[{process_id}] Launching process: {command_str}")
         logger.debug(f"[{process_id}] Environment: {effective_env}")
@@ -244,6 +249,77 @@ class ProcessLauncher:
                 return -3, stdout, stderr # -3 означает ошибку ожидания
 
         return process.returncode if process.returncode is not None else -4, stdout, stderr # -4 если код все еще None
+
+    def _validate_command_security(self, command: Union[str, List[str]]) -> bool:
+        """
+        Security validation для предотвращения command injection.
+        
+        Args:
+            command: Команда для валидации
+            
+        Returns:
+            bool: True если команда безопасна, False если обнаружена угроза
+        """
+        import re
+        from pathlib import Path
+        
+        # Конвертируем в список для унифицированной проверки
+        if isinstance(command, str):
+            # Простое разделение - для более сложных случаев используйте shlex.split()
+            command_parts = command.split()
+        else:
+            command_parts = command
+            
+        if not command_parts:
+            logger.warning("Empty command provided for security validation")
+            return False
+            
+        executable = command_parts[0]
+        
+        # 1. Проверка на опасные символы в команде
+        dangerous_chars = [';', '&', '|', '`', '$', '<', '>', '(', ')', '{', '}']
+        command_str = ' '.join(command_parts)
+        
+        for char in dangerous_chars:
+            if char in command_str:
+                logger.warning(f"Dangerous character '{char}' found in command: {command_str}")
+                return False
+        
+        # 2. Проверка на path traversal
+        if '..' in command_str or '~' in command_str:
+            logger.warning(f"Path traversal attempt detected in command: {command_str}")
+            return False
+            
+        # 3. Whitelist разрешенных исполняемых файлов (базовый набор)
+        allowed_executables = {
+            'python', 'python3', 'node', 'npm', 'ls', 'cat', 'grep', 'awk', 'sed',
+            'git', 'curl', 'wget', 'tar', 'gzip', 'zip', 'unzip', 'cp', 'mv', 'rm',
+            'mkdir', 'touch', 'echo', 'which', 'whereis', 'find', 'sort', 'wc'
+        }
+        
+        # Проверяем базовое имя исполняемого файла
+        executable_name = Path(executable).name
+        if executable_name not in allowed_executables:
+            # Разрешаем полные пути к python/node если они находятся в стандартных местах
+            if any(python_name in executable_name for python_name in ['python', 'python3']):
+                if any(safe_path in executable for safe_path in ['/usr/bin/', '/usr/local/bin/', '.venv/', 'venv/']):
+                    return True
+            elif 'node' in executable_name:
+                if any(safe_path in executable for safe_path in ['/usr/bin/', '/usr/local/bin/', '/opt/']):
+                    return True
+                    
+            logger.warning(f"Executable '{executable}' not in whitelist. Command: {command_str}")
+            return False
+            
+        # 4. Проверка аргументов на инъекции
+        for arg in command_parts[1:]:
+            # Проверка на попытки выполнения команд через аргументы
+            if re.search(r'[\$`]|\$\(|\${', arg):
+                logger.warning(f"Command substitution detected in argument: {arg}")
+                return False
+                
+        logger.debug(f"Command passed security validation: {command_str}")
+        return True
 
 # Пример использования:
 async def example_main():

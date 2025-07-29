@@ -11,21 +11,21 @@ from ..schemas import STTRequest, TTSRequest, STTResponse, TTSResponse, Provider
 
 class IProviderManager(ABC):
     """Interface for provider management operations"""
-    
+
     @abstractmethod
     async def get_stt_provider(self, provider_name: str) -> Optional[FullSTTProvider]:
         """Get STT provider by name"""
         raise NotImplementedError
-    
-    @abstractmethod  
+
+    @abstractmethod
     async def get_tts_provider(self, provider_name: str) -> Optional[FullTTSProvider]:
         """Get TTS provider by name"""
         raise NotImplementedError
-    
+
     @abstractmethod
     async def health_check_provider(
-        self, 
-        provider_name: str, 
+        self,
+        provider_name: str,
         provider_type: str
     ) -> Dict[str, Any]:
         """Check provider health"""
@@ -34,7 +34,7 @@ class IProviderManager(ABC):
 
 class ISTTManager(ABC):
     """Interface for STT operations"""
-    
+
     @abstractmethod
     async def transcribe_audio(self, request: STTRequest) -> STTResponse:
         """Transcribe audio to text"""
@@ -43,7 +43,7 @@ class ISTTManager(ABC):
 
 class ITTSManager(ABC):
     """Interface for TTS operations"""
-    
+
     @abstractmethod
     async def synthesize_speech(self, request: TTSRequest) -> TTSResponse:
         """Synthesize text to speech"""
@@ -52,21 +52,21 @@ class ITTSManager(ABC):
 
 class IOrchestratorManager(ABC):
     """Interface for orchestrator core operations"""
-    
+
     @abstractmethod
     async def initialize(self) -> None:
         """Initialize orchestrator"""
         raise NotImplementedError
-    
+
     @abstractmethod
     async def cleanup(self) -> None:
         """Cleanup orchestrator resources"""
         raise NotImplementedError
-    
+
     @abstractmethod
     async def get_provider_capabilities(
-        self, 
-        provider_name: str, 
+        self,
+        provider_name: str,
         provider_type: str
     ) -> ProviderCapabilities:
         """Get provider capabilities"""

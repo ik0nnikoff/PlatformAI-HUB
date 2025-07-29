@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 class VoiceOrchestratorManager(IOrchestratorManager):
     """
     Main orchestrator manager coordinating voice operations
-    
+
     Delegates responsibilities to specialized managers:
     - VoiceProviderManager: Provider access and circuit breaker
     - VoiceSTTManager: STT operations with fallback
@@ -43,19 +43,19 @@ class VoiceOrchestratorManager(IOrchestratorManager):
     ):
         """Initialize orchestrator manager"""
         logger.debug("Initializing VoiceOrchestratorManager")
-        
+
         # Core dependencies
         self._cache_manager = cache_manager
         self._file_manager = file_manager
         self._voice_config = config or get_config()
         self._initialized = False
-        
+
         # Initialize provider system (Enhanced Factory or Legacy)
         self._initialize_provider_system(stt_providers, tts_providers, enhanced_factory)
-        
+
         # Initialize state tracking
         self._initialize_state_tracking()
-        
+
         # Initialize specialized managers
         self._initialize_managers()
 
@@ -68,11 +68,11 @@ class VoiceOrchestratorManager(IOrchestratorManager):
         """Initialize provider system (Enhanced Factory or Legacy)"""
         # Enhanced Factory Mode (recommended)
         self._enhanced_factory = enhanced_factory
-        
-        # Legacy mode support (backward compatibility) 
+
+        # Legacy mode support (backward compatibility)
         self._stt_providers = stt_providers or {}
         self._tts_providers = tts_providers or {}
-        
+
         # Enhanced Factory provider cache
         self._factory_stt_cache: Dict[str, FullSTTProvider] = {}
         self._factory_tts_cache: Dict[str, FullTTSProvider] = {}
@@ -82,7 +82,7 @@ class VoiceOrchestratorManager(IOrchestratorManager):
         # Circuit breaker state
         self._provider_errors: Dict[ProviderType, int] = {}
         self._provider_disabled_until: Dict[ProviderType, float] = {}
-        
+
         # Performance tracking
         self._operation_count = 0
         self._total_processing_time = 0.0
@@ -96,7 +96,7 @@ class VoiceOrchestratorManager(IOrchestratorManager):
             enhanced_factory=self._enhanced_factory,
             config=self._voice_config
         )
-        
+
         # Create STT manager
         self._stt_manager = VoiceSTTManager(
             provider_manager=self._provider_manager,
@@ -104,7 +104,7 @@ class VoiceOrchestratorManager(IOrchestratorManager):
             metrics_collector=None,  # Will be set during initialization
             connection_manager=None   # Will be set during initialization
         )
-        
+
         # Create TTS manager
         self._tts_manager = VoiceTTSManager(
             provider_manager=self._provider_manager,
@@ -157,20 +157,20 @@ class VoiceOrchestratorManager(IOrchestratorManager):
             return
 
         logger.info("Initializing VoiceOrchestratorManager")
-        
+
         try:
             # Initialize provider manager
             await self._provider_manager.initialize()
-            
+
             # Initialize STT manager
             await self._stt_manager.initialize()
-            
+
             # Initialize TTS manager
             await self._tts_manager.initialize()
-            
+
             self._initialized = True
             logger.info("VoiceOrchestratorManager initialized successfully")
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize VoiceOrchestratorManager: {e}")
             await self.cleanup()
@@ -179,21 +179,21 @@ class VoiceOrchestratorManager(IOrchestratorManager):
     async def cleanup(self) -> None:
         """Cleanup orchestrator manager and all sub-managers"""
         logger.info("Cleaning up VoiceOrchestratorManager")
-        
+
         try:
             # Cleanup managers
             if hasattr(self, '_tts_manager'):
                 await self._tts_manager.cleanup()
-                
+
             if hasattr(self, '_stt_manager'):
                 await self._stt_manager.cleanup()
-                
+
             if hasattr(self, '_provider_manager'):
                 await self._provider_manager.cleanup()
-                
+
             self._initialized = False
             logger.info("VoiceOrchestratorManager cleanup completed")
-            
+
         except Exception as e:
             logger.error(f"Error during VoiceOrchestratorManager cleanup: {e}")
 
@@ -209,7 +209,7 @@ class VoiceOrchestratorManager(IOrchestratorManager):
         """
         if not self._initialized:
             raise VoiceServiceError("Orchestrator Manager not initialized")
-            
+
         return await self._stt_manager.transcribe_audio(request)
 
     async def synthesize_speech(self, request: TTSRequest) -> TTSResponse:
@@ -224,7 +224,7 @@ class VoiceOrchestratorManager(IOrchestratorManager):
         """
         if not self._initialized:
             raise VoiceServiceError("Orchestrator Manager not initialized")
-            
+
         return await self._tts_manager.synthesize_speech(request)
 
     async def get_health_status(self) -> dict:
@@ -240,13 +240,13 @@ class VoiceOrchestratorManager(IOrchestratorManager):
             provider_health = await self._provider_manager.get_health_status()
             stt_health = await self._stt_manager.get_health_status()
             tts_health = await self._tts_manager.get_health_status()
-            
+
             return {
                 "status": "healthy",
                 "initialized": self._initialized,
                 "operation_count": self._operation_count,
                 "average_processing_time": (
-                    self._total_processing_time / self._operation_count 
+                    self._total_processing_time / self._operation_count
                     if self._operation_count > 0 else 0
                 ),
                 "managers": {
@@ -270,7 +270,7 @@ class VoiceOrchestratorManager(IOrchestratorManager):
             "total_operations": self._operation_count,
             "total_processing_time": self._total_processing_time,
             "average_processing_time": (
-                self._total_processing_time / self._operation_count 
+                self._total_processing_time / self._operation_count
                 if self._operation_count > 0 else 0
             )
         }

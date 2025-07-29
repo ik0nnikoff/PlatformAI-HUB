@@ -20,7 +20,7 @@ from .exceptions import (
 __all__ = [
     # Exceptions
     "VoiceServiceError",
-    "VoiceServiceTimeout", 
+    "VoiceServiceTimeout",
     "VoiceProviderError",
     "VoiceConfigurationError",
     "create_voice_error",

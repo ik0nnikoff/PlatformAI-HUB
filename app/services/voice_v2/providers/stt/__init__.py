@@ -12,11 +12,11 @@ from .yandex_stt import YandexSTTProvider
 
 __all__ = [
     "BaseSTTProvider",
-    "STTRequest", 
+    "STTRequest",
     "STTResult",
     "STTCapabilities",
     "STTQuality",
     "OpenAISTTProvider",
-    "GoogleSTTProvider", 
+    "GoogleSTTProvider",
     "YandexSTTProvider"
 ]

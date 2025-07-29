@@ -25,13 +25,13 @@ logger = logging.getLogger(__name__)
 class VoiceServiceOrchestrator:
     """
     Main voice service orchestrator
-    
+
     Coordinates voice operations using specialized managers:
     - VoiceProviderManager: Provider access and circuit breaker
     - VoiceOperationManager: Performance tracking
     - VoiceFileManager: File operations and storage
     """
-    
+
     def __init__(
         self,
         stt_providers: Optional[Dict[ProviderType, FullSTTProvider]] = None,
@@ -43,7 +43,7 @@ class VoiceServiceOrchestrator:
     ):
         """
         Initialize orchestrator with dependencies
-        
+
         Args:
             stt_providers: Dictionary of STT providers by type (legacy mode)
             tts_providers: Dictionary of TTS providers by type (legacy mode)
@@ -53,20 +53,20 @@ class VoiceServiceOrchestrator:
             enhanced_factory: Enhanced factory for dynamic provider creation (recommended)
         """
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
-        
+
         # Initialize core components
         self._initialize_core_dependencies(cache_manager, file_manager, config)
         self._initialize_provider_system(stt_providers, tts_providers, enhanced_factory)
         self._initialize_state_tracking()
-        
+
         # Log initialization mode
         mode = "Enhanced Factory" if enhanced_factory else "Legacy"
         logger.info(f"Orchestrator initialized with {mode} mode")
-    
+
     def _initialize_core_dependencies(
         self,
         cache_manager: Optional[CacheInterface],
-        file_manager: Optional[FileManagerInterface], 
+        file_manager: Optional[FileManagerInterface],
         config: Optional[VoiceConfig]
     ) -> None:
         """Initialize core dependencies"""
@@ -74,7 +74,7 @@ class VoiceServiceOrchestrator:
         self._file_manager = file_manager
         self._voice_config = config or get_config()
         self._initialized = False
-    
+
     def _initialize_provider_system(
         self,
         stt_providers: Optional[Dict[ProviderType, FullSTTProvider]],
@@ -84,21 +84,21 @@ class VoiceServiceOrchestrator:
         """Initialize provider system (Enhanced Factory or Legacy)"""
         # Enhanced Factory Mode (recommended)
         self._enhanced_factory = enhanced_factory
-        
-        # Legacy mode support (backward compatibility) 
+
+        # Legacy mode support (backward compatibility)
         self._stt_providers = stt_providers or {}
         self._tts_providers = tts_providers or {}
-        
+
         # Enhanced Factory provider cache
         self._factory_stt_cache: Dict[str, FullSTTProvider] = {}
         self._factory_tts_cache: Dict[str, FullTTSProvider] = {}
-    
+
     def _initialize_state_tracking(self) -> None:
         """Initialize state and performance tracking"""
         # Circuit breaker state
         self._provider_errors: Dict[ProviderType, int] = {}
         self._provider_disabled_until: Dict[ProviderType, float] = {}
-        
+
         # Performance tracking
         self._operation_count = 0
         self._total_processing_time = 0.0
@@ -106,28 +106,28 @@ class VoiceServiceOrchestrator:
     async def initialize(self) -> None:
         """
         Initialize the orchestrator
-        
+
         Sets up providers and ensures all dependencies are ready.
         This should be called before using any voice operations.
         """
         if self._initialized:
             return
-            
+
         try:
             # Initialize cache if provided
             if self._cache_manager:
                 await self._cache_manager.initialize()
                 logger.info("Cache manager initialized")
-            
+
             # Validate providers
             self._validate_providers()
-            
+
             # Perform health checks on providers
             await self._perform_health_checks()
-            
+
             self._initialized = True
             logger.info("Voice service orchestrator initialized successfully")
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize orchestrator: {e}", exc_info=True)
             raise VoiceServiceError(f"Orchestrator initialization failed: {e}") from e
@@ -163,8 +163,8 @@ class VoiceServiceOrchestrator:
                         logger.warning(f"STT provider {provider_type} failed health check")
                 except Exception as e:
                     logger.warning(f"STT provider {provider_type} health check error: {e}")
-        
-        # Check TTS providers  
+
+        # Check TTS providers
         for provider_type, provider in self._tts_providers.items():
             if hasattr(provider, 'health_check'):
                 try:
@@ -216,17 +216,17 @@ class VoiceServiceOrchestrator:
         # This is a compatibility layer - for now use legacy implementation
         if not self._initialized:
             raise VoiceServiceError("Orchestrator not initialized")
-        
+
         # TODO: Integrate with modular VoiceSTTManager
         # For now, provide basic implementation
         raise NotImplementedError("STT integration with modular managers pending")
 
     async def synthesize_speech(self, request: TTSRequest) -> TTSResponse:
         """Delegate to modular TTS manager when available"""
-        # This is a compatibility layer - for now use legacy implementation  
+        # This is a compatibility layer - for now use legacy implementation
         if not self._initialized:
             raise VoiceServiceError("Orchestrator not initialized")
-        
+
         # TODO: Integrate with modular VoiceTTSManager
         # For now, provide basic implementation
         raise NotImplementedError("TTS integration with modular managers pending")

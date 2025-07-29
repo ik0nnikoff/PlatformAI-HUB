@@ -6,7 +6,7 @@ Enhanced Voice V2 Provider Factory - Модульная архитектура
 
 Модульная структура:
 - factory/types.py: Enums и базовые типы (ProviderCategory, ProviderType, ProviderStatus)
-- factory/models.py: Dataclass модели (ProviderInfo, ProviderHealthInfo)  
+- factory/models.py: Dataclass модели (ProviderInfo, ProviderHealthInfo)
 - factory/interfaces.py: Абстрактные интерфейсы (IEnhancedProviderFactory)
 - factory/factory.py: Основная реализация (EnhancedVoiceProviderFactory)
 
@@ -21,16 +21,16 @@ Enhanced Voice V2 Provider Factory - Модульная архитектура
 from .factory import (
     # Core factory implementation
     EnhancedVoiceProviderFactory,
-    
+
     # Type definitions
     ProviderCategory,
-    ProviderType, 
+    ProviderType,
     ProviderStatus,
-    
+
     # Data models
     ProviderInfo,
     ProviderHealthInfo,
-    
+
     # Interfaces
     IEnhancedProviderFactory,
 )
@@ -40,7 +40,7 @@ __all__ = [
     "EnhancedVoiceProviderFactory",
     "ProviderCategory",
     "ProviderType",
-    "ProviderStatus", 
+    "ProviderStatus",
     "ProviderInfo",
     "ProviderHealthInfo",
     "IEnhancedProviderFactory",

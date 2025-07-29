@@ -25,15 +25,15 @@ __all__ = [
     # Main orchestrator classes
     "VoiceServiceOrchestrator",         # Main legacy-compatible orchestrator
     "VoiceOrchestratorManager",         # New modular orchestrator manager
-    
+
     # Specialized managers
     "VoiceProviderManager",             # Provider management
     "VoiceSTTManager",                  # STT operations
     "VoiceTTSManager",                  # TTS operations
-    
+
     # Interfaces
     "IProviderManager",
-    "ISTTManager", 
+    "ISTTManager",
     "ITTSManager",
     "IOrchestratorManager"
 ]
