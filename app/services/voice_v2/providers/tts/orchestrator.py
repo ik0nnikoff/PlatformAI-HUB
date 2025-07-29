@@ -32,7 +32,6 @@ from .base_tts import BaseTTSProvider
 from .factory import TTSProviderFactory
 from .models import TTSRequest, TTSResult, TTSCapabilities
 from ...core.exceptions import VoiceServiceError, AudioProcessingError, ProviderNotAvailableError
-from ...core.interfaces import ProviderType, AudioFormat
 
 logger = logging.getLogger(__name__)
 
@@ -132,70 +131,105 @@ class TTSOrchestrator:
             AudioProcessingError: If all providers fail
         """
         start_time = time.time()
-        last_error = None
-        attempted_providers = []
         
         try:
             logger.debug(f"Starting TTS synthesis with {len(providers_config)} providers")
             
-            # Update provider health status
-            await self._update_health_status()
+            # Prepare providers for synthesis
+            available_providers = await self._prepare_providers_for_synthesis(providers_config)
             
-            # Get available providers
-            available_providers = await self._get_healthy_providers(providers_config)
+            # Attempt synthesis with fallback
+            result = await self._attempt_synthesis_with_fallback(
+                request, available_providers, start_time
+            )
             
-            if not available_providers:
-                raise ProviderNotAvailableError("No healthy TTS providers available")
-            
-            # Attempt synthesis with each provider
-            for provider in available_providers:
-                try:
-                    logger.debug(f"Attempting TTS synthesis with provider: {provider.provider_name}")
-                    attempted_providers.append(provider.provider_name)
-                    
-                    # Check circuit breaker
-                    if not self._is_provider_allowed(provider.provider_name):
-                        logger.warning(f"Provider {provider.provider_name} blocked by circuit breaker")
-                        continue
-                    
-                    # Attempt synthesis with retry logic
-                    result = await self._synthesize_with_retry(provider, request)
-                    
-                    # Mark provider as healthy on success
-                    await self._mark_provider_healthy(provider.provider_name)
-                    
-                    # Add orchestrator metadata
-                    result.provider_metadata.update({
-                        "orchestrator_info": {
-                            "attempted_providers": attempted_providers,
-                            "successful_provider": provider.provider_name,
-                            "total_orchestration_time": time.time() - start_time,
-                            "fallback_used": len(attempted_providers) > 1
-                        }
-                    })
-                    
-                    logger.info(f"TTS synthesis successful with provider: {provider.provider_name}")
-                    return result
-                    
-                except Exception as e:
-                    last_error = e
-                    await self._mark_provider_unhealthy(provider.provider_name, str(e))
-                    logger.warning(f"Provider {provider.provider_name} failed: {e}")
-                    
-                    # Continue to next provider if fallback is enabled
-                    if not self._fallback_enabled:
-                        break
-            
-            # All providers failed
-            error_msg = f"All TTS providers failed. Attempted: {attempted_providers}. Last error: {last_error}"
-            logger.error(error_msg)
-            raise AudioProcessingError(error_msg)
+            return result
             
         except Exception as e:
             logger.error(f"TTS synthesis failed: {e}", exc_info=True)
             if isinstance(e, (AudioProcessingError, ProviderNotAvailableError)):
                 raise
             raise AudioProcessingError(f"TTS synthesis failed: {e}")
+
+    async def _prepare_providers_for_synthesis(
+        self, providers_config: List[Dict[str, Any]]
+    ) -> List[BaseTTSProvider]:
+        """Prepare and validate providers for synthesis."""
+        # Update provider health status
+        await self._update_health_status()
+        
+        # Get available providers
+        available_providers = await self._get_healthy_providers(providers_config)
+        
+        if not available_providers:
+            raise ProviderNotAvailableError("No healthy TTS providers available")
+            
+        return available_providers
+
+    async def _attempt_synthesis_with_fallback(
+        self,
+        request: TTSRequest,
+        available_providers: List[BaseTTSProvider],
+        start_time: float
+    ) -> TTSResult:
+        """Attempt synthesis with each provider until success or all fail."""
+        last_error = None
+        attempted_providers = []
+        
+        for provider in available_providers:
+            try:
+                logger.debug(f"Attempting TTS synthesis with provider: {provider.provider_name}")
+                attempted_providers.append(provider.provider_name)
+                
+                # Check circuit breaker
+                if not self._is_provider_allowed(provider.provider_name):
+                    logger.warning(f"Provider {provider.provider_name} blocked by circuit breaker")
+                    continue
+                
+                # Attempt synthesis with retry logic
+                result = await self._synthesize_with_retry(provider, request)
+                
+                # Mark provider as healthy on success
+                await self._mark_provider_healthy(provider.provider_name)
+                
+                # Add orchestrator metadata
+                self._add_orchestrator_metadata(
+                    result, attempted_providers, provider.provider_name, start_time
+                )
+                
+                logger.info(f"TTS synthesis successful with provider: {provider.provider_name}")
+                return result
+                
+            except Exception as e:
+                last_error = e
+                await self._mark_provider_unhealthy(provider.provider_name, str(e))
+                logger.warning(f"Provider {provider.provider_name} failed: {e}")
+                
+                # Continue to next provider if fallback is enabled
+                if not self._fallback_enabled:
+                    break
+        
+        # All providers failed
+        error_msg = f"All TTS providers failed. Attempted: {attempted_providers}. Last error: {last_error}"
+        logger.error(error_msg)
+        raise AudioProcessingError(error_msg)
+
+    def _add_orchestrator_metadata(
+        self,
+        result: TTSResult,
+        attempted_providers: List[str],
+        successful_provider: str,
+        start_time: float
+    ) -> None:
+        """Add orchestrator metadata to the result."""
+        result.provider_metadata.update({
+            "orchestrator_info": {
+                "attempted_providers": attempted_providers,
+                "successful_provider": successful_provider,
+                "total_orchestration_time": time.time() - start_time,
+                "fallback_used": len(attempted_providers) > 1
+            }
+        })
     
     async def get_available_providers(self, providers_config: List[Dict[str, Any]]) -> List[BaseTTSProvider]:
         """

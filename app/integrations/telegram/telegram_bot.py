@@ -18,7 +18,7 @@ from app.core.config import settings
 from app.core.base.service_component import ServiceComponentBase
 from app.db.crud import user_crud
 from app.api.schemas.common_schemas import IntegrationType
-from app.services.voice import VoiceServiceOrchestrator
+from app.services.voice_v2.core.orchestrator import VoiceServiceOrchestrator
 from app.services.redis_wrapper import RedisService
 
 
@@ -431,10 +431,16 @@ class TelegramIntegrationBot(ServiceComponentBase):
             
             # Initialize voice services for this agent if not already done
             try:
-                await self.voice_orchestrator.initialize_voice_services_for_agent(self.agent_id, agent_config)
-                self.logger.debug(f"Voice services initialized for agent {self.agent_id}")
+                init_result = await self.voice_orchestrator.initialize_voice_services_for_agent(
+                    agent_config=agent_config
+                )
+                if init_result.get('success', False):
+                    self.logger.debug(f"Voice_v2 services initialized for agent {self.agent_id}")
+                else:
+                    errors = init_result.get('errors', [])
+                    self.logger.warning(f"Voice_v2 services initialization warnings: {'; '.join(errors)}")
             except Exception as e:
-                self.logger.warning(f"Failed to initialize voice services for agent {self.agent_id}: {e}")
+                self.logger.warning(f"Failed to initialize voice_v2 services for agent {self.agent_id}: {e}")
                 # Continue anyway, maybe services are already initialized
             
             # Determine filename based on file type
@@ -834,15 +840,29 @@ class TelegramIntegrationBot(ServiceComponentBase):
         self.dp = Dispatcher()
         self.logger.info(f"Aiogram Bot and Dispatcher initialized.")
 
-        # Initialize voice orchestrator
+        # Initialize voice_v2 orchestrator
         try:
-            redis_service = RedisService()
-            await redis_service.initialize()
-            self.voice_orchestrator = VoiceServiceOrchestrator(redis_service, self.logger)
+            from app.services.voice_v2.providers.enhanced_factory import EnhancedVoiceProviderFactory
+            from app.services.voice_v2.infrastructure.cache import VoiceCache
+            from app.services.voice_v2.infrastructure.minio_manager import MinioFileManager
+            
+            # Create voice_v2 dependencies
+            enhanced_factory = EnhancedVoiceProviderFactory()
+            cache_manager = VoiceCache()
+            await cache_manager.initialize()
+            file_manager = MinioFileManager()
+            await file_manager.initialize()
+            
+            # Create voice_v2 orchestrator
+            self.voice_orchestrator = VoiceServiceOrchestrator(
+                enhanced_factory=enhanced_factory,
+                cache_manager=cache_manager,
+                file_manager=file_manager
+            )
             await self.voice_orchestrator.initialize()
-            self.logger.info("Voice orchestrator initialized for Telegram bot")
+            self.logger.info("Voice_v2 orchestrator initialized for Telegram bot")
         except Exception as e:
-            self.logger.warning(f"Failed to initialize voice orchestrator: {e}")
+            self.logger.warning(f"Failed to initialize voice_v2 orchestrator: {e}")
             # Voice features will be disabled but bot can still work
 
         # Initialize image orchestrator

@@ -17,28 +17,24 @@ SOLID Principles Implementation:
 """
 
 import asyncio
-import io
 import hashlib
 import time
-from pathlib import Path
 from typing import Dict, List, Optional, Any
 import logging
-import aiohttp
 
 from openai import AsyncOpenAI, APIError, APIConnectionError, RateLimitError, AuthenticationError
 
 from app.core.config import settings
 from app.services.voice_v2.core.exceptions import (
-    ProviderNotAvailableError,
     AudioProcessingError,
     VoiceServiceTimeout
 )
 from app.services.voice_v2.providers.tts.base_tts import BaseTTSProvider
 from app.services.voice_v2.providers.tts.models import (
-    TTSRequest, TTSResult, TTSCapabilities, TTSQuality, VoiceGender
+    TTSRequest, TTSResult, TTSCapabilities, TTSQuality
 )
 from app.services.voice_v2.core.interfaces import ProviderType, AudioFormat
-from app.services.voice_v2.utils.validators import ConfigurationValidator
+from app.services.voice_v2.providers.retry_mixin import provider_operation
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +64,8 @@ class OpenAITTSProvider(BaseTTSProvider):
         provider_name: str,
         config: Dict[str, Any],
         priority: int = 1,
-        enabled: bool = True
+        enabled: bool = True,
+        **kwargs
     ):
         """Initialize OpenAI TTS provider with configuration."""
         # Extract configuration first
@@ -79,7 +76,7 @@ class OpenAITTSProvider(BaseTTSProvider):
         self._timeout = config.get("timeout", 30.0)
         
         # Initialize parent with pre-extracted config
-        super().__init__(provider_name, config, priority, enabled)
+        super().__init__(provider_name, config, priority, enabled, **kwargs)
         
         # Retry configuration
         self._base_delay = config.get("base_delay", 1.0)
@@ -178,12 +175,15 @@ class OpenAITTSProvider(BaseTTSProvider):
             self._client = None
         logger.debug("OpenAI TTS client cleaned up")
     
+    @provider_operation("OpenAI TTS Synthesis")
     async def _synthesize_implementation(self, request: TTSRequest) -> TTSResult:
         """
-        Core OpenAI TTS synthesis implementation.
+        Core OpenAI TTS synthesis implementation with ConnectionManager support.
         
-        Single Responsibility: Only synthesis logic
-        Performance patterns from Phase 1.2.3 applied
+        Phase 3.5.2.3 Enhancement:
+        - ConnectionManager integration for enhanced retry logic
+        - Backward compatibility with legacy retry fallback
+        - SOLID principles maintained
         """
         if not self._client:
             await self.initialize()
@@ -191,9 +191,15 @@ class OpenAITTSProvider(BaseTTSProvider):
         # Prepare synthesis parameters
         synthesis_params = self._prepare_synthesis_params(request)
         
-        # Execute synthesis with retry logic from Phase 1.2.3
         start_time = time.time()
-        audio_data = await self._execute_with_retry(synthesis_params)
+        
+        # Use ConnectionManager if available, fallback to legacy retry
+        if self._has_connection_manager():
+            audio_data = await self._perform_synthesis(synthesis_params)
+        else:
+            # Legacy fallback for backward compatibility
+            audio_data = await self._synthesize_with_retry(synthesis_params)
+        
         processing_time = time.time() - start_time
         
         # Upload to MinIO and get URL (following reference system pattern)
@@ -215,6 +221,27 @@ class OpenAITTSProvider(BaseTTSProvider):
                 "audio_size_bytes": len(audio_data)
             }
         )
+
+    async def _perform_synthesis(self, synthesis_params: Dict[str, Any]) -> bytes:
+        """
+        Enhanced synthesis with ConnectionManager integration
+        
+        Phase 3.5.2.3: Uses centralized retry logic from ConnectionManager
+        """
+        return await self._execute_with_connection_manager(
+            operation_name="openai_tts_synthesis",
+            request_func=self._execute_openai_synthesis,
+            synthesis_params=synthesis_params
+        )
+    
+    async def _execute_openai_synthesis(self, synthesis_params: Dict[str, Any]) -> bytes:
+        """
+        Direct OpenAI API call - used by ConnectionManager
+        
+        Single Responsibility: Only API communication
+        """
+        response = await self._client.audio.speech.create(**synthesis_params)
+        return response.content
     
     def _prepare_synthesis_params(self, request: TTSRequest) -> Dict[str, Any]:
         """
@@ -260,18 +287,19 @@ class OpenAITTSProvider(BaseTTSProvider):
         
         return params
     
-    async def _execute_with_retry(self, synthesis_params: Dict[str, Any]) -> bytes:
+    async def _synthesize_with_retry(self, synthesis_params: Dict[str, Any]) -> bytes:
         """
-        Execute synthesis with exponential backoff retry logic.
+        Legacy synthesis with exponential backoff retry logic.
         
-        Implements Phase 1.2.3 performance patterns for error recovery.
+        Phase 3.5.2.3: Preserved for backward compatibility
+        Will be deprecated after ConnectionManager migration is complete
         """
         last_exception = None
         
         for attempt in range(self._max_retries + 1):
             try:
-                response = await self._client.audio.speech.create(**synthesis_params)
-                return response.content
+                # Use direct API call method
+                return await self._execute_openai_synthesis(synthesis_params)
                 
             except RateLimitError as e:
                 last_exception = e

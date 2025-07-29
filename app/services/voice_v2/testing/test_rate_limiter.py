@@ -6,7 +6,6 @@ import pytest
 import pytest_asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
-from dataclasses import asdict
 
 from ..infrastructure.rate_limiter import RedisRateLimiter, RateLimitInfo
 from ..core.exceptions import VoiceServiceError

@@ -5,8 +5,7 @@ Tests for MinioFileManager - voice_v2 infrastructure
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timedelta
-from io import BytesIO
+from datetime import datetime
 
 from ..infrastructure.minio_manager import MinioFileManager
 from ..core.exceptions import VoiceServiceError

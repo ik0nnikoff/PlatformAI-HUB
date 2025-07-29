@@ -14,8 +14,6 @@ Architecture Validation:
 """
 
 import pytest
-import asyncio
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 from typing import Dict, Any
 
@@ -24,8 +22,8 @@ from google.cloud.texttospeech_v1 import types
 
 from app.services.voice_v2.providers.tts.google_tts import GoogleTTSProvider
 from app.services.voice_v2.providers.tts.base_tts import BaseTTSProvider
-from app.services.voice_v2.providers.tts.models import TTSRequest, TTSResult, TTSQuality
-from app.services.voice_v2.core.exceptions import AudioProcessingError, ConfigurationError, VoiceServiceError
+from app.services.voice_v2.providers.tts.models import TTSRequest, TTSQuality
+from app.services.voice_v2.core.exceptions import AudioProcessingError, VoiceServiceError
 from app.services.voice_v2.core.interfaces import ProviderType, AudioFormat
 
 
@@ -113,7 +111,8 @@ class TestGoogleTTSProvider:
         
         # Core implementation is closed for modification
         assert provider._prepare_synthesis_params
-        assert provider._execute_with_retry
+        # New architecture uses _synthesize_with_retry for legacy compatibility
+        assert provider._synthesize_with_retry
     
     def test_solid_isp_interface_segregation(self, provider):
         """Test ISP - Provider should only depend on interfaces it uses."""
@@ -277,7 +276,7 @@ class TestGoogleTTSProvider:
         synthesis_params = {"input": MagicMock(), "voice": MagicMock(), "audio_config": MagicMock()}
         
         with patch('asyncio.sleep') as mock_sleep:
-            result = await provider._execute_with_retry(synthesis_params)
+            result = await provider._synthesize_with_retry(synthesis_params)
             
             assert result == b"success_audio"
             assert mock_sleep.call_count == 2  # Two retries
@@ -297,7 +296,7 @@ class TestGoogleTTSProvider:
         synthesis_params = {"input": MagicMock(), "voice": MagicMock(), "audio_config": MagicMock()}
         
         with pytest.raises(AudioProcessingError, match="Google Cloud authentication failed"):
-            await provider._execute_with_retry(synthesis_params)
+            await provider._synthesize_with_retry(synthesis_params)
         
         # Should only be called once (no retries)
         assert mock_client.synthesize_speech.call_count == 1
@@ -317,7 +316,7 @@ class TestGoogleTTSProvider:
         
         with patch('asyncio.sleep'):
             with pytest.raises(AudioProcessingError, match="Google Cloud API error"):
-                await provider._execute_with_retry(synthesis_params)
+                await provider._synthesize_with_retry(synthesis_params)
         
         # Should be called max_retries + 1 times
         assert mock_client.synthesize_speech.call_count == 2
@@ -471,7 +470,7 @@ class TestGoogleTTSProvider:
         provider = GoogleTTSProvider("google", config, 1, True)
         
         # Should use default values
-        assert provider._voice_name == "en-US-Journey-D"
+        assert provider._voice_name == "en-US-Wavenet-D"
         assert provider._language_code == "en-US"
         assert provider._speaking_rate == 1.0
         assert provider._pitch == 0.0
@@ -486,7 +485,7 @@ class TestGoogleTTSProvider:
         
         # Mock synthesis should trigger initialization
         with patch.object(provider, 'initialize') as mock_init:
-            with patch.object(provider, '_execute_with_retry', return_value=b"audio"):
+            with patch.object(provider, '_synthesize_with_retry', return_value=b"audio"):
                 with patch.object(provider, '_upload_audio_to_storage', return_value="url"):
                     await provider._synthesize_implementation(TTSRequest(text="test"))
                     

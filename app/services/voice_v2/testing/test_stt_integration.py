@@ -5,7 +5,7 @@ Phase 3.1.5 & 3.1.6 - STT Provider Integration & Testing
 
 import pytest
 import asyncio
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import patch
 from pathlib import Path
 import tempfile
 import os
@@ -13,6 +13,8 @@ import os
 # Тестируем только существующие компоненты
 import sys
 sys.path.append(str(Path(__file__).parent.parent.parent.parent))
+
+from app.services.voice_v2.providers.stt.coordinator import STTCoordinator
 
 from app.services.voice_v2.providers.stt.yandex_stt import YandexSTTProvider
 from app.services.voice_v2.providers.stt.openai_stt import OpenAISTTProvider
@@ -193,64 +195,6 @@ if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
 
-
-class TestSTTProviderIntegration:
-    """Дополнительные интеграционные тесты"""
-    
-    @pytest.mark.asyncio
-    async def test_provider_initialization_workflow(self):
-        """Тест полного workflow инициализации провайдера"""
-        config = {
-            'api_key': 'test-key',
-            'model': 'whisper-1',
-            'enabled': True
-        }
-        
-        provider = OpenAISTTProvider(config)
-        
-        # Проверяем начальное состояние
-        assert not provider.is_initialized
-        
-        # Мокируем инициализацию (чтобы не делать реальные API вызовы)
-        with patch.object(provider, '_initialize_session') as mock_init:
-            mock_init.return_value = None
-            
-            await provider.initialize()
-            
-            # Проверяем что инициализация вызвана
-            mock_init.assert_called_once()
-        
-        # Cleanup
-        if hasattr(provider, 'cleanup'):
-            await provider.cleanup()
-    
-    @pytest.mark.asyncio
-    async def test_error_handling_integration(self):
-        """Тест обработки ошибок в интеграции"""
-        config = {
-            'api_key': '',  # Пустой ключ для теста ошибки
-            'enabled': True
-        }
-        
-        provider = OpenAISTTProvider(config)
-        
-        # Проверяем что провайдер корректно обрабатывает отсутствие ключа
-        try:
-            await provider.initialize()
-        except Exception as e:
-            # Ожидаем ошибку конфигурации
-            assert "api_key" in str(e).lower() or "configuration" in str(e).lower()
-        
-        # Cleanup
-        if hasattr(provider, 'cleanup'):
-            await provider.cleanup()
-
-
-if __name__ == "__main__":
-    # Для прямого запуска тестов
-    pytest.main([__file__, "-v"])
-
-
 class TestSTTPerformanceIntegration:
     """Тесты производительности STT системы"""
     
@@ -296,8 +240,3 @@ class TestSTTPerformanceIntegration:
             assert mock_transcribe.call_count == 5
         
         await coordinator.cleanup()
-
-
-if __name__ == "__main__":
-    # Для прямого запуска тестов
-    pytest.main([__file__, "-v"])

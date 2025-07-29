@@ -31,12 +31,12 @@ class HashGenerator:
     @staticmethod
     def generate_audio_hash(audio_data: bytes) -> str:
         """Генерирует MD5 hash для audio data."""
-        return hashlib.md5(audio_data).hexdigest()
+        return hashlib.sha256(audio_data).hexdigest()
     
     @staticmethod
     def generate_text_hash(text: str) -> str:
         """Генерирует MD5 hash для text content."""
-        return hashlib.md5(text.encode('utf-8')).hexdigest()
+        return hashlib.sha256(text.encode('utf-8')).hexdigest()
     
     @staticmethod
     def generate_cache_key(*components: str, separator: str = ":") -> str:

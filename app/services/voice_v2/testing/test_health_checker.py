@@ -18,13 +18,12 @@ import pytest
 import asyncio
 import time
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
 
+from app.services.voice_v2.core.exceptions import VoiceConnectionError
 from app.services.voice_v2.infrastructure.health_checker import (
     HealthStatus,
     HealthCheckResult,
     ProviderHealthStatus,
-    HealthCheckInterface,
     BaseHealthChecker,
     ProviderHealthChecker,
     SystemHealthChecker,
@@ -392,7 +391,7 @@ class TestSystemHealthChecker:
     async def test_system_health_checker_exception(self):
         """Test system health check with exception"""
         async def mock_check():
-            raise ConnectionError("Cannot connect to service")
+            raise VoiceConnectionError("Cannot connect to service")
         
         checker = SystemHealthChecker("database", mock_check)
         result = await checker.check_health()
@@ -716,7 +715,7 @@ class TestErrorScenarios:
         """Test handling of provider API errors"""
         class FailingProviderChecker(ProviderHealthChecker):
             async def _check_openai_health(self) -> HealthCheckResult:
-                raise ConnectionError("API endpoint unreachable")
+                raise VoiceConnectionError("API endpoint unreachable")
         
         checker = FailingProviderChecker("openai", ProviderType.OPENAI)
         result = await checker.check_health()

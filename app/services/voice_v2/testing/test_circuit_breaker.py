@@ -15,8 +15,6 @@ Test coverage:
 import pytest
 import asyncio
 import time
-from unittest.mock import AsyncMock, patch
-from typing import Any
 
 from app.services.voice_v2.infrastructure.circuit_breaker import (
     CircuitBreakerState, CircuitBreakerConfig, CircuitBreakerMetrics,
@@ -111,7 +109,8 @@ class MockAsyncFunction:
         if self.should_fail:
             if self.exception_to_raise:
                 raise self.exception_to_raise
-            raise Exception("Mock function failure")
+            else:
+                raise Exception("Mock function failure")
         
         return f"success_{self.call_count}"
 

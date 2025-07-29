@@ -13,7 +13,6 @@ This module provides comprehensive test coverage for:
 """
 
 import sys
-import os
 from pathlib import Path
 
 # Add the project root to Python path
@@ -22,29 +21,17 @@ sys.path.insert(0, str(project_root))
 
 import pytest
 import asyncio
-import aiohttp
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from typing import Dict, Any, List
-import logging
-import time
+from unittest.mock import Mock, AsyncMock, patch
 
 from app.services.voice_v2.providers.connection_manager import (
     VoiceConnectionManager,
-    ConnectionPool,
-    ProviderHealthChecker,
-    ProviderMetrics
+    ConnectionPool
 )
-from app.services.voice_v2.core.exceptions import (
-    ConnectionError,
-    HealthCheckError,
-    ProviderNotFoundError
-)
-from app.services.voice_v2.core.config import VoiceV2Settings
+from app.services.voice_v2.core.config import VoiceConfig
 
 import pytest
 import asyncio
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from datetime import datetime, timedelta
+from unittest.mock import Mock, AsyncMock, patch
 import aiohttp
 from aiohttp import ClientSession, TCPConnector
 
@@ -54,13 +41,13 @@ from app.services.voice_v2.providers.connection_manager import (
     create_connection_manager
 )
 from app.services.voice_v2.core.exceptions import ConnectionPoolError
-from app.services.voice_v2.core.config import VoiceV2Settings
+from app.services.voice_v2.core.config import VoiceConfig
 
 
 @pytest.fixture
 def mock_settings():
-    """Mock VoiceV2Settings for testing"""
-    settings = Mock(spec=VoiceV2Settings)
+    """Mock VoiceConfig for testing"""
+    settings = Mock(spec=VoiceConfig)
     settings.redis_url = "redis://localhost:6379"
     return settings
 

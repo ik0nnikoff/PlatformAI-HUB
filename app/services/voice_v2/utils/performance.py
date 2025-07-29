@@ -10,7 +10,6 @@ Performance utilities:
 - time_async_operation: Async operation timing utility
 """
 
-import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Callable, TypeVar

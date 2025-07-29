@@ -86,7 +86,8 @@ class YandexTTSProvider(BaseTTSProvider):
         provider_name: str,
         config: Dict[str, Any],
         priority: int,
-        enabled: bool
+        enabled: bool,
+        **kwargs
     ):
         """
         Initialize Yandex TTS Provider.
@@ -97,7 +98,7 @@ class YandexTTSProvider(BaseTTSProvider):
             priority: Provider priority (lower = higher priority)
             enabled: Whether provider is enabled
         """
-        super().__init__(provider_name, config, priority, enabled)
+        super().__init__(provider_name, config, priority, enabled, **kwargs)
         
         # Yandex SpeechKit Configuration
         self._api_key = config.get("api_key")
@@ -229,8 +230,12 @@ class YandexTTSProvider(BaseTTSProvider):
             # Prepare synthesis parameters
             synthesis_params = self._prepare_synthesis_params(request)
             
-            # Execute synthesis with retry logic
-            audio_data = await self._execute_with_retry(synthesis_params)
+            # Use ConnectionManager if available, fallback to legacy retry
+            if self._has_connection_manager():
+                audio_data = await self._perform_synthesis(synthesis_params)
+            else:
+                # Legacy fallback for backward compatibility
+                audio_data = await self._synthesize_with_retry(synthesis_params)
             
             # Upload audio to storage
             file_path = await self._upload_audio_to_storage(
@@ -274,6 +279,42 @@ class YandexTTSProvider(BaseTTSProvider):
                     "success": False
                 }
             )
+
+    async def _perform_synthesis(self, synthesis_params: Dict[str, Any]) -> bytes:
+        """
+        Enhanced synthesis with ConnectionManager integration
+        
+        Phase 3.5.2.3: Uses centralized retry logic from ConnectionManager
+        """
+        return await self._execute_with_connection_manager(
+            operation_name="yandex_tts_synthesis",
+            request_func=self._execute_yandex_synthesis,
+            synthesis_params=synthesis_params
+        )
+    
+    async def _execute_yandex_synthesis(self, synthesis_params: Dict[str, Any]) -> bytes:
+        """
+        Direct Yandex API call - used by ConnectionManager
+        
+        Single Responsibility: Only API communication
+        """
+        headers = {
+            "Authorization": f"Api-Key {self._api_key}",
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        
+        data = "&".join([f"{k}={v}" for k, v in synthesis_params.items()])
+        
+        async with self._session.post(
+            self.TTS_API_URL,
+            headers=headers,
+            data=data.encode('utf-8')
+        ) as response:
+            if response.status == 200:
+                return await response.read()
+            else:
+                error_text = await response.text()
+                raise VoiceServiceError(f"Yandex TTS API error {response.status}: {error_text}")
 
     async def get_available_voices(self) -> List[Dict[str, Any]]:
         """Get list of available voices with their characteristics."""
@@ -367,15 +408,12 @@ class YandexTTSProvider(BaseTTSProvider):
         logger.debug(f"Prepared synthesis params: {params}")
         return params
 
-    async def _execute_with_retry(self, params: Dict[str, Any]) -> bytes:
+    async def _synthesize_with_retry(self, params: Dict[str, Any]) -> bytes:
         """
-        Execute TTS request with exponential backoff retry logic.
+        Legacy synthesis with exponential backoff retry logic.
         
-        Error handling strategy:
-        - Rate limits: Retry with exponential backoff
-        - Auth errors: Fail immediately, no retry
-        - Network errors: Retry with backoff
-        - Other errors: Retry once, then fail
+        Phase 3.5.2.3: Preserved for backward compatibility
+        Will be deprecated after ConnectionManager migration is complete
         """
         headers = {
             "Authorization": f"Api-Key {self._api_key}",
@@ -386,53 +424,28 @@ class YandexTTSProvider(BaseTTSProvider):
         
         for attempt in range(self.MAX_RETRIES):
             try:
-                async with self._client.post(
-                    self.API_BASE_URL,
-                    headers=headers,
-                    data=params
-                ) as response:
-                    
-                    if response.status == 200:
-                        audio_data = await response.read()
-                        logger.debug(f"Successfully synthesized {len(audio_data)} bytes of audio")
-                        return audio_data
-                    
-                    elif response.status == 401:
-                        # Authentication error - don't retry
-                        error_text = await response.text()
-                        raise AudioProcessingError(f"Yandex TTS authentication failed: {error_text}")
-                    
-                    elif response.status == 429:
-                        # Rate limit - retry with backoff
-                        if attempt < self.MAX_RETRIES - 1:
-                            delay = self.RETRY_DELAYS[attempt]
-                            logger.warning(f"Rate limited, retrying in {delay}s (attempt {attempt + 1})")
-                            await asyncio.sleep(delay)
-                            continue
-                        else:
-                            raise AudioProcessingError("Rate limit exceeded, max retries reached")
-                    
-                    else:
-                        # Other HTTP errors
-                        error_text = await response.text()
-                        error_msg = f"Yandex TTS API error {response.status}: {error_text}"
-                        
-                        if attempt < self.MAX_RETRIES - 1:
-                            delay = self.RETRY_DELAYS[attempt]
-                            logger.warning(f"{error_msg}, retrying in {delay}s")
-                            await asyncio.sleep(delay)
-                            continue
-                        else:
-                            raise AudioProcessingError(error_msg)
-                            
-            except (ClientError, asyncio.TimeoutError) as e:
+                # Use direct API call method
+                return await self._execute_yandex_synthesis(params)
+                
+            except VoiceServiceError as e:
+                # Check for rate limit specifically
+                if "429" in str(e) and attempt < self.MAX_RETRIES - 1:
+                    delay = self.RETRY_DELAYS[attempt]
+                    logger.warning(f"Rate limited, retrying in {delay}s (attempt {attempt + 1})")
+                    await asyncio.sleep(delay)
+                    continue
+                # Re-raise other VoiceServiceErrors
+                if attempt == self.MAX_RETRIES - 1:
+                    raise AudioProcessingError(f"Yandex TTS failed: {e}")
+                
+            except Exception as e:
                 last_exception = e
                 if attempt < self.MAX_RETRIES - 1:
                     delay = self.RETRY_DELAYS[attempt]
-                    logger.warning(f"Network error: {e}, retrying in {delay}s")
+                    logger.warning(f"Unexpected error, retrying in {delay}s (attempt {attempt + 1}): {e}")
                     await asyncio.sleep(delay)
-                else:
-                    raise AudioProcessingError(f"Network error after {self.MAX_RETRIES} attempts: {str(e)}")
+                    continue
+                break
         
         # If we get here, all retries failed
         raise AudioProcessingError(f"TTS synthesis failed after {self.MAX_RETRIES} attempts: {str(last_exception)}")

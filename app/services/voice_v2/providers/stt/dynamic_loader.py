@@ -10,14 +10,13 @@ Dynamic Loading Mechanism для STT провайдеров
 
 import asyncio
 import time
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from enum import Enum
 import logging
 
 from app.services.voice_v2.providers.stt.base_stt import BaseSTTProvider
 from app.services.voice_v2.providers.stt.factory import STTProviderFactory, STTProviderLoader
-from app.services.voice_v2.providers.stt.models import ProviderStatus
 from app.core.logging_config import setup_logger
 
 
@@ -367,7 +366,7 @@ class STTProviderManager:
         import hashlib
         import json
         config_str = json.dumps(config, sort_keys=True)
-        return hashlib.md5(config_str.encode()).hexdigest()
+        return hashlib.sha256(config_str.encode()).hexdigest()
     
     def _record_load_metrics(
         self,

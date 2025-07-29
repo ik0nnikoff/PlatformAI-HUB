@@ -31,7 +31,7 @@ import time
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Dict, List, Optional, Callable, Any, TypeVar, Generic
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from contextlib import asynccontextmanager
 
 from app.services.voice_v2.core.interfaces import ProviderType

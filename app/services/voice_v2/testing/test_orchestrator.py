@@ -12,8 +12,7 @@ Following SOLID testing principles and Phase 1.3.3 strategy.
 
 import pytest
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Dict, List, Optional
+from unittest.mock import AsyncMock, MagicMock
 import time
 import tempfile
 from pathlib import Path
@@ -26,16 +25,16 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 
 from app.services.voice_v2.core.orchestrator import VoiceServiceOrchestrator
 from app.services.voice_v2.core.interfaces import (
-    FullSTTProvider, FullTTSProvider, CacheInterface, 
+    FullSTTProvider, CacheInterface, 
     FileManagerInterface, ProviderType, AudioFormat
 )
 from app.services.voice_v2.core.schemas import (
     STTRequest, TTSRequest, STTResponse, TTSResponse,
-    OperationStatus, ProviderCapabilities, VoiceOperation
+    ProviderCapabilities, VoiceOperation
 )
 from app.services.voice_v2.core.config import VoiceConfig, BaseProviderConfig
 from app.services.voice_v2.core.exceptions import (
-    VoiceServiceError, VoiceProviderError, VoiceServiceTimeout
+    VoiceServiceError, VoiceProviderError
 )
 
 
@@ -43,10 +42,16 @@ from app.services.voice_v2.core.exceptions import (
 def temp_audio_file():
     """Create temporary audio file for testing"""
     with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
-        tmp.write(b"fake audio data")
-        yield tmp.name
+        # Create fake audio data that's large enough to pass validation
+        fake_audio_data = b"RIFF" + b"\x00" * 100 + b"WAVE" + b"\x00" * 1000  # Minimum 1KB of fake WAV data
+        tmp.write(fake_audio_data)
+        tmp.flush()  # Ensure data is written to disk
+        temp_path = tmp.name
+    
+    yield temp_path
+    
     # Cleanup
-    Path(tmp.name).unlink(missing_ok=True)
+    Path(temp_path).unlink(missing_ok=True)
 
 
 @pytest.fixture
@@ -54,12 +59,11 @@ def mock_stt_provider():
     """Mock STT provider"""
     provider = AsyncMock()
     provider.transcribe_audio.return_value = STTResponse(
-        transcribed_text="Test transcription",
+        text="Test transcription",
         confidence=0.95,
         language="en-US",
-        provider_used=ProviderType.OPENAI,
-        processing_time_ms=1500.0,
-        cached=False
+        provider="openai",
+        processing_time=1.5
     )
     provider.health_check.return_value = True
     provider.get_capabilities.return_value = ProviderCapabilities(
@@ -77,33 +81,12 @@ def mock_tts_provider():
     """Mock TTS provider"""
     provider = AsyncMock()
     provider.synthesize_speech.return_value = TTSResponse(
-        audio_url="http://example.com/test_output.wav",
-        audio_format=AudioFormat.WAV,
-        provider_used=ProviderType.OPENAI,
-        processing_time_ms=2000.0,
-        cached=False
-    )
-    provider.health_check.return_value = True
-    provider.get_capabilities.return_value = ProviderCapabilities(
-        provider_type="openai",
-        supports_real_time=False,
-        supported_languages=["en-US", "ru-RU"],
-        max_file_size_mb=50,
-        supported_formats=["wav", "mp3"]
-    )
-    return provider
-
-
-@pytest.fixture
-def mock_tts_provider():
-    """Mock TTS provider"""
-    provider = AsyncMock()
-    provider.synthesize_speech.return_value = TTSResponse(
-        audio_url="http://example.com/test_output.wav",
-        audio_format=AudioFormat.WAV,
-        provider_used=ProviderType.OPENAI,
-        processing_time_ms=2000.0,
-        cached=False
+        audio_data=b"fake_audio_data",
+        format=AudioFormat.WAV,
+        sample_rate=44100,
+        duration=2.0,
+        processing_time=2.0,
+        provider="openai"
     )
     provider.health_check.return_value = True
     provider.get_capabilities.return_value = ProviderCapabilities(
@@ -120,6 +103,7 @@ def mock_tts_provider():
 def mock_cache():
     """Mock cache interface"""
     cache = MagicMock(spec=CacheInterface)
+    cache.initialize = AsyncMock()
     cache.get = AsyncMock(return_value=None)
     cache.set = AsyncMock()
     cache.delete = AsyncMock()
@@ -222,8 +206,12 @@ class TestSTTOperations:
         orchestrator._stt_providers = {ProviderType.OPENAI: mock_stt_provider}
         orchestrator._initialized = True
         
+        # Read audio file as bytes
+        with open(temp_audio_file, 'rb') as f:
+            audio_data = f.read()
+        
         request = STTRequest(
-            audio_file_path=temp_audio_file,
+            audio_data=audio_data,
             language="en-US"
         )
         
@@ -232,8 +220,8 @@ class TestSTTOperations:
         
         # Verify
         assert isinstance(response, STTResponse)
-        assert response.transcribed_text == "Test transcription"
-        assert response.provider_used == ProviderType.OPENAI
+        assert response.text == "Test transcription"
+        assert response.provider == "openai"
         mock_stt_provider.transcribe_audio.assert_called_once()
     
     @pytest.mark.asyncio
@@ -241,20 +229,23 @@ class TestSTTOperations:
         """Test STT with caching"""
         # Setup - cache hit
         cached_response = STTResponse(
-            transcribed_text="Cached transcription",
+            text="Cached transcription",
             confidence=0.98,
             language="en-US", 
-            provider_used=ProviderType.OPENAI,
-            processing_time_ms=100.0,
-            cached=True
+            provider="openai",
+            processing_time=0.1
         )
         mock_cache.get.return_value = cached_response
         
         orchestrator._stt_providers = {ProviderType.OPENAI: mock_stt_provider}
         orchestrator._initialized = True
         
+        # Read audio file as bytes
+        with open(temp_audio_file, 'rb') as f:
+            audio_data = f.read()
+        
         request = STTRequest(
-            audio_file_path=temp_audio_file,
+            audio_data=audio_data,
             language="en-US"
         )
         
@@ -263,8 +254,7 @@ class TestSTTOperations:
         
         # Verify - should return cached result
         assert isinstance(response, STTResponse)
-        assert response.transcribed_text == "Cached transcription"
-        assert response.cached is True
+        assert response.text == "Cached transcription"
         mock_stt_provider.transcribe_audio.assert_not_called()
     
     @pytest.mark.asyncio
@@ -279,12 +269,11 @@ class TestSTTOperations:
         
         success_provider = AsyncMock(spec=FullSTTProvider)
         success_provider.transcribe_audio.return_value = STTResponse(
-            transcribed_text="Fallback transcription",
+            text="Fallback transcription",
             confidence=0.85,
             language="en-US",
-            provider_used=ProviderType.GOOGLE,
-            processing_time_ms=2000.0,
-            cached=False
+            provider="google",
+            processing_time=2.0
         )
         success_provider.health_check.return_value = True
         
@@ -294,8 +283,12 @@ class TestSTTOperations:
         }
         orchestrator._initialized = True
         
+        # Read audio file as bytes
+        with open(temp_audio_file, 'rb') as f:
+            audio_data = f.read()
+        
         request = STTRequest(
-            audio_file_path=temp_audio_file,
+            audio_data=audio_data,
             language="en-US"
         )
         
@@ -304,8 +297,8 @@ class TestSTTOperations:
         
         # Verify fallback worked
         assert isinstance(response, STTResponse)
-        assert response.transcribed_text == "Fallback transcription"
-        assert response.provider_used == ProviderType.GOOGLE
+        assert response.text == "Fallback transcription"
+        assert response.provider == "google"
         failing_provider.transcribe_audio.assert_called_once()
         success_provider.transcribe_audio.assert_called_once()
 
@@ -331,8 +324,8 @@ class TestTTSOperations:
         
         # Verify
         assert isinstance(response, TTSResponse)
-        assert response.audio_url == "http://example.com/test_output.wav"
-        assert response.provider_used == ProviderType.OPENAI
+        assert response.audio_data == b"fake_audio_data"  # Use correct field from schema
+        assert response.provider == "openai"  # Use correct field from schema
         mock_tts_provider.synthesize_speech.assert_called_once()
 
 
@@ -383,8 +376,12 @@ class TestErrorHandling:
         orchestrator._stt_providers = {ProviderType.OPENAI: failing_provider}
         orchestrator._initialized = True
         
+        # Read audio file as bytes
+        with open(temp_audio_file, 'rb') as f:
+            audio_data = f.read()
+        
         request = STTRequest(
-            audio_file_path=temp_audio_file,
+            audio_data=audio_data,
             language="en-US"
         )
         
@@ -395,8 +392,12 @@ class TestErrorHandling:
     @pytest.mark.asyncio 
     async def test_uninitialized_orchestrator_error(self, orchestrator, temp_audio_file):
         """Test using uninitialized orchestrator raises error"""
+        # Read audio file as bytes
+        with open(temp_audio_file, 'rb') as f:
+            audio_data = f.read()
+        
         request = STTRequest(
-            audio_file_path=temp_audio_file,
+            audio_data=audio_data,
             language="en-US"
         )
         
@@ -413,8 +414,12 @@ class TestPerformanceBenchmarks:
         orchestrator._stt_providers = {ProviderType.OPENAI: mock_stt_provider}
         orchestrator._initialized = True
         
+        # Read audio file as bytes
+        with open(temp_audio_file, 'rb') as f:
+            audio_data = f.read()
+        
         request = STTRequest(
-            audio_file_path=temp_audio_file,
+            audio_data=audio_data,
             language="en-US"
         )
         
@@ -431,7 +436,7 @@ class TestPerformanceBenchmarks:
         assert len(responses) == 5
         for response in responses:
             assert isinstance(response, STTResponse)
-            assert response.provider_used == ProviderType.OPENAI
+            assert response.provider == "openai"  # Use correct field from schema
         
         # Performance assertion (should handle 5 concurrent requests in reasonable time)
         assert total_time < 10.0  # Should complete in under 10 seconds

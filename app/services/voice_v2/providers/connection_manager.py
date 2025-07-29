@@ -13,20 +13,17 @@ This module provides centralized connection management with:
 
 import asyncio
 import logging
-from typing import Dict, Optional, List, Any
-from datetime import datetime, timedelta
+from typing import Dict, Optional, Any
+from datetime import datetime
 from abc import ABC, abstractmethod
 
-import aiohttp
 from aiohttp import ClientSession, TCPConnector, ClientTimeout
 
 from app.services.voice_v2.core.exceptions import (
-    VoiceServiceError,
-    ConnectionPoolError,
-    HealthCheckError
+    ConnectionPoolError
 )
-from app.services.voice_v2.core.config import VoiceV2Settings
-from app.services.voice_v2.infrastructure.health_checker import VoiceHealthChecker
+from app.services.voice_v2.core.config import VoiceConfig
+from app.services.voice_v2.infrastructure.health_checker import ProviderHealthChecker
 from app.services.voice_v2.infrastructure.metrics import VoiceMetricsCollector
 
 
@@ -238,8 +235,8 @@ class VoiceConnectionManager(IConnectionManager):
     
     def __init__(
         self, 
-        settings: VoiceV2Settings,
-        health_checker: Optional[VoiceHealthChecker] = None,
+        settings: VoiceConfig,
+        health_checker: Optional[ProviderHealthChecker] = None,
         metrics_collector: Optional[VoiceMetricsCollector] = None
     ):
         """
@@ -464,8 +461,8 @@ class VoiceConnectionManager(IConnectionManager):
 
 # Helper functions for dependency injection
 def create_connection_manager(
-    settings: VoiceV2Settings,
-    health_checker: Optional[VoiceHealthChecker] = None,
+    settings: VoiceConfig,
+    health_checker: Optional[ProviderHealthChecker] = None,
     metrics_collector: Optional[VoiceMetricsCollector] = None
 ) -> VoiceConnectionManager:
     """

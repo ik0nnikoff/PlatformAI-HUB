@@ -37,6 +37,7 @@ from app.services.voice_v2.core.exceptions import (
     VoiceServiceTimeout
 )
 from app.services.voice_v2.utils.performance import PerformanceTimer
+from app.services.voice_v2.providers.retry_mixin import provider_operation
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +65,9 @@ class YandexSTTProvider(BaseSTTProvider):
     MAX_FILE_SIZE_MB = 1.0  # Yandex limit for synchronous recognition
     DEFAULT_SAMPLE_RATE = 16000
     
-    def __init__(self, config: Dict[str, Any], priority: int = 3, enabled: bool = True):
+    def __init__(self, provider_name: str, config: Dict[str, Any], priority: int = 3, enabled: bool = True, **kwargs):
         """Initialize Yandex STT provider with connection pooling."""
-        super().__init__("yandex", config, priority, enabled)
+        super().__init__(provider_name, config, priority, enabled, **kwargs)
         
         # Yandex API credentials
         self.api_key = config.get("api_key") or (
@@ -253,8 +254,16 @@ class YandexSTTProvider(BaseSTTProvider):
             if normalized_lang not in caps.supported_languages:
                 raise AudioProcessingError(f"Language {request.language} (normalized: {normalized_lang}) unsupported")
     
+    @provider_operation("Yandex STT Transcription")
     async def _transcribe_implementation(self, request: STTRequest) -> STTResult:
-        """Core Yandex STT transcription implementation."""
+        """
+        Core Yandex STT transcription implementation with ConnectionManager support
+        
+        Phase 3.5.2.3 Enhancement:
+        - ConnectionManager integration for enhanced retry logic
+        - Backward compatibility with legacy retry fallback
+        - SOLID principles maintained
+        """
         if not self._session:
             raise VoiceServiceError("Yandex STT not initialized")
         
@@ -290,8 +299,12 @@ class YandexSTTProvider(BaseSTTProvider):
                 if request.custom_settings:
                     params.update(request.custom_settings)
                 
-                # Execute STT request
-                transcript, metadata = await self._execute_stt_request(headers, params, processed_audio)
+                # Use ConnectionManager if available, fallback to legacy retry
+                if self._has_connection_manager():
+                    transcript, metadata = await self._perform_transcription(headers, params, processed_audio)
+                else:
+                    # Legacy fallback for backward compatibility
+                    transcript, metadata = await self._transcribe_with_retry(headers, params, processed_audio)
                 
                 # Update performance metrics
                 self._request_count += 1
@@ -318,6 +331,58 @@ class YandexSTTProvider(BaseSTTProvider):
                     raise
                     
                 raise VoiceServiceError(f"Yandex STT error: {e}") from e
+
+    async def _perform_transcription(
+        self, 
+        headers: Dict[str, str], 
+        params: Dict[str, Any], 
+        audio_data: bytes
+    ) -> tuple[str, Dict[str, Any]]:
+        """
+        Enhanced transcription with ConnectionManager integration
+        
+        Phase 3.5.2.3: Uses centralized retry logic from ConnectionManager
+        """
+        return await self._execute_with_connection_manager(
+            operation_name="yandex_stt_transcription",
+            request_func=self._execute_yandex_transcription,
+            headers=headers,
+            params=params,
+            audio_data=audio_data
+        )
+    
+    async def _execute_yandex_transcription(
+        self, 
+        headers: Dict[str, str], 
+        params: Dict[str, Any], 
+        audio_data: bytes
+    ) -> tuple[str, Dict[str, Any]]:
+        """
+        Direct Yandex API call - used by ConnectionManager
+        
+        Single Responsibility: Only API communication
+        """
+        async with self._session.post(
+            self.STT_API_URL,
+            headers=headers,
+            params=params,
+            data=audio_data
+        ) as response:
+            
+            if response.status == 200:
+                result = await response.json()
+                transcript = result.get("result", "")
+                
+                return transcript, {
+                    "confidence": 1.0,  # Yandex doesn't always return confidence
+                    "response_data": result
+                }
+            
+            # Handle other errors
+            error_text = await response.text()
+            raise VoiceServiceError(
+                f"Yandex API error {response.status}: {error_text}"
+            )
     
     async def _load_audio_file(self, audio_path: Path) -> bytes:
         """Load audio file with error handling."""
@@ -408,46 +473,38 @@ class YandexSTTProvider(BaseSTTProvider):
         
         return language_mapping.get(language, language)
     
-    async def _execute_stt_request(
+    async def _transcribe_with_retry(
         self, 
         headers: Dict[str, str], 
         params: Dict[str, Any], 
         audio_data: bytes
     ) -> tuple[str, Dict[str, Any]]:
-        """Execute STT request to Yandex API with retry logic."""
+        """
+        Legacy transcription with exponential backoff retry
+        
+        Phase 3.5.2.3: Preserved for backward compatibility
+        Will be deprecated after ConnectionManager migration is complete
+        """
         max_retries = 2
         
         for attempt in range(max_retries + 1):
             try:
-                async with self._session.post(
-                    self.STT_API_URL,
-                    headers=headers,
-                    params=params,
-                    data=audio_data
-                ) as response:
-                    
-                    if response.status == 200:
-                        result = await response.json()
-                        transcript = result.get("result", "")
-                        
-                        return transcript, {
-                            "confidence": 1.0,  # Yandex doesn't always return confidence
-                            "response_data": result,
-                            "attempt": attempt + 1
-                        }
-                    
-                    elif response.status == 429:  # Rate limit
-                        if attempt < max_retries:
-                            wait_time = 2 ** attempt
-                            logger.warning(f"Rate limited, waiting {wait_time}s (attempt {attempt + 1})")
-                            await asyncio.sleep(wait_time)
-                            continue
-                    
-                    # Handle other errors
-                    error_text = await response.text()
-                    raise VoiceServiceError(
-                        f"Yandex API error {response.status}: {error_text}"
-                    )
+                # Use direct API call method
+                transcript, metadata = await self._execute_yandex_transcription(headers, params, audio_data)
+                # Add attempt info to metadata for compatibility
+                metadata["attempt"] = attempt + 1
+                return transcript, metadata
+                
+            except VoiceServiceError as e:
+                # Check for rate limit specifically
+                if "429" in str(e) and attempt < max_retries:
+                    wait_time = 2 ** attempt
+                    logger.warning(f"Rate limited, waiting {wait_time}s (attempt {attempt + 1})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                # Re-raise other VoiceServiceErrors
+                if attempt == max_retries:
+                    raise
                     
             except asyncio.TimeoutError:
                 if attempt < max_retries:

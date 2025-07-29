@@ -7,10 +7,9 @@ Simplified testing strategy для TTS Provider system
 
 import pytest
 import asyncio
-import logging
 import time
 from typing import Dict, Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 # Simple TTS test structures
 class SimpleTTSRequest:

@@ -26,17 +26,16 @@ from google.cloud import speech
 from google.oauth2 import service_account
 from google.api_core import exceptions as google_exceptions
 
-# Voice_v2 architecture imports
 from .base_stt import BaseSTTProvider
 from .models import STTRequest, STTResult, STTCapabilities, STTQuality
 from ...core.interfaces import ProviderType, AudioFormat
 from ...core.exceptions import (
-    VoiceServiceError,
     VoiceProviderError, 
     VoiceConfigurationError,
     VoiceServiceTimeout,
     AudioProcessingError
 )
+from ..retry_mixin import provider_operation
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +63,8 @@ class GoogleSTTProvider(BaseSTTProvider):
         provider_name: str = "google",
         config: Optional[Dict[str, Any]] = None, 
         priority: int = 2,
-        enabled: bool = True
+        enabled: bool = True,
+        **kwargs
     ):
         """
         Initialize Google STT Provider
@@ -76,7 +76,7 @@ class GoogleSTTProvider(BaseSTTProvider):
             enabled: Whether provider is enabled
         """
         # Apply Phase 1.2.2 SOLID principles - constructor dependency injection
-        super().__init__(provider_name, config or {}, priority, enabled)
+        super().__init__(provider_name, config or {}, priority, enabled, **kwargs)
         
         # Google-specific configuration with defaults
         self._credentials_path = self.config.get('credentials_path')
@@ -186,11 +186,15 @@ class GoogleSTTProvider(BaseSTTProvider):
         except Exception as e:
             logger.error(f"Google STT cleanup error: {e}", exc_info=True)
     
+    @provider_operation("Google STT Transcription")
     async def _transcribe_implementation(self, request: STTRequest) -> STTResult:
         """
-        Core transcription implementation
+        Core transcription implementation with ConnectionManager support
         
-        Single Responsibility: Only transcription logic
+        Phase 3.5.2.3 Enhancement:
+        - ConnectionManager integration for enhanced retry logic
+        - Backward compatibility with legacy retry fallback
+        - SOLID principles maintained
         """
         # Read audio file
         audio_data = await self._read_audio_file(request.audio_file_path)
@@ -199,11 +203,45 @@ class GoogleSTTProvider(BaseSTTProvider):
         config = self._prepare_recognition_config(request)
         audio = speech.RecognitionAudio(content=audio_data)
         
-        # Execute with retry logic from Phase 1.2.3
-        response = await self._execute_with_retry(config, audio)
+        # Use ConnectionManager if available, fallback to legacy retry
+        if self._has_connection_manager():
+            response = await self._perform_transcription(config, audio)
+        else:
+            # Legacy fallback for backward compatibility
+            response = await self._transcribe_with_retry(config, audio)
         
         # Process response 
         return self._process_response(response, request)
+
+    async def _perform_transcription(
+        self, 
+        config: speech.RecognitionConfig, 
+        audio: speech.RecognitionAudio
+    ) -> speech.RecognizeResponse:
+        """
+        Enhanced transcription with ConnectionManager integration
+        
+        Phase 3.5.2.3: Uses centralized retry logic from ConnectionManager
+        """
+        return await self._execute_with_connection_manager(
+            operation_name="google_stt_transcription",
+            request_func=self._execute_google_transcription,
+            config=config,
+            audio=audio
+        )
+    
+    async def _execute_google_transcription(
+        self, 
+        config: speech.RecognitionConfig, 
+        audio: speech.RecognitionAudio
+    ) -> speech.RecognizeResponse:
+        """
+        Direct Google API call - used by ConnectionManager
+        
+        Single Responsibility: Only API communication
+        """
+        recognition_request = speech.RecognizeRequest(config=config, audio=audio)
+        return self._client.recognize(request=recognition_request)
     
     async def _initialize_credentials(self) -> None:
         """Initialize Google Cloud credentials"""
@@ -263,15 +301,18 @@ class GoogleSTTProvider(BaseSTTProvider):
             audio = speech.RecognitionAudio(content=b"")
             
             try:
-                request = speech.RecognizeRequest(config=config, audio=audio)
                 # Don't execute, just validate client readiness
+                speech.RecognizeRequest(config=config, audio=audio)
                 logger.debug("Google Speech connection validated")
             except google_exceptions.InvalidArgument:
                 # Expected error for empty audio - connection is OK
                 logger.debug("Google Speech connection validated (expected InvalidArgument)")
                 
         except google_exceptions.Unauthenticated as e:
-            raise VoiceProviderError(f"Google authentication failed: {e}")
+            raise VoiceProviderError(
+                f"Google authentication failed: {e}",
+                operation="google_stt_connection_validation"
+            )
         except Exception as e:
             logger.warning(f"Connection validation failed (may be normal): {e}")
     
@@ -314,15 +355,16 @@ class GoogleSTTProvider(BaseSTTProvider):
             max_alternatives=1
         )
     
-    async def _execute_with_retry(
+    async def _transcribe_with_retry(
         self, 
         config: speech.RecognitionConfig, 
         audio: speech.RecognitionAudio
     ) -> speech.RecognizeResponse:
         """
-        Execute transcription with exponential backoff retry
+        Legacy transcription with exponential backoff retry
         
-        Implements performance patterns from Phase 1.2.3
+        Phase 3.5.2.3: Preserved for backward compatibility
+        Will be deprecated after ConnectionManager migration is complete
         """
         last_exception = None
         
@@ -334,31 +376,42 @@ class GoogleSTTProvider(BaseSTTProvider):
                     logger.debug(f"Retrying Google STT (attempt {attempt + 1}) after {delay}s")
                     await asyncio.sleep(delay)
                 
-                # Execute transcription
-                recognition_request = speech.RecognizeRequest(config=config, audio=audio)
-                return self._client.recognize(request=recognition_request)
+                # Execute transcription via direct API call
+                return await self._execute_google_transcription(config, audio)
                 
             except google_exceptions.TooManyRequests as e:
                 last_exception = e
                 logger.warning(f"Google STT rate limit (attempt {attempt + 1})")
                 if attempt == self._max_retries:
-                    raise VoiceServiceTimeout(f"Google STT rate limit after {attempt + 1} attempts")
+                    raise VoiceServiceTimeout(
+                        f"Google STT rate limit after {attempt + 1} attempts",
+                        timeout_seconds=self._max_delay
+                    )
                     
             except google_exceptions.ServiceUnavailable as e:
                 last_exception = e
                 logger.warning(f"Google STT service unavailable (attempt {attempt + 1})")
                 if attempt == self._max_retries:
-                    raise VoiceServiceTimeout(f"Google STT unavailable after {attempt + 1} attempts")
+                    raise VoiceServiceTimeout(
+                        f"Google STT unavailable after {attempt + 1} attempts",
+                        timeout_seconds=self._max_delay
+                    )
                     
             except google_exceptions.DeadlineExceeded as e:
                 last_exception = e
                 logger.warning(f"Google STT timeout (attempt {attempt + 1})")
                 if attempt == self._max_retries:
-                    raise VoiceServiceTimeout(f"Google STT timeout after {attempt + 1} attempts")
+                    raise VoiceServiceTimeout(
+                        f"Google STT timeout after {attempt + 1} attempts",
+                        timeout_seconds=self._max_delay
+                    )
                     
             except (google_exceptions.Unauthenticated, google_exceptions.PermissionDenied) as e:
                 # Don't retry auth errors
-                raise VoiceProviderError(f"Google STT authentication error: {e}")
+                raise VoiceProviderError(
+                    f"Google STT authentication error: {e}",
+                    operation="google_stt_auth"
+                )
                 
             except Exception as e:
                 last_exception = e
@@ -367,7 +420,10 @@ class GoogleSTTProvider(BaseSTTProvider):
                     break
         
         # All retries exhausted
-        raise VoiceProviderError(f"Google STT failed after {self._max_retries + 1} attempts: {last_exception}")
+        raise VoiceProviderError(
+            f"Google STT failed after {self._max_retries + 1} attempts: {last_exception}",
+            operation="google_stt_retry_exhausted"
+        )
     
     def _process_response(
         self, 

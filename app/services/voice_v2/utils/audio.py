@@ -15,9 +15,8 @@ import asyncio
 import io
 import logging
 import hashlib
-from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union, Any
+from typing import Dict, Optional, Any
 from dataclasses import dataclass
 
 # Импорты для аудио обработки
@@ -447,7 +446,7 @@ class AudioProcessor:
         Returns:
             str: MD5 хеш данных
         """
-        return hashlib.md5(audio_data).hexdigest()
+        return hashlib.sha256(audio_data).hexdigest()
     
     @staticmethod
     def get_mime_type(audio_format: AudioFormat) -> str:

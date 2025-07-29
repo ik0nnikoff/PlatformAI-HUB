@@ -10,11 +10,9 @@ import pytest
 import asyncio
 import logging
 import time
-from typing import Dict, Any, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch, call
-import os
+from typing import Dict, Any, Optional
+from unittest.mock import AsyncMock, MagicMock, patch
 import hashlib
-from io import BytesIO
 
 # Imports для voice_v2 TTS system
 from app.services.voice_v2.providers.tts.openai_tts import OpenAITTSProvider
@@ -22,9 +20,9 @@ from app.services.voice_v2.providers.tts.google_tts import GoogleTTSProvider
 from app.services.voice_v2.providers.tts.yandex_tts import YandexTTSProvider
 from app.services.voice_v2.providers.tts.factory import TTSProviderFactory
 from app.services.voice_v2.providers.tts.orchestrator import TTSOrchestrator
-from app.services.voice_v2.providers.tts.models import TTSRequest, TTSResponse, TTSCapabilities
+from app.services.voice_v2.providers.tts.models import TTSRequest, TTSResult, TTSCapabilities
 from app.services.voice_v2.core.exceptions import VoiceServiceError
-from app.services.voice_v2.core.interfaces import BaseTTSProvider
+from app.services.voice_v2.core.interfaces import TTSProvider
 
 
 logger = logging.getLogger(__name__)
@@ -40,7 +38,7 @@ class TestTTSProviderValidation:
     - Yandex SpeechKit TTS Provider functionality
     
     Phase 1.3 Requirements:
-    - LSP compliance через BaseTTSProvider interface
+    - LSP compliance через TTSProvider interface
     - SOLID principles validation
     - Performance optimization patterns
     """
@@ -103,7 +101,7 @@ class TestTTSProviderValidation:
             response = await provider.synthesize_speech(test_request)
             
             # Assert - Phase 1.3 LSP Compliance
-            assert isinstance(response, TTSResponse)
+            assert isinstance(response, TTSResult)
             assert response.audio_data == mock_audio_data
             assert response.format == "mp3"
             assert response.provider_name == "openai"
@@ -138,7 +136,7 @@ class TestTTSProviderValidation:
             response = await provider.synthesize_speech(test_request)
             
             # Assert - Phase 1.3 LSP Compliance
-            assert isinstance(response, TTSResponse)
+            assert isinstance(response, TTSResult)
             assert response.audio_data == mock_audio_data
             assert response.format == "mp3"
             assert response.provider_name == "google"
@@ -171,7 +169,7 @@ class TestTTSProviderValidation:
             response = await provider.synthesize_speech(test_request)
             
             # Assert - Phase 1.3 LSP Compliance
-            assert isinstance(response, TTSResponse)
+            assert isinstance(response, TTSResult)
             assert response.audio_data == mock_audio_data
             assert response.format == "mp3"  
             assert response.provider_name == "yandex"
@@ -198,9 +196,9 @@ class TestTTSProviderValidation:
             language="en"
         )
         
-        # Act & Assert - все providers должны implement BaseTTSProvider interface
+        # Act & Assert - все providers должны implement TTSProvider interface
         for provider in providers:
-            assert isinstance(provider, BaseTTSProvider)
+            assert isinstance(provider, TTSProvider)
             
             # Test interface methods existence
             assert hasattr(provider, 'synthesize_speech')
@@ -290,7 +288,7 @@ class TestTTSIntegrationWithMockedAPIs:
         
         with patch.object(factory, 'get_provider') as mock_get_provider:
             mock_provider = AsyncMock()
-            mock_provider.synthesize_speech.return_value = TTSResponse(
+            mock_provider.synthesize_speech.return_value = TTSResult(
                 audio_data=mock_audio_data,
                 format="mp3",
                 provider_name="openai",
@@ -303,7 +301,7 @@ class TestTTSIntegrationWithMockedAPIs:
             response = await orchestrator.synthesize_speech(test_request)
             
             # Assert
-            assert isinstance(response, TTSResponse)
+            assert isinstance(response, TTSResult)
             assert response.audio_data == mock_audio_data
             assert response.provider_name == "openai"
 
@@ -333,7 +331,7 @@ class TestTTSIntegrationWithMockedAPIs:
             failing_provider.provider_name = "openai"
             
             success_provider = AsyncMock()
-            success_provider.synthesize_speech.return_value = TTSResponse(
+            success_provider.synthesize_speech.return_value = TTSResult(
                 audio_data=mock_audio_data,
                 format="mp3", 
                 provider_name="google",
@@ -347,7 +345,7 @@ class TestTTSIntegrationWithMockedAPIs:
             response = await orchestrator.synthesize_speech(test_request)
             
             # Assert
-            assert isinstance(response, TTSResponse)
+            assert isinstance(response, TTSResult)
             assert response.audio_data == mock_audio_data
             assert response.provider_name == "google"
             
@@ -415,7 +413,7 @@ class TestTTSIntegrationWithMockedAPIs:
         
         with patch.object(factory, 'get_provider') as mock_get_provider:
             mock_provider = AsyncMock()
-            mock_provider.synthesize_speech.return_value = TTSResponse(
+            mock_provider.synthesize_speech.return_value = TTSResult(
                 audio_data=mock_audio_data,
                 format="mp3",
                 provider_name="openai",
@@ -430,7 +428,7 @@ class TestTTSIntegrationWithMockedAPIs:
             # Assert
             assert len(responses) == 5
             for response in responses:
-                assert isinstance(response, TTSResponse)
+                assert isinstance(response, TTSResult)
                 assert response.audio_data == mock_audio_data
                 assert response.provider_name == "openai"
 
@@ -452,7 +450,7 @@ class TestVoiceQualityValidation:
         test_audio_formats = ["mp3", "wav", "ogg"]
         
         for format_type in test_audio_formats:
-            response = TTSResponse(
+            response = TTSResult(
                 audio_data=b"test_audio_data",
                 format=format_type,
                 provider_name="test_provider",
@@ -498,7 +496,7 @@ class TestVoiceQualityValidation:
         )
         
         # Mock response с metadata
-        mock_response = TTSResponse(
+        mock_response = TTSResult(
             audio_data=b"quality_test_audio_data",
             format="mp3",
             provider_name="test_provider",
@@ -530,7 +528,7 @@ class TestVoiceQualityValidation:
         for size in test_audio_sizes:
             audio_data = b"a" * size  # Simulate audio data
             
-            response = TTSResponse(
+            response = TTSResult(
                 audio_data=audio_data,
                 format="mp3",
                 provider_name="integrity_test",
@@ -559,7 +557,7 @@ class TestVoiceQualityValidation:
         # Simulate different response times
         async def fast_synthesis(request):
             await asyncio.sleep(0.1)  # 100ms
-            return TTSResponse(
+            return TTSResult(
                 audio_data=b"fast_audio",
                 format="mp3", 
                 provider_name="fast_provider",
@@ -568,7 +566,7 @@ class TestVoiceQualityValidation:
         
         async def slow_synthesis(request):
             await asyncio.sleep(0.5)  # 500ms  
-            return TTSResponse(
+            return TTSResult(
                 audio_data=b"slow_audio",
                 format="mp3",
                 provider_name="slow_provider", 
@@ -618,7 +616,7 @@ def mock_audio_data():
 
 def generate_test_audio_hash(audio_data: bytes) -> str:
     """Generate hash для audio data integrity validation."""
-    return hashlib.md5(audio_data).hexdigest()
+    return hashlib.sha256(audio_data).hexdigest()
 
 
 class TTSTestingUtilities:
@@ -630,7 +628,7 @@ class TTSTestingUtilities:
     @staticmethod
     async def create_mock_provider(
         provider_name: str,
-        success_response: Optional[TTSResponse] = None,
+        success_response: Optional[TTSResult] = None,
         should_fail: bool = False
     ) -> AsyncMock:
         """Create consistent mock provider для testing."""
@@ -644,7 +642,7 @@ class TTSTestingUtilities:
             mock_provider.health_check.return_value = False
         else:
             if success_response is None:
-                success_response = TTSResponse(
+                success_response = TTSResult(
                     audio_data=b"mock_audio_data",
                     format="mp3",
                     provider_name=provider_name,
@@ -657,10 +655,10 @@ class TTSTestingUtilities:
         return mock_provider
     
     @staticmethod
-    def validate_tts_response(response: TTSResponse) -> bool:
+    def validate_tts_response(response: TTSResult) -> bool:
         """Validate TTS response structure и content."""
         try:
-            assert isinstance(response, TTSResponse)
+            assert isinstance(response, TTSResult)
             assert isinstance(response.audio_data, bytes)
             assert len(response.audio_data) > 0
             assert response.format in ["mp3", "wav", "ogg", "flac"]
@@ -673,7 +671,7 @@ class TTSTestingUtilities:
     
     @staticmethod
     async def run_provider_stress_test(
-        provider: BaseTTSProvider,
+        provider: TTSProvider,
         num_requests: int = 10,
         concurrent: bool = True
     ) -> Dict[str, Any]:
@@ -699,7 +697,7 @@ class TTSTestingUtilities:
                     responses.append(e)
         
         total_time = time.time() - start_time
-        successful_responses = [r for r in responses if isinstance(r, TTSResponse)]
+        successful_responses = [r for r in responses if isinstance(r, TTSResult)]
         failed_responses = [r for r in responses if isinstance(r, Exception)]
         
         return {

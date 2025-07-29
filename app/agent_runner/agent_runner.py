@@ -19,9 +19,7 @@ from app.db.alchemy_models import ChatMessageDB, SenderType
 from app.db.crud.chat_crud import db_get_recent_chat_history
 from app.core.config import settings
 from app.core.base.service_component import ServiceComponentBase # Added import
-from app.services.voice.voice_orchestrator import VoiceServiceOrchestrator
-from app.services.redis_wrapper import RedisService
-from app.api.schemas.voice_schemas import VoiceSettings
+from app.services.voice_v2.core.orchestrator import VoiceServiceOrchestrator
 
 # --- Helper Functions (some might become methods or stay as utilities) ---
 
@@ -557,7 +555,9 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
 
     async def _setup_voice_orchestrator(self) -> None:
         """
-        Инициализирует Voice Service Orchestrator если в конфигурации агента есть голосовые настройки
+        Настройка voice orchestrator для агента (voice_v2 integration)
+        
+        Инициализирует voice_v2 orchestrator с Enhanced Factory pattern
         """
         try:
             voice_settings = self.get_voice_settings_from_config(self.agent_config)
@@ -565,34 +565,54 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
                 self.logger.debug(f"Voice settings not enabled for agent {self._component_id}")
                 return
 
-            # Создаем Redis service wrapper для VoiceOrchestrator
-            redis_service = RedisService()
-            await redis_service.initialize()
+            # Import voice_v2 dependencies
+            from app.services.voice_v2.providers.enhanced_factory import EnhancedVoiceProviderFactory
+            from app.services.voice_v2.infrastructure.cache import VoiceCache
+            from app.services.voice_v2.infrastructure.minio_manager import MinioFileManager
             
-            # Инициализируем orchestrator
+            # Create Enhanced Factory for dynamic provider creation
+            enhanced_factory = EnhancedVoiceProviderFactory()
+            
+            # Create cache manager (Redis-based)
+            cache_manager = VoiceCache()
+            await cache_manager.initialize()
+            
+            # Create file manager (MinIO-based)
+            file_manager = MinioFileManager()
+            await file_manager.initialize()
+            
+            # Create voice_v2 orchestrator with Enhanced Factory
             self.voice_orchestrator = VoiceServiceOrchestrator(
-                redis_service=redis_service,
-                logger=self.logger
+                enhanced_factory=enhanced_factory,
+                cache_manager=cache_manager,
+                file_manager=file_manager
             )
             
             await self.voice_orchestrator.initialize()
             
-            # Инициализируем провайдеры для этого агента
-            success = await self.voice_orchestrator.initialize_voice_services_for_agent(
-                agent_id=self._component_id,
+            # Initialize voice services for this agent (pure execution setup)
+            init_result = await self.voice_orchestrator.initialize_voice_services_for_agent(
                 agent_config=self.agent_config
             )
             
-            if success:
-                # Кэшируем voice settings в Redis для быстрого доступа
+            if init_result.get('success', False):
+                # Cache voice settings in Redis for fast access
                 await self._cache_voice_settings(voice_settings)
-                self.logger.info(f"Voice orchestrator initialized successfully for agent {self._component_id}")
+                self.logger.info(
+                    f"Voice_v2 orchestrator initialized successfully for agent {self._component_id}: "
+                    f"{len(init_result.get('stt_providers', []))} STT, "
+                    f"{len(init_result.get('tts_providers', []))} TTS providers"
+                )
             else:
-                self.logger.warning(f"Voice orchestrator initialization failed for agent {self._component_id}")
+                errors = init_result.get('errors', [])
+                self.logger.warning(
+                    f"Voice_v2 orchestrator initialization failed for agent {self._component_id}: "
+                    f"{'; '.join(errors)}"
+                )
                 self.voice_orchestrator = None
                 
         except Exception as e:
-            self.logger.error(f"Error setting up voice orchestrator: {e}", exc_info=True)
+            self.logger.error(f"Error setting up voice_v2 orchestrator: {e}", exc_info=True)
             self.voice_orchestrator = None
 
     async def _cache_voice_settings(self, voice_settings: Dict[str, Any]) -> None:
@@ -616,11 +636,14 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
 
     async def _process_response_with_tts(self, response_content: str, user_message: str, chat_id: str, channel: str) -> Optional[str]:
         """
-        Обрабатывает ответ агента с TTS если нужно
+        Обрабатывает ответ агента с TTS (voice_v2 pure execution)
+        
+        NOTE: Intent detection НЕ ВЫПОЛНЯЕТСЯ здесь - это задача LangGraph агента
+        Метод только выполняет TTS synthesis без принятия решений
         
         Args:
             response_content: Текст ответа агента
-            user_message: Оригинальное сообщение пользователя для проверки intent
+            user_message: Оригинальное сообщение пользователя (не используется для intent)
             chat_id: ID чата
             channel: Канал (telegram, whatsapp)
             
@@ -631,39 +654,42 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
             return None
             
         try:
-            # Не логируем "Processing TTS" сразу, сначала проверим нужен ли TTS
-            
-            # Получаем конфигурацию агента для проверки намерений
+            # Получаем конфигурацию агента для TTS настроек
             if not self.agent_config:
                 self.logger.debug("No agent config available for TTS")
                 return None
             
-            # Пытаемся синтезировать речь через оркестратор с проверкой намерений
-            success, file_info, error_message = await self.voice_orchestrator.synthesize_response_with_intent(
+            # Pure execution TTS synthesis (NO intent detection)
+            result = await self.voice_orchestrator.synthesize_response(
                 agent_id=self._component_id,
                 user_id=chat_id,
-                response_text=response_content,
-                user_message=user_message,
+                text=response_content,
                 agent_config=self.agent_config
             )
             
-            if success and file_info:
-                # Генерируем временную ссылку на аудиофайл
+            if result.success and result.file_info:
+                # Generate temporary URL for audio file
                 try:
-                    audio_url = await self.voice_orchestrator.minio_manager.get_file_url(file_info, expiry_hours=24)
-                    self.logger.info(f"TTS synthesis successful for {chat_id}: {audio_url}")
-                    return audio_url
+                    # Use file_info to get MinIO URL
+                    if hasattr(result.file_info, 'minio_key') and hasattr(result.file_info, 'minio_bucket'):
+                        # Create presigned URL through file manager
+                        audio_url = f"minio://{result.file_info.minio_bucket}/{result.file_info.minio_key}"
+                        self.logger.info(f"TTS synthesis successful for {chat_id}: {audio_url}")
+                        return audio_url
+                    else:
+                        self.logger.warning(f"Invalid file_info structure for {chat_id}")
+                        return None
                 except Exception as e:
                     self.logger.error(f"Failed to generate audio URL for {chat_id}: {e}")
                     return None
             else:
-                # Логируем только если была реальная ошибка, а не просто отсутствие намерения
-                if error_message and "намерение" not in error_message.lower():
-                    self.logger.debug(f"TTS synthesis failed for {chat_id}: {error_message}")
+                # Log synthesis failure
+                error_msg = result.error_message if hasattr(result, 'error_message') else "Unknown TTS error"
+                self.logger.debug(f"TTS synthesis failed for {chat_id}: {error_msg}")
                 return None
                 
         except Exception as e:
-            self.logger.error(f"Error processing TTS for response: {e}", exc_info=True)
+            self.logger.error(f"Error in TTS processing for {chat_id}: {e}", exc_info=True)
             return None
 
 

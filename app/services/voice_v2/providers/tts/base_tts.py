@@ -1,11 +1,12 @@
 """
-TTS Base Provider для Voice_v2 - Phase 3.2.1
+TTS Base Provider для Voice_v2 - Phase 3.5.2.2 Enhanced with RetryMixin
 
-Применяет все архитектурные принципы из Phase 1.3:
+Применяет архитектурные принципы и добавляет RetryMixin integration:
 - LSP compliance (Phase_1_3_1_architecture_review.md)
 - SOLID principles (Phase_1_2_2_solid_principles.md)
 - Performance patterns (Phase_1_2_3_performance_optimization.md)
-- Reference system patterns (Phase_1_1_4_architecture_patterns.md)
+- RetryMixin для centralized retry configuration
+- ConnectionManager integration support
 
 SOLID Principles Implementation:
 - Single Responsibility: Только TTS base functionality
@@ -18,62 +19,85 @@ SOLID Principles Implementation:
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from .models import TTSRequest, TTSResult, TTSCapabilities
 from ...core.exceptions import VoiceServiceError, ProviderNotAvailableError, AudioProcessingError
 from ...utils.validators import ConfigurationValidator
+from ..retry_mixin import RetryMixin
+
+if TYPE_CHECKING:
+    from ..enhanced_connection_manager import IConnectionManager
 
 logger = logging.getLogger(__name__)
 
 
-class BaseTTSProvider(ABC):
+class BaseTTSProvider(ABC, RetryMixin):
     """
-    Minimal abstract base for TTS providers. LSP compliant.
+    Minimal abstract base for TTS providers with RetryMixin integration.
     
-    Architecture follows Phase 1.3 patterns:
-    - Same interface contract as BaseSTTProvider (LSP compliance)
-    - Performance-first design with lazy initialization
-    - Error handling consistent with reference system
+    Phase 3.5.2.2 Enhancement:
+    - RetryMixin integration for centralized retry configuration  
+    - ConnectionManager support standardization
+    - LSP compliance maintained
+    - SOLID principles preserved
     """
     
-    def __init__(self, provider_name: str, config: Dict[str, Any], priority: int = 1, enabled: bool = True):
+    def __init__(
+        self, 
+        provider_name: str, 
+        config: Dict[str, Any], 
+        priority: int = 1, 
+        enabled: bool = True,
+        connection_manager: Optional['IConnectionManager'] = None
+    ):
         self.provider_name = provider_name
         self.config = config
         self.priority = priority
         self.enabled = enabled
         self._initialized = False
         
+        # Enhanced Connection Manager Integration (Phase 3.4.2.2)
+        self._connection_manager = connection_manager
+        
+        # Initialize retry configuration через RetryMixin
+        if self._has_connection_manager():
+            self._get_retry_config(config)  # Initialize retry config for ConnectionManager
+            logger.debug(f"{provider_name} TTS provider using ConnectionManager with retry config")
+        
         # Quick config validation - SRP principle
         missing = [f for f in self.get_required_config_fields() if f not in config]
         if missing:
             raise VoiceServiceError(f"Missing config fields: {missing}")
     
-    @abstractmethod
     def get_required_config_fields(self) -> List[str]:
-        """Get list of required configuration fields."""
-        pass
+        """
+        Default implementation - providers can override for specific requirements.
+        
+        Returns:
+            List of required configuration field names
+        """
+        return []  # Base implementation requires no fields
     
     @abstractmethod
     async def get_capabilities(self) -> TTSCapabilities:
         """Get provider capabilities and supported features."""
-        pass
+        raise NotImplementedError
     
     @abstractmethod
     async def initialize(self) -> None:
         """Initialize provider resources (connections, clients, etc.)."""
-        pass
+        raise NotImplementedError
     
     @abstractmethod
     async def cleanup(self) -> None:
         """Clean up provider resources."""
-        pass
+        raise NotImplementedError
     
     @abstractmethod
     async def _synthesize_implementation(self, request: TTSRequest) -> TTSResult:
         """Core synthesis implementation - provider specific."""
-        pass
+        raise NotImplementedError
     
     async def synthesize_speech(self, request: TTSRequest) -> TTSResult:
         """

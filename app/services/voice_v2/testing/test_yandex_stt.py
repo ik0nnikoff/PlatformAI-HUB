@@ -23,17 +23,13 @@ import sys
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, mock_open
-from typing import Any, Dict
-from io import BytesIO
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Add the project root to Python path  
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..')))
 
 import pytest
-import pytest_asyncio
-from aiohttp import ClientTimeout, TCPConnector, ClientSession
-from aiohttp.client_exceptions import ClientError, ServerTimeoutError
+from aiohttp import ClientSession
 
 from app.services.voice_v2.providers.stt.yandex_stt import YandexSTTProvider
 from app.services.voice_v2.providers.stt.models import STTRequest, STTResult, STTCapabilities, STTQuality

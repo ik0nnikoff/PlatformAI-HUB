@@ -7,8 +7,7 @@ Mirrors STT models for consistency and Phase 1.3 LSP compliance.
 
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from ...core.interfaces import ProviderType, AudioFormat
 

@@ -12,17 +12,12 @@ Comprehensive test suite для voice_v2 utils/audio.py.
 """
 
 import pytest
-import asyncio
 import io
-import tempfile
 import time
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 from app.services.voice_v2.utils.audio import (
     AudioProcessor,
-    AudioMetadata,
-    ConversionResult,
     AudioFormat,
     AudioLimits,
     AudioMimeTypes,

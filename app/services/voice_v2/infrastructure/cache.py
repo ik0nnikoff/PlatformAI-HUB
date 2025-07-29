@@ -19,20 +19,17 @@ SOLID Compliance:
 """
 
 import hashlib
-import json
-import asyncio
 import time
-from typing import Dict, Any, Optional, List, Union, Tuple
+from typing import Dict, Any, Optional, List, Tuple
 from contextlib import asynccontextmanager
 
 import redis.asyncio as redis
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict
 
 from ..core.interfaces import (
-    CacheInterface, STTCacheInterface, TTSCacheInterface,
-    ProviderType, VoiceLanguage, AudioFormat
+    CacheInterface, ProviderType, VoiceLanguage
 )
-from ..core.exceptions import VoiceServiceError, VoiceServiceTimeout
+from ..core.exceptions import VoiceServiceError
 from ..core.config import get_config
 
 
@@ -116,22 +113,22 @@ class CacheKeyGenerator:
     @staticmethod
     def audio_hash(audio_data: bytes) -> str:
         """Generate audio content hash (≤5µs target)"""
-        return hashlib.md5(audio_data).hexdigest()
+        return hashlib.sha256(audio_data).hexdigest()
     
     @staticmethod
     def text_hash(text: str) -> str:
         """Generate text content hash (≤2µs target)"""
-        return hashlib.md5(text.encode('utf-8')).hexdigest()
+        return hashlib.sha256(text.encode('utf-8')).hexdigest()
     
     @staticmethod
     def file_hash(file_path: str, chunk_size: int = 8192) -> str:
         """Generate file content hash efficiently"""
-        hash_md5 = hashlib.md5()
+        hash_sha256 = hashlib.sha256()
         try:
             with open(file_path, "rb") as f:
                 while chunk := f.read(chunk_size):
-                    hash_md5.update(chunk)
-            return hash_md5.hexdigest()
+                    hash_sha256.update(chunk)
+            return hash_sha256.hexdigest()
         except Exception as e:
             raise VoiceServiceError(f"Failed to hash file {file_path}: {e}")
 

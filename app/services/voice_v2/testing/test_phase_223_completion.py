@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 
 # Direct imports to avoid voice_v2 __init__.py
 from app.services.voice_v2.core.schemas import (
-    STTRequest, STTResponse, TTSRequest, TTSResponse, ProviderCapabilities
+    STTRequest, STTResponse, TTSResponse, ProviderCapabilities
 )
 from app.services.voice_v2.core.interfaces import ProviderType, AudioFormat
 from app.services.voice_v2.core.config import VoiceConfig, BaseProviderConfig

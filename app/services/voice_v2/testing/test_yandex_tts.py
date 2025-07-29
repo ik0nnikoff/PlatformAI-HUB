@@ -14,16 +14,14 @@ Architecture Validation:
 """
 
 import pytest
-import asyncio
-import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from typing import Dict, Any
 
-from aiohttp import ClientError, ClientResponse, ClientTimeout
+from aiohttp import ClientTimeout
 from aiohttp.client_exceptions import ClientConnectorError
 
 # Import voice_v2 components
-from app.services.voice_v2.core.exceptions import VoiceServiceError, AudioProcessingError, ProviderNotAvailableError
+from app.services.voice_v2.core.exceptions import VoiceServiceError, AudioProcessingError
 from app.services.voice_v2.providers.tts.yandex_tts import YandexTTSProvider
 from app.services.voice_v2.providers.tts.base_tts import BaseTTSProvider
 from app.services.voice_v2.providers.tts.models import TTSRequest, TTSResult, TTSQuality, TTSCapabilities
@@ -258,32 +256,32 @@ class TestYandexTTSProvider:
     @pytest.mark.asyncio
     async def test_retry_logic_for_rate_limits(self, provider):
         """Test retry logic for rate limit handling."""
-        # Mock the entire _execute_with_retry method to avoid context manager issues
-        with patch.object(provider, '_execute_with_retry') as mock_execute:
+        # Mock the entire _synthesize_with_retry method to avoid context manager issues
+        with patch.object(provider, '_synthesize_with_retry') as mock_execute:
             mock_execute.side_effect = AudioProcessingError("Rate limit exceeded, max retries reached")
             
             with pytest.raises(AudioProcessingError, match="Rate limit exceeded"):
-                await provider._execute_with_retry({"text": "test"})
+                await provider._synthesize_with_retry({"text": "test"})
     
     @pytest.mark.asyncio
     async def test_authentication_error_no_retry(self, provider):
         """Test authentication errors don't trigger retries."""
         # Mock the entire method to avoid context manager issues
-        with patch.object(provider, '_execute_with_retry') as mock_execute:
+        with patch.object(provider, '_synthesize_with_retry') as mock_execute:
             mock_execute.side_effect = AudioProcessingError("Yandex TTS authentication failed: Unauthorized")
             
             with pytest.raises(AudioProcessingError, match="authentication failed"):
-                await provider._execute_with_retry({"text": "test"})
+                await provider._synthesize_with_retry({"text": "test"})
     
     @pytest.mark.asyncio
     async def test_max_retries_exceeded(self, provider):
         """Test behavior when max retries exceeded."""
         # Mock the entire method to avoid context manager issues
-        with patch.object(provider, '_execute_with_retry') as mock_execute:
+        with patch.object(provider, '_synthesize_with_retry') as mock_execute:
             mock_execute.side_effect = AudioProcessingError("Network error after 3 attempts: Connection failed")
             
             with pytest.raises(AudioProcessingError, match="Network error after"):
-                await provider._execute_with_retry({"text": "test"})
+                await provider._synthesize_with_retry({"text": "test"})
     
     # TTS Functionality Tests
     
@@ -298,7 +296,7 @@ class TestYandexTTSProvider:
             mock_health.return_value = None
             
             # Mock the actual HTTP execution
-            with patch.object(provider, '_execute_with_retry') as mock_execute:
+            with patch.object(provider, '_synthesize_with_retry') as mock_execute:
                 mock_execute.return_value = mock_audio_data
                 
                 # Mock storage upload

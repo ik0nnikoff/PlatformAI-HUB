@@ -1060,32 +1060,25 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             user_data: Данные пользователя
         """
         try:
-            # Import voice orchestrator here to avoid circular imports
-            from app.services.voice.voice_orchestrator import VoiceServiceOrchestrator
-            from app.api.schemas.voice_schemas import VoiceFileInfo
+            # Import voice_v2 orchestrator here to avoid circular imports
+            from app.services.voice_v2.core.orchestrator import VoiceServiceOrchestrator
+            from app.services.voice_v2.core.schemas import VoiceFileInfo
             
             # Create file info with all required fields and detect real audio format
             import uuid
             from datetime import datetime
-            from app.services.voice.base import AudioFileProcessor
+            from app.services.voice_v2.utils.audio import AudioUtils
             
             # Detect real audio format instead of hardcoding
-            detected_format = AudioFileProcessor.detect_audio_format(audio_data, filename)
-            mime_type = "audio/ogg"  # Default for WhatsApp
-            
-            if detected_format:
-                format_to_mime = {
-                    "mp3": "audio/mpeg",
-                    "wav": "audio/wav", 
-                    "ogg": "audio/ogg",
-                    "opus": "audio/opus",
-                    "flac": "audio/flac",
-                    "aac": "audio/aac"
-                }
-                mime_type = format_to_mime.get(detected_format.value.lower(), "audio/ogg")
+            try:
+                detected_format = AudioUtils.detect_format(audio_data, filename)
+                mime_type = AudioUtils.get_mime_type(detected_format)
                 self.logger.info(f"Detected audio format: {detected_format.value} -> {mime_type}")
-            else:
-                self.logger.warning(f"Could not detect audio format, using default: {mime_type}")
+            except Exception as e:
+                self.logger.warning(f"Could not detect audio format: {e}, using default")
+                from app.services.voice_v2.core.interfaces import AudioFormat
+                detected_format = AudioFormat.OGG
+                mime_type = "audio/ogg"
             
             file_info = VoiceFileInfo(
                 file_id=str(uuid.uuid4()),
@@ -1108,18 +1101,30 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             should_cleanup = False
             
             if not orchestrator:
-                self.logger.warning("Global voice orchestrator not available, creating temporary one")
-                # Fallback to temporary orchestrator
-                from app.services.redis_wrapper import RedisService
-                redis_service = RedisService()
-                await redis_service.initialize()
+                self.logger.warning("Global voice orchestrator not available, creating temporary voice_v2 orchestrator")
+                # Fallback to temporary voice_v2 orchestrator
+                from app.services.voice_v2.providers.enhanced_factory import EnhancedVoiceProviderFactory
+                from app.services.voice_v2.infrastructure.cache import VoiceCache
+                from app.services.voice_v2.infrastructure.minio_manager import MinioFileManager
                 
-                orchestrator = VoiceServiceOrchestrator(redis_service, self.logger)
+                enhanced_factory = EnhancedVoiceProviderFactory()
+                cache_manager = VoiceCache()
+                await cache_manager.initialize()
+                file_manager = MinioFileManager()
+                await file_manager.initialize()
+                
+                orchestrator = VoiceServiceOrchestrator(
+                    enhanced_factory=enhanced_factory,
+                    cache_manager=cache_manager,
+                    file_manager=file_manager
+                )
                 await orchestrator.initialize()
                 should_cleanup = True
             
             # Initialize voice services for this agent if needed
-            await orchestrator.initialize_voice_services_for_agent(self.agent_id, agent_config)
+            init_result = await orchestrator.initialize_voice_services_for_agent(
+                agent_config=agent_config
+            )
             
             # Process STT
             result = await orchestrator.process_voice_message(

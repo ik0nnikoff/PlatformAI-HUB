@@ -10,19 +10,18 @@ STT System Coordinator - Центральная интеграция всех ST
 
 import asyncio
 import time
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 import logging
 
 from app.services.voice_v2.providers.stt.base_stt import BaseSTTProvider
-from app.services.voice_v2.providers.stt.factory import STTProviderFactory, STTProviderLoader
 from app.services.voice_v2.providers.stt.dynamic_loader import (
     STTProviderManager, LoadingStrategy, ProviderLoadingConfig
 )
 from app.services.voice_v2.providers.stt.config_manager import (
     STTConfigManager, ConfigSource, AgentSTTConfig
 )
-from app.services.voice_v2.providers.stt.models import TranscriptionResult, ProviderStatus
+from app.services.voice_v2.providers.stt.models import TranscriptionResult
 from app.core.logging_config import setup_logger
 
 

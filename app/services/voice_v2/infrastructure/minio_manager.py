@@ -6,14 +6,12 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List, Union, Tuple
+from typing import Optional, Dict, List
 from io import BytesIO
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from minio import Minio
 from minio.error import S3Error
-from urllib3.exceptions import MaxRetryError
 
 from ..core.interfaces import FileManagerInterface
 from ..core.exceptions import VoiceServiceError

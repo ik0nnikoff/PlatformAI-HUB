@@ -23,7 +23,6 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 
 from ..core.interfaces import MetricsCollector
-from ..core.schemas import VoiceOperationMetric
 
 
 class MetricType(Enum):

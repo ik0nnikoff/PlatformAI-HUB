@@ -17,22 +17,20 @@ Architecture References:
 import asyncio
 import logging
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from google.cloud import texttospeech_v1
 from google.cloud.texttospeech_v1 import types
 from google.api_core import exceptions as google_exceptions
 
-from app.core.config import settings
 from app.services.voice_v2.providers.tts.base_tts import BaseTTSProvider
-from app.services.voice_v2.providers.tts.models import TTSRequest, TTSResult, TTSQuality, TTSCapabilities
+from app.services.voice_v2.providers.tts.models import TTSRequest, TTSQuality, TTSCapabilities
 from app.services.voice_v2.core.exceptions import (
     AudioProcessingError,
-    ConfigurationError,
-    VoiceProviderError
+    ConfigurationError
 )
 from app.services.voice_v2.core.interfaces import ProviderType, AudioFormat
-from app.services.voice_v2.utils.validators import ConfigurationValidator
+from app.services.voice_v2.providers.retry_mixin import provider_operation
 
 logger = logging.getLogger(__name__)
 
@@ -60,20 +58,12 @@ class GoogleTTSProvider(BaseTTSProvider):
         self,
         provider_name: str,
         config: Dict[str, Any],
-        priority: int = 1,
-        enabled: bool = True
+        priority: int = 2,
+        enabled: bool = True,
+        **kwargs
     ):
-        """Initialize Google Cloud TTS provider with configuration."""
-        # Extract configuration first
-        self._credentials_path = config.get("credentials_path") or settings.GOOGLE_APPLICATION_CREDENTIALS
-        self._project_id = config.get("project_id") or settings.GOOGLE_CLOUD_PROJECT_ID
-        self._voice_name = config.get("voice_name", "en-US-Journey-D")
-        self._language_code = config.get("language_code", "en-US")
-        self._speaking_rate = config.get("speaking_rate", 1.0)
-        self._pitch = config.get("pitch", 0.0)
-        
-        # Initialize parent with pre-extracted config
-        super().__init__(provider_name, config, priority, enabled)
+        """Initialize Google TTS provider."""
+        super().__init__(provider_name, config, priority, enabled, **kwargs)
         
         # Performance settings from Phase 1.2.3
         self._max_retries = config.get("max_retries", 3)
@@ -81,6 +71,12 @@ class GoogleTTSProvider(BaseTTSProvider):
         self._max_text_length = config.get("max_text_length", 5000)
         
         # Google-specific configuration
+        self._voice_name = config.get("voice_name", "en-US-Wavenet-D")
+        self._language_code = config.get("language_code", "en-US")
+        self._speaking_rate = config.get("speaking_rate", 1.0)
+        self._pitch = config.get("pitch", 0.0)
+        self._credentials_path = config.get("credentials_path")
+        self._project_id = config.get("project_id")
         self._effects_profile_id = config.get("effects_profile_id")
         self._volume_gain_db = config.get("volume_gain_db", 0.0)
         self._sample_rate_hertz = config.get("sample_rate_hertz", 24000)
@@ -184,14 +180,15 @@ class GoogleTTSProvider(BaseTTSProvider):
             logger.error(f"Google Cloud TTS connectivity test failed: {e}")
             raise AudioProcessingError(f"Google Cloud TTS connectivity failed: {e}")
     
+    @provider_operation("Google TTS Synthesis")
     async def _synthesize_implementation(self, request: TTSRequest) -> str:
         """
-        Core synthesis implementation for Google Cloud TTS.
+        Core synthesis implementation for Google Cloud TTS with ConnectionManager support.
         
-        Implements Phase 1.3 architectural patterns:
-        - LSP compliance with BaseTTSProvider interface
-        - Performance optimization through connection reuse
-        - Advanced voice configuration
+        Phase 3.5.2.3 Enhancement:
+        - ConnectionManager integration for enhanced retry logic
+        - Backward compatibility with legacy retry fallback
+        - SOLID principles maintained
         """
         if not self._client:
             await self.initialize()
@@ -199,8 +196,12 @@ class GoogleTTSProvider(BaseTTSProvider):
         # Prepare synthesis parameters
         synthesis_params = self._prepare_synthesis_params(request)
         
-        # Execute synthesis with retry logic
-        audio_data = await self._execute_with_retry(synthesis_params)
+        # Use ConnectionManager if available, fallback to legacy retry
+        if self._has_connection_manager():
+            audio_data = await self._perform_synthesis(synthesis_params)
+        else:
+            # Legacy fallback for backward compatibility
+            audio_data = await self._synthesize_with_retry(synthesis_params)
         
         # Upload to storage and return URL
         audio_url = await self._upload_audio_to_storage(
@@ -210,6 +211,27 @@ class GoogleTTSProvider(BaseTTSProvider):
         )
         
         return audio_url
+
+    async def _perform_synthesis(self, synthesis_params: Dict[str, Any]) -> bytes:
+        """
+        Enhanced synthesis with ConnectionManager integration
+        
+        Phase 3.5.2.3: Uses centralized retry logic from ConnectionManager
+        """
+        return await self._execute_with_connection_manager(
+            operation_name="google_tts_synthesis",
+            request_func=self._execute_google_synthesis,
+            synthesis_params=synthesis_params
+        )
+    
+    async def _execute_google_synthesis(self, synthesis_params: Dict[str, Any]) -> bytes:
+        """
+        Direct Google API call - used by ConnectionManager
+        
+        Single Responsibility: Only API communication
+        """
+        response = await self._client.synthesize_speech(**synthesis_params)
+        return response.audio_content
     
     def _prepare_synthesis_params(self, request: TTSRequest) -> Dict[str, Any]:
         """
@@ -274,18 +296,19 @@ class GoogleTTSProvider(BaseTTSProvider):
         
         return premium_voices.get(language_code, self._voice_name)
     
-    async def _execute_with_retry(self, synthesis_params: Dict[str, Any]) -> bytes:
+    async def _synthesize_with_retry(self, synthesis_params: Dict[str, Any]) -> bytes:
         """
-        Execute synthesis with retry logic for Google Cloud API.
+        Legacy synthesis with retry logic for Google Cloud API.
         
-        Implements Phase 1.2.3 performance patterns for error recovery.
+        Phase 3.5.2.3: Preserved for backward compatibility
+        Will be deprecated after ConnectionManager migration is complete
         """
         last_exception = None
         
         for attempt in range(self._max_retries + 1):
             try:
-                response = await self._client.synthesize_speech(**synthesis_params)
-                return response.audio_content
+                # Use direct API call method
+                return await self._execute_google_synthesis(synthesis_params)
             
             except google_exceptions.RetryError as e:
                 last_exception = e

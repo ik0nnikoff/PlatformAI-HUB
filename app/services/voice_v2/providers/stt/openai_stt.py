@@ -1,12 +1,11 @@
 """
-OpenAI STT Provider для Voice_v2 - Phase 3.1.2
+OpenAI STT Provider для Voice_v2 - Phase 3.5.2 Enhanced
 
-Адаптация из app/services/voice/stt/openai_stt.py с улучшениями:
-- LSP compliance с BaseSTTProvider (Phase_1_3_1_architecture_review.md)
-- Performance optimization через connection pooling (Phase_1_2_3_performance_optimization.md)
-- SOLID principles implementation (Phase_1_2_2_solid_principles.md)
-- Enhanced concurrent request handling
-- Proper error recovery patterns
+Рефакторинг для устранения дублирования retry логики:
+- ConnectionManager integration для centralized retry logic
+- RetryMixin for configuration standardization
+- Removed duplicated _execute_with_retry method
+- SOLID principles compliance
 """
 
 import asyncio
@@ -29,19 +28,20 @@ from app.services.voice_v2.providers.stt.base_stt import BaseSTTProvider
 from app.services.voice_v2.providers.stt.models import STTRequest, STTResult, STTCapabilities, STTQuality
 from app.services.voice_v2.core.interfaces import ProviderType, AudioFormat
 from app.services.voice_v2.utils.validators import ConfigurationValidator
+from app.services.voice_v2.providers.retry_mixin import RetryMixin, provider_operation
 
 logger = logging.getLogger(__name__)
 
 
-class OpenAISTTProvider(BaseSTTProvider):
+class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
     """
-    OpenAI Whisper STT Provider с enhanced performance и error handling.
+    OpenAI Whisper STT Provider с ConnectionManager integration.
     
-    Phase 1.3 Compliance:
-    - LSP: Полная substitutability с BaseSTTProvider
-    - Performance: Connection pooling и concurrent request optimization  
-    - SOLID: Single responsibility, dependency inversion, interface segregation
-    - Error handling: Comprehensive recovery patterns
+    Phase 3.5.2 Deduplication:
+    - Uses RetryMixin for configuration standardization
+    - ConnectionManager integration for centralized retry logic
+    - Removed duplicated retry implementation
+    - SOLID: Single responsibility, DRY principle compliance
     """
     
     def __init__(self, provider_name: str, config: Dict[str, Any], **kwargs):
@@ -55,13 +55,17 @@ class OpenAISTTProvider(BaseSTTProvider):
         self.api_key = config.get("api_key") or settings.OPENAI_API_KEY
         self.model = config.get("model", "whisper-1")
         self.timeout = config.get("timeout", 30)
-        self.max_retries = config.get("max_retries", 3)
-        self.retry_delay = config.get("retry_delay", 1.0)
         
-        # Connection pooling settings (Phase_1_2_3_performance_optimization.md)
-        self.connection_pool_size = config.get("connection_pool_size", 100)
-        self.per_host_connections = config.get("per_host_connections", 30)
-        self.keepalive_timeout = config.get("keepalive_timeout", 30)
+        # Retry configuration через RetryMixin
+        if self._has_connection_manager():
+            # Register retry configuration with ConnectionManager
+            retry_config = self._get_retry_config(config)
+            logger.info(f"OpenAISTTProvider using ConnectionManager with retry config: {retry_config.max_retries} retries")
+        else:
+            # Fallback к legacy parameters для compatibility
+            self.max_retries = config.get("max_retries", 3)
+            self.retry_delay = config.get("retry_delay", 1.0)
+            logger.warning("OpenAISTTProvider fallback to legacy retry - ConnectionManager not available")
         
         logger.info(f"OpenAISTTProvider initialized: model={self.model}, timeout={self.timeout}s")
     
@@ -152,8 +156,9 @@ class OpenAISTTProvider(BaseSTTProvider):
             self._session = None
             self._initialized = False
     
+    @provider_operation("transcription")
     async def _transcribe_implementation(self, request: STTRequest) -> STTResult:
-        """Core OpenAI Whisper transcription implementation."""
+        """Core OpenAI Whisper transcription implementation с ConnectionManager integration."""
         if not self.client:
             raise AudioProcessingError("OpenAI client не инициализирован")
         
@@ -163,7 +168,17 @@ class OpenAISTTProvider(BaseSTTProvider):
         try:
             await self._validate_audio_file(audio_path)
             transcription_params = self._prepare_transcription_params(request)
-            result = await self._transcribe_with_retry(audio_path, transcription_params)
+            
+            # Use ConnectionManager for centralized retry logic
+            if self._has_connection_manager():
+                result = await self._execute_with_connection_manager(
+                    self._perform_transcription,
+                    audio_path,
+                    transcription_params
+                )
+            else:
+                # Fallback to legacy retry for compatibility
+                result = await self._transcribe_with_retry(audio_path, transcription_params)
             
             return self._process_transcription_result(
                 result, request, time.time() - start_time, audio_path
@@ -253,11 +268,49 @@ class OpenAISTTProvider(BaseSTTProvider):
             }
         )
     
+    async def _perform_transcription(self, session, audio_path: Path, params: Dict[str, Any]) -> Any:
+        """
+        Core transcription operation for ConnectionManager execution.
+        
+        Args:
+            session: HTTP session (provided by ConnectionManager)
+            audio_path: Path to audio file
+            params: Transcription parameters
+            
+        Returns:
+            OpenAI transcription response
+        """
+        with open(audio_path, "rb") as audio_file:
+            # Copy file to BytesIO для async operation
+            audio_data = io.BytesIO(audio_file.read())
+            audio_data.name = audio_path.name
+            
+            # Execute transcription через OpenAI client
+            return await asyncio.wait_for(
+                self.client.audio.transcriptions.create(
+                    file=audio_data,
+                    **params
+                ),
+                timeout=self.timeout
+            )
+
     async def _transcribe_with_retry(self, audio_path: Path, params: Dict[str, Any]) -> Any:
-        """Transcription с exponential backoff retry logic."""
+        """
+        Legacy retry method for backward compatibility.
+        
+        NOTE: This method is deprecated and should be removed after full ConnectionManager migration.
+        Use _perform_transcription with ConnectionManager instead.
+        """
+        if hasattr(self, 'max_retries'):
+            max_retries = self.max_retries
+            retry_delay = getattr(self, 'retry_delay', 1.0)
+        else:
+            max_retries = 3
+            retry_delay = 1.0
+            
         last_exception = None
         
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(max_retries + 1):
             try:
                 with open(audio_path, "rb") as audio_file:
                     # Copy file to BytesIO для повторных попыток
@@ -285,8 +338,8 @@ class OpenAISTTProvider(BaseSTTProvider):
                 raise
             except (APIConnectionError, APIError) as e:
                 last_exception = e
-                if attempt < self.max_retries:
-                    delay = self.retry_delay * (2 ** attempt)  # Exponential backoff
+                if attempt < max_retries:
+                    delay = retry_delay * (2 ** attempt)  # Exponential backoff
                     logger.warning(f"OpenAI API error (attempt {attempt + 1}), retrying in {delay}s: {e}")
                     await asyncio.sleep(delay)
                 else:
@@ -296,7 +349,7 @@ class OpenAISTTProvider(BaseSTTProvider):
                 logger.error(f"Non-retryable OpenAI error: {e}")
                 raise
         
-        raise AudioProcessingError(f"OpenAI transcription failed after {self.max_retries + 1} attempts: {last_exception}")
+        raise AudioProcessingError(f"OpenAI transcription failed after {max_retries + 1} attempts: {last_exception}")
     
     async def _initial_health_check(self) -> bool:
         """Non-blocking health check при инициализации."""
@@ -340,6 +393,11 @@ class OpenAISTTProvider(BaseSTTProvider):
     
     async def _ensure_session(self) -> None:
         """Ensure HTTP session with connection pooling (Phase 1.2.3 pattern)."""
+        # If connection manager is available, use it for shared connection pooling
+        if self._connection_manager:
+            # Connection manager handles session management
+            return
+            
         if self._session and not self._session.closed:
             return
             
@@ -349,9 +407,9 @@ class OpenAISTTProvider(BaseSTTProvider):
                 
             # Create optimized TCP connector
             connector = aiohttp.TCPConnector(
-                limit=self.connection_pool_size,
-                limit_per_host=self.per_host_connections,
-                keepalive_timeout=self.keepalive_timeout,
+                limit=getattr(self, 'connection_pool_size', 100),
+                limit_per_host=getattr(self, 'per_host_connections', 30),
+                keepalive_timeout=getattr(self, 'keepalive_timeout', 30),
                 use_dns_cache=True
             )
             
@@ -366,8 +424,8 @@ class OpenAISTTProvider(BaseSTTProvider):
             
             logger.debug(
                 f"OpenAI STT session created - "
-                f"pool_size={self.connection_pool_size}, "
-                f"keepalive={self.keepalive_timeout}s"
+                f"pool_size={getattr(self, 'connection_pool_size', 100)}, "
+                f"keepalive={getattr(self, 'keepalive_timeout', 30)}s"
             )
     
     async def health_check(self) -> bool:

@@ -4,7 +4,7 @@ Voice v2 Redis Rate Limiter - High-performance distributed rate limiting
 
 import time
 import logging
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Dict, Any
 from dataclasses import dataclass
 
 from ..core.interfaces import RateLimiterInterface

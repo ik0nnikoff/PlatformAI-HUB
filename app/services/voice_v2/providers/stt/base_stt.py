@@ -1,36 +1,67 @@
-"""Minimal STT Base Provider - 200 lines max."""
+"""Minimal STT Base Provider - Phase 3.5.2.2 Enhanced with RetryMixin."""
 
 import asyncio
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from .models import STTRequest, STTResult, STTCapabilities
 from ...core.exceptions import VoiceServiceError, ProviderNotAvailableError, AudioProcessingError
 from ...utils.validators import AudioValidator, ConfigurationValidator
+from ..retry_mixin import RetryMixin
+
+if TYPE_CHECKING:
+    from ..enhanced_connection_manager import IConnectionManager
 
 logger = logging.getLogger(__name__)
 
 
-class BaseSTTProvider(ABC):
-    """Minimal abstract base for STT providers. LSP compliant."""
+class BaseSTTProvider(ABC, RetryMixin):
+    """
+    Minimal abstract base for STT providers with RetryMixin integration.
     
-    def __init__(self, provider_name: str, config: Dict[str, Any], priority: int = 1, enabled: bool = True):
+    Phase 3.5.2.2 Enhancement:
+    - RetryMixin integration for centralized retry configuration
+    - ConnectionManager support standardization
+    - SOLID principles compliance
+    """
+    
+    def __init__(
+        self, 
+        provider_name: str, 
+        config: Dict[str, Any], 
+        priority: int = 1, 
+        enabled: bool = True,
+        connection_manager: Optional['IConnectionManager'] = None
+    ):
         self.provider_name = provider_name
         self.config = config
         self.priority = priority
         self.enabled = enabled
         self._initialized = False
         
+        # Enhanced Connection Manager Integration (Phase 3.4.2.2)
+        self._connection_manager = connection_manager
+        
+        # Initialize retry configuration через RetryMixin
+        if self._has_connection_manager():
+            retry_config = self._get_retry_config(config)
+            logger.debug(f"{provider_name} STT provider using ConnectionManager with retry config")
+        
         # Quick config validation
         missing = [f for f in self.get_required_config_fields() if f not in config]
         if missing:
             raise VoiceServiceError(f"Missing config: {missing}")
     
-    @abstractmethod
     def get_required_config_fields(self) -> List[str]:
-        pass
+        """
+        Default implementation - providers can override for specific requirements.
+        
+        Returns:
+            List of required configuration field names
+        """
+        return []  # Base implementation requires no fields
     
     @abstractmethod
     async def get_capabilities(self) -> STTCapabilities:

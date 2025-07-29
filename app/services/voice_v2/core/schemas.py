@@ -14,12 +14,13 @@ Features:
 - Request/response schemas for all operations
 - Metrics and performance tracking models
 - Consistent error handling schemas
+- Compatibility with AgentRunner integration
 """
 
 from typing import Dict, List, Optional, Any
 from datetime import datetime
-from pathlib import Path
 import hashlib
+import base64
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from enum import Enum
 
@@ -43,6 +44,68 @@ class VoiceOperation(Enum):
     TTS = "tts"
 
 
+# AgentRunner Compatibility Schemas
+class VoiceFileInfo(BaseModel):
+    """
+    Voice file information schema (AgentRunner compatibility)
+    
+    Compatible with app/api/schemas/voice_schemas.py:VoiceFileInfo
+    """
+    
+    file_id: str = Field(..., description="Unique file identifier")
+    original_filename: str = Field(..., description="Original filename")
+    mime_type: str = Field(..., description="File MIME type")
+    size_bytes: int = Field(..., ge=0, description="File size in bytes")
+    format: str = Field(..., description="Audio format (wav, mp3, ogg, etc.)")
+    duration_seconds: Optional[float] = Field(default=None, ge=0, description="Audio duration")
+    created_at: str = Field(..., description="Creation timestamp (ISO format)")
+    minio_bucket: str = Field(..., description="MinIO bucket name")
+    minio_key: str = Field(..., description="MinIO object key")
+    
+    model_config = ConfigDict(extra="allow")  # Allow extra fields for compatibility
+
+
+class VoiceProcessingResult(BaseModel):
+    """
+    Voice processing result schema (AgentRunner compatibility)
+    
+    Compatible with app/api/schemas/voice_schemas.py:VoiceProcessingResult
+    """
+    
+    success: bool = Field(..., description="Whether processing was successful")
+    text: Optional[str] = Field(default=None, description="Transcribed text (STT) or input text (TTS)")
+    audio_data: Optional[bytes] = Field(default=None, description="Audio data for TTS results")
+    file_info: Optional[VoiceFileInfo] = Field(default=None, description="File information")
+    error_message: Optional[str] = Field(default=None, description="Error message if failed")
+    processing_time: float = Field(default=0.0, ge=0, description="Processing time in seconds")
+    provider_used: Optional[str] = Field(default=None, description="Provider that processed the request")
+    cached: bool = Field(default=False, description="Whether result came from cache")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    
+    model_config = ConfigDict(extra="allow")  # Allow extra fields for compatibility
+
+
+class VoiceSettings(BaseModel):
+    """
+    Voice settings schema for agent configuration
+    
+    Compatible with app/api/schemas/voice_schemas.py:VoiceSettings
+    """
+    
+    enabled: bool = Field(default=False, description="Whether voice features are enabled")
+    auto_stt: bool = Field(default=True, description="Automatic STT processing")
+    auto_tts_on_keywords: bool = Field(default=False, description="Auto TTS based on keywords")
+    intent_keywords: List[str] = Field(default_factory=list, description="Voice intent keywords")
+    providers: List[Dict[str, Any]] = Field(default_factory=list, description="Provider configurations")
+    max_file_size_mb: int = Field(default=25, ge=1, le=100, description="Max file size in MB")
+    rate_limit_per_minute: int = Field(default=30, ge=1, le=100, description="Rate limit per minute")
+    cache_enabled: bool = Field(default=True, description="Whether caching is enabled")
+    cache_ttl_hours: int = Field(default=24, ge=1, le=168, description="Cache TTL in hours")
+    
+    model_config = ConfigDict(extra="allow")
+
+
+# Core Voice_v2 Schemas
 class VoiceOperationMetric(BaseModel):
     """Voice operation metrics schema"""
     
@@ -58,67 +121,22 @@ class VoiceOperationMetric(BaseModel):
 class STTRequest(BaseModel):
     """Speech-to-Text request schema"""
     
-    audio_file_path: str = Field(..., description="Path to audio file for transcription")
-    language: Optional[str] = Field(default=None, description="Target language (auto-detect if None)")
-    provider: Optional[ProviderType] = Field(default=None, description="Preferred provider")
-    options: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific options")
+    audio_data: bytes = Field(..., description="Audio file data")
+    language: Optional[str] = Field(default="auto", description="Audio language code")
+    format: Optional[AudioFormat] = Field(default=None, description="Audio format")
     
-    @field_validator('audio_file_path')
+    @field_validator('audio_data')
     @classmethod
-    def validate_audio_file_path(cls, v):
-        """Validate audio file path exists and is readable"""
-        if not v:
-            raise ValueError("Audio file path cannot be empty")
-        
-        file_path = Path(v)
-        if not file_path.exists():
-            raise ValueError(f"Audio file not found: {v}")
-        
-        if not file_path.is_file():
-            raise ValueError(f"Path is not a file: {v}")
-            
-        return str(file_path.resolve())
-    
-    def generate_cache_key(self) -> str:
-        """Generate cache key for this request"""
-        # Use file hash + options for cache key
-        file_path = Path(self.audio_file_path)
-        content = f"{file_path.stat().st_size}_{file_path.stat().st_mtime}_{self.language}_{self.options}"
-        return hashlib.sha256(content.encode()).hexdigest()
+    def validate_audio_data(cls, v):
+        if len(v) == 0:
+            raise ValueError('Audio data cannot be empty')
+        return v
     
     def get_cache_key(self) -> str:
-        """Alias for generate_cache_key for compatibility"""
-        return self.generate_cache_key()
-    
-    model_config = ConfigDict(extra="forbid")
-
-
-class TTSRequest(BaseModel):
-    """Text-to-Speech request schema"""
-    
-    text: str = Field(..., description="Text to synthesize", min_length=1, max_length=5000)
-    language: Optional[str] = Field(default=None, description="Target language")
-    voice: Optional[str] = Field(default=None, description="Voice to use")
-    provider: Optional[ProviderType] = Field(default=None, description="Preferred provider")
-    output_format: AudioFormat = Field(default=AudioFormat.WAV, description="Output audio format")
-    options: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific options")
-    
-    @field_validator('text')
-    @classmethod
-    def validate_text(cls, v):
-        """Validate text content"""
-        if not v or not v.strip():
-            raise ValueError("Text cannot be empty")
-        return v.strip()
-    
-    def generate_cache_key(self) -> str:
-        """Generate cache key for this request"""
-        content = f"{self.text}_{self.language}_{self.voice}_{self.output_format}_{self.options}"
-        return hashlib.sha256(content.encode()).hexdigest()
-    
-    def get_cache_key(self) -> str:
-        """Alias for generate_cache_key for compatibility"""
-        return self.generate_cache_key()
+        """Generate cache key for STT request"""
+        content = base64.b64encode(self.audio_data).decode()[:100]  # First 100 chars of encoded data
+        key_data = f"{content}_{self.format}_{self.language}"
+        return hashlib.sha256(key_data.encode()).hexdigest()
     
     model_config = ConfigDict(extra="forbid")
 
@@ -126,21 +144,34 @@ class TTSRequest(BaseModel):
 class STTResponse(BaseModel):
     """Speech-to-Text response schema"""
     
-    transcribed_text: str = Field(..., description="Transcribed text result")
-    language: Optional[str] = Field(default=None, description="Detected/used language")
-    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Transcription confidence")
-    provider_used: ProviderType = Field(..., description="Provider that processed the request")
-    processing_time_ms: float = Field(..., ge=0, description="Processing time in milliseconds")
-    cached: bool = Field(default=False, description="Whether result was cached")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional provider metadata")
+    text: str = Field(..., description="Transcribed text")
+    language: Optional[str] = Field(default=None, description="Detected language")
+    confidence: Optional[float] = Field(default=None, ge=0, le=1, description="Confidence score")
+    processing_time: float = Field(..., ge=0, description="Processing time in seconds")
+    provider: str = Field(..., description="Provider used")
     
-    @field_validator('transcribed_text')
+    model_config = ConfigDict(extra="forbid")
+
+
+class TTSRequest(BaseModel):
+    """Text-to-Speech request schema"""
+    
+    text: str = Field(..., min_length=1, max_length=4000, description="Text to synthesize")
+    language: Optional[str] = Field(default="ru", description="Target language")
+    voice: Optional[str] = Field(default=None, description="Voice ID or name")
+    speed: Optional[float] = Field(default=1.0, ge=0.25, le=4.0, description="Speech speed")
+    
+    @field_validator('text')
     @classmethod
-    def validate_transcribed_text(cls, v):
-        """Validate transcribed text is not empty"""
-        if not v or not v.strip():
-            raise ValueError("Transcribed text cannot be empty")
-        return v.strip()
+    def validate_text(cls, v):
+        if not v.strip():
+            raise ValueError('Text cannot be empty or whitespace only')
+        return v
+    
+    def cache_key(self) -> str:
+        """Generate cache key for this TTS request."""
+        key_data = f"{self.text}:{self.voice}:{self.format}:{self.speed}:{self.language}"
+        return hashlib.sha256(key_data.encode()).hexdigest()
     
     model_config = ConfigDict(extra="forbid")
 
@@ -148,112 +179,41 @@ class STTResponse(BaseModel):
 class TTSResponse(BaseModel):
     """Text-to-Speech response schema"""
     
-    audio_url: str = Field(..., description="URL to generated audio file")
-    audio_format: AudioFormat = Field(..., description="Audio format of generated file")
-    duration_seconds: Optional[float] = Field(default=None, ge=0, description="Audio duration")
-    provider_used: ProviderType = Field(..., description="Provider that processed the request")
-    processing_time_ms: float = Field(..., ge=0, description="Processing time in milliseconds")
-    cached: bool = Field(default=False, description="Whether result was cached")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional provider metadata")
+    audio_data: bytes = Field(..., description="Generated audio data")
+    format: AudioFormat = Field(..., description="Audio format")
+    sample_rate: Optional[int] = Field(default=None, description="Audio sample rate")
+    duration: Optional[float] = Field(default=None, ge=0, description="Audio duration in seconds")
+    processing_time: float = Field(..., ge=0, description="Processing time in seconds")
+    provider: str = Field(..., description="Provider used")
     
-    @field_validator('audio_url')
+    @field_validator('audio_data')
     @classmethod
-    def validate_audio_url(cls, v):
-        """Validate audio URL is not empty"""
-        if not v or not v.strip():
-            raise ValueError("Audio URL cannot be empty")
-        return v.strip()
+    def validate_audio_data(cls, v):
+        if len(v) == 0:
+            raise ValueError('Audio data cannot be empty')
+        return v
     
     model_config = ConfigDict(extra="forbid")
 
 
-class PerformanceMetrics(BaseModel):
-    """Performance metrics tracking schema"""
+class CacheEntry(BaseModel):
+    """Cache entry schema"""
     
-    operation: str = Field(..., description="Operation type (stt/tts)")
-    provider: ProviderType = Field(..., description="Provider used")
-    success: bool = Field(..., description="Operation success status")
-    duration_ms: float = Field(..., ge=0, description="Operation duration in milliseconds")
-    cached: bool = Field(default=False, description="Whether result was cached")
-    error_type: Optional[str] = Field(default=None, description="Error type if failed")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Metrics timestamp")
+    key: str = Field(..., description="Cache key")
+    data: bytes = Field(..., description="Cached data")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Cache metadata")
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="Creation timestamp")
+    expires_at: Optional[datetime] = Field(default=None, description="Expiration timestamp")
     
-    model_config = ConfigDict(extra="forbid")
-
-
-class ProviderStatus(BaseModel):
-    """Provider status tracking schema"""
+    def generate_key(content: str) -> str:
+        """Generate cache key from content"""
+        return hashlib.sha256(content.encode()).hexdigest()
     
-    provider: ProviderType = Field(..., description="Provider identifier")
-    available: bool = Field(..., description="Provider availability status")
-    last_success: Optional[datetime] = Field(default=None, description="Last successful operation")
-    last_failure: Optional[datetime] = Field(default=None, description="Last failed operation")
-    failure_count: int = Field(default=0, ge=0, description="Recent failure count")
-    circuit_breaker_open: bool = Field(default=False, description="Circuit breaker status")
-    average_response_time_ms: Optional[float] = Field(default=None, ge=0, description="Average response time")
-    
-    model_config = ConfigDict(extra="forbid")
-
-
-class VoiceServiceHealth(BaseModel):
-    """Overall voice service health schema"""
-    
-    status: str = Field(..., description="Overall service status")
-    providers: List[ProviderStatus] = Field(..., description="Provider status list")
-    cache_status: str = Field(..., description="Cache service status")
-    file_storage_status: str = Field(..., description="File storage status")
-    total_requests: int = Field(default=0, ge=0, description="Total requests processed")
-    successful_requests: int = Field(default=0, ge=0, description="Successful requests")
-    failed_requests: int = Field(default=0, ge=0, description="Failed requests")
-    average_response_time_ms: float = Field(default=0, ge=0, description="Average response time")
-    uptime_seconds: float = Field(default=0, ge=0, description="Service uptime")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Health check timestamp")
-    
-    @property
-    def success_rate(self) -> float:
-        """Calculate success rate percentage"""
-        if self.total_requests == 0:
-            return 0.0
-        return (self.successful_requests / self.total_requests) * 100
-    
-    model_config = ConfigDict(extra="forbid")
-
-
-class ErrorResponse(BaseModel):
-    """Error response schema"""
-    
-    error_code: str = Field(..., description="Error code identifier")
-    error_message: str = Field(..., description="Human-readable error message")
-    error_type: str = Field(..., description="Error type classification")
-    provider: Optional[ProviderType] = Field(default=None, description="Provider that caused error")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Error timestamp")
-    request_id: Optional[str] = Field(default=None, description="Request identifier for tracking")
-    details: Dict[str, Any] = Field(default_factory=dict, description="Additional error details")
-    
-    model_config = ConfigDict(extra="forbid")
-
-
-class CacheStats(BaseModel):
-    """Cache statistics schema"""
-    
-    hits: int = Field(default=0, ge=0, description="Cache hits count")
-    misses: int = Field(default=0, ge=0, description="Cache misses count")
-    size: int = Field(default=0, ge=0, description="Current cache size")
-    max_size: int = Field(default=1000, ge=0, description="Maximum cache size")
-    hit_rate: float = Field(default=0.0, ge=0.0, le=1.0, description="Cache hit rate")
-    evictions: int = Field(default=0, ge=0, description="Cache evictions count")
-    
-    @property
-    def total_requests(self) -> int:
-        """Total cache requests"""
-        return self.hits + self.misses
-    
-    def calculate_hit_rate(self) -> float:
-        """Calculate current hit rate"""
-        total = self.total_requests
-        if total == 0:
-            return 0.0
-        return self.hits / total
+    def is_expired(self) -> bool:
+        """Check if cache entry is expired"""
+        if self.expires_at is None:
+            return False
+        return datetime.utcnow() > self.expires_at
     
     model_config = ConfigDict(extra="forbid")
 
@@ -268,18 +228,5 @@ class ProviderCapabilities(BaseModel):
     max_text_length: Optional[int] = Field(default=None, description="Maximum text length for TTS")
     supports_streaming: bool = Field(default=False, description="Streaming support")
     supports_real_time: bool = Field(default=False, description="Real-time processing support")
-    
-    model_config = ConfigDict(extra="forbid")
-
-
-class VoiceFileInfo(BaseModel):
-    """Voice file information schema for MinIO storage"""
-    
-    object_key: str = Field(..., description="MinIO object key")
-    bucket_name: str = Field(..., description="MinIO bucket name")
-    file_size: int = Field(..., description="File size in bytes")
-    content_type: str = Field(..., description="MIME content type")
-    upload_time: datetime = Field(..., description="Upload timestamp")
-    metadata: Dict[str, str] = Field(default_factory=dict, description="Additional metadata")
     
     model_config = ConfigDict(extra="forbid")

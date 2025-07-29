@@ -13,12 +13,10 @@ import pytest
 import asyncio
 import time
 from unittest.mock import AsyncMock, patch, MagicMock
-from concurrent.futures import ThreadPoolExecutor
-from openai import RateLimitError, APIConnectionError
+from openai import RateLimitError
 
 from app.services.voice_v2.providers.tts.openai_tts import OpenAITTSProvider
 from app.services.voice_v2.providers.tts.models import TTSRequest, TTSQuality
-from app.services.voice_v2.core.interfaces import AudioFormat
 
 
 class TestOpenAITTSPerformance:

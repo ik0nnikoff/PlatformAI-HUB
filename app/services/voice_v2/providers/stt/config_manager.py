@@ -11,14 +11,13 @@ Configuration-based initialization для STT провайдеров
 import os
 import json
 import yaml
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 import logging
 
-from app.services.voice_v2.providers.stt.models import ProviderConfiguration
-from app.services.voice_v2.providers.stt.dynamic_loader import LoadingStrategy, ProviderLoadingConfig
+from app.services.voice_v2.providers.stt.dynamic_loader import ProviderLoadingConfig
 from app.core.logging_config import setup_logger
 
 

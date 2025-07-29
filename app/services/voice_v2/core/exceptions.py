@@ -124,7 +124,7 @@ class ConfigurationError(VoiceServiceError):
         self.reason = reason
 
 
-class ConnectionError(VoiceServiceError):
+class VoiceConnectionError(VoiceServiceError):
     """
     Exception raised for connection-related errors
     
@@ -363,6 +363,7 @@ class AudioProcessingError(VoiceServiceError):
 
 # Compatibility aliases
 ConfigurationError = VoiceConfigurationError
+ConnectionPoolError = VoiceConnectionError  # Alias for ConnectionManager compatibility
 
 
 # Exception mapping for quick lookup
@@ -373,6 +374,8 @@ EXCEPTION_MAP = {
     "base": VoiceServiceError,
     "provider_unavailable": ProviderNotAvailableError,
     "audio_processing": AudioProcessingError,
+    "connection": VoiceConnectionError,
+    "connection_pool": VoiceConnectionError,  # Alias mapping
 }
 
 

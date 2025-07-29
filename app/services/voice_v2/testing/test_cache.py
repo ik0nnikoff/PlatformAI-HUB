@@ -7,8 +7,7 @@ Focus on core cache functionality without complex Redis mocking.
 
 import pytest
 import hashlib
-import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from app.services.voice_v2.infrastructure.cache import (
     CacheKeyGenerator, CacheMetrics, VoiceCache,
@@ -72,27 +71,27 @@ class TestCacheKeyGenerator:
     def test_audio_hash(self):
         """Test audio data hashing"""
         audio_data = b"fake_audio_data_12345"
-        expected_hash = hashlib.md5(audio_data).hexdigest()
+        expected_hash = hashlib.sha256(audio_data).hexdigest()
         
         result = CacheKeyGenerator.audio_hash(audio_data)
         
         assert result == expected_hash
-        assert len(result) == 32  # MD5 hex length
+        assert len(result) == 64  # SHA256 hex length
     
     def test_text_hash(self):
         """Test text hashing"""
         text = "Hello, this is a test text for TTS"
-        expected_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
+        expected_hash = hashlib.sha256(text.encode('utf-8')).hexdigest()
         
         result = CacheKeyGenerator.text_hash(text)
         
         assert result == expected_hash
-        assert len(result) == 32  # MD5 hex length
+        assert len(result) == 64  # SHA256 hex length
     
     def test_text_hash_unicode(self):
         """Test text hashing with unicode characters"""
         text = "Привет, это тестовый текст для TTS"
-        expected_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
+        expected_hash = hashlib.sha256(text.encode('utf-8')).hexdigest()
         
         result = CacheKeyGenerator.text_hash(text)
         
@@ -107,7 +106,7 @@ class TestCacheKeyGenerator:
         mock_file.read.side_effect = [file_content, b""]  # First read content, second read EOF
         mock_open.return_value.__enter__.return_value = mock_file
         
-        expected_hash = hashlib.md5(file_content).hexdigest()
+        expected_hash = hashlib.sha256(file_content).hexdigest()
         
         result = CacheKeyGenerator.file_hash("/fake/path/audio.wav")
         

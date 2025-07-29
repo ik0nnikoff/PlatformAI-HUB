@@ -15,16 +15,13 @@ Architecture Validation:
 """
 
 import pytest
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from typing import Dict, Any, List
 
 # Import voice_v2 components
-from app.services.voice_v2.core.exceptions import VoiceServiceError, ProviderNotAvailableError
-from app.services.voice_v2.providers.tts.factory import TTSProviderFactory, tts_factory
+from app.services.voice_v2.core.exceptions import VoiceServiceError
+from app.services.voice_v2.providers.tts.factory import TTSProviderFactory
 from app.services.voice_v2.providers.tts.base_tts import BaseTTSProvider
-from app.services.voice_v2.providers.tts.models import TTSCapabilities, TTSQuality
-from app.services.voice_v2.core.interfaces import ProviderType, AudioFormat
 
 
 class TestTTSProviderFactory:
