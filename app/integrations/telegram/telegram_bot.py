@@ -63,16 +63,66 @@ class TelegramIntegrationBot(ServiceComponentBase):
         # Image processing orchestrator
         self.image_orchestrator = None  # Will be initialized later
         
-        # 🆕 Agent configuration cache (loaded once at startup)
-        self.agent_config: Optional[Dict[str, Any]] = None
+        # � PHASE 4.4.1: DYNAMIC CONFIG - Remove static agent_config caching
+        # Agent configuration now fetched dynamically when needed
+        # This allows runtime configuration updates without restart
         
-        # 🆕 Photo grouping for handling multiple photos sent together
+        # Photo grouping for handling multiple photos sent together
         self.photo_groups: Dict[str, List[Message]] = {}  # media_group_id -> messages
         self.photo_buffers: Dict[int, List[Message]] = {}  # user_id -> buffered messages  
         self.photo_timers: Dict[int, asyncio.Task] = {}  # user_id -> timer task
         self.photo_group_timeout = 2.0  # seconds to wait for additional photos
         
         self.logger.info(f"TelegramIntegrationBot initialized. PID: {os.getpid()}")
+
+    async def _send_voice_response(self, chat_id: int, audio_url: str) -> bool:
+        """
+        🎯 PHASE 4.4.1: Unified voice response sending
+        Handles voice message delivery with standardized error handling.
+        
+        Args:
+            chat_id: Telegram chat ID
+            audio_url: URL to audio file from LangGraph voice tools
+            
+        Returns:
+            bool: True if voice message sent successfully, False otherwise
+        """
+        try:
+            # Download audio file and send as voice message
+            import aiohttp
+            from aiogram.types import BufferedInputFile
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(audio_url) as resp:
+                    if resp.status == 200:
+                        audio_data = await resp.read()
+                        
+                        # Create BufferedInputFile for voice message
+                        voice_file = BufferedInputFile(
+                            audio_data,
+                            filename="voice_response.mp3"
+                        )
+                        
+                        # Send as voice message without caption
+                        await self.bot.send_voice(
+                            chat_id=chat_id,
+                            voice=voice_file
+                        )
+                        self.logger.info(f"Voice message sent successfully to chat {chat_id}")
+                        return True
+                    else:
+                        self.logger.error(f"Failed to download audio from {audio_url}: HTTP {resp.status}")
+                        return False
+                        
+        except TelegramBadRequest as e:
+            if "VOICE_MESSAGES_FORBIDDEN" in str(e):
+                self.logger.warning(f"Voice messages are forbidden for chat {chat_id}, falling back to text")
+            else:
+                self.logger.error(f"Telegram API error sending voice to chat {chat_id}: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Error sending audio response to chat {chat_id}: {e}", exc_info=True)
+            return False
 
     def _request_contact_markup(self) -> ReplyKeyboardMarkup:
         button = KeyboardButton(text="Поделиться контактом", request_contact=True)
@@ -350,6 +400,32 @@ class TelegramIntegrationBot(ServiceComponentBase):
                 self.typing_tasks[chat_id].cancel()
                 # No need to await here, _send_typing_periodically handles its own cleanup on cancel
 
+    async def _get_agent_config(self) -> Dict[str, Any]:
+        """
+        🎯 PHASE 4.4.1: DYNAMIC CONFIG - Get agent configuration dynamically
+        Fetches current agent configuration at runtime, enabling real-time updates.
+        
+        Returns:
+            Dict containing current agent configuration
+        """
+        try:
+            import httpx
+            self.logger.debug(f"Fetching dynamic agent config for {self.agent_id}")
+            
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"http://{settings.MANAGER_HOST}:{settings.MANAGER_PORT}/api/v1/agents/{self.agent_id}/config")
+                if response.status_code == 200:
+                    config = response.json()
+                    self.logger.debug(f"Successfully fetched dynamic agent config for {self.agent_id}")
+                    return config
+                else:
+                    self.logger.warning(f"Failed to fetch agent config: HTTP {response.status_code}, using fallback")
+                    return self._get_fallback_agent_config()
+                    
+        except Exception as e:
+            self.logger.warning(f"Error fetching dynamic agent config: {e}, using fallback")
+            return self._get_fallback_agent_config()
+
     async def _handle_voice_message(self, message: Message):
         """Handle voice and audio messages from users"""
         if not self.bot:
@@ -423,9 +499,9 @@ class TelegramIntegrationBot(ServiceComponentBase):
                             "username": db_user.username
                         })
             
-            # 🆕 Use cached agent config instead of loading from API each time
-            agent_config = self.agent_config or self._get_fallback_agent_config()
-            self.logger.debug(f"Using cached agent config for voice processing")
+            # � PHASE 4.4.1: DYNAMIC CONFIG - Get current agent configuration
+            agent_config = await self._get_agent_config()
+            self.logger.debug(f"Using dynamic agent config for voice processing")
             
             # Process voice message
             
@@ -759,49 +835,20 @@ class TelegramIntegrationBot(ServiceComponentBase):
                                 except Exception as e_task_cancel:
                                     self.logger.error(f"Error awaiting cancelled typing task for chat {chat_id}: {e_task_cancel}", exc_info=True)
 
-                        # Check if audio response is included
+                        # 🎯 PHASE 4.4.1: SIMPLIFIED TO STT-ONLY PATTERN
+                        # Voice responses now handled by LangGraph agent through voice tools
+                        # TTS decisions moved from integration layer to agent layer
+                        
+                        # Check if audio response is included (from LangGraph voice tools)
                         audio_url = payload.get("audio_url")
                         voice_sent_successfully = False
                         
                         if audio_url:
-                            self.logger.info(f"Sending audio response to chat {chat_id}: {audio_url}")
-                            try:
-                                # Download audio file and send as voice message
-                                import aiohttp
-                                from aiogram.types import BufferedInputFile
-                                
-                                async with aiohttp.ClientSession() as session:
-                                    async with session.get(audio_url) as resp:
-                                        if resp.status == 200:
-                                            audio_data = await resp.read()
-                                            
-                                            # Create BufferedInputFile for voice message
-                                            voice_file = BufferedInputFile(
-                                                audio_data,
-                                                filename="voice_response.mp3"
-                                            )
-                                            
-                                            # Send as voice message without caption
-                                            await self.bot.send_voice(
-                                                chat_id=chat_id,
-                                                voice=voice_file
-                                            )
-                                            voice_sent_successfully = True
-                                            self.logger.info(f"Voice message sent successfully to chat {chat_id}")
-                                        else:
-                                            self.logger.error(f"Failed to download audio from {audio_url}: HTTP {resp.status}")
-                                            
-                            except TelegramBadRequest as e:
-                                if "VOICE_MESSAGES_FORBIDDEN" in str(e):
-                                    self.logger.warning(f"Voice messages are forbidden for chat {chat_id}, falling back to text")
-                                else:
-                                    self.logger.error(f"Telegram API error sending voice to chat {chat_id}: {e}")
-                            except Exception as e:
-                                self.logger.error(f"Error sending audio response to chat {chat_id}: {e}", exc_info=True)
+                            self.logger.info(f"Sending voice response from LangGraph agent to chat {chat_id}: {audio_url}")
+                            voice_sent_successfully = await self._send_voice_response(chat_id, audio_url)
                         
-                        # Send text response only if voice wasn't sent successfully
-                        if not voice_sent_successfully:
-                            await self.bot.send_message(chat_id, response)
+                        # Always send text response (voice is additional, not replacement)
+                        await self.bot.send_message(chat_id, response)
 
                 else:
                     self.logger.warning(f"Received message from agent for chat {chat_id} without response or error: {payload}")
@@ -875,8 +922,8 @@ class TelegramIntegrationBot(ServiceComponentBase):
             self.logger.warning(f"Failed to initialize image orchestrator: {e}")
             # Image features will be disabled but bot can still work
 
-        # 🆕 Load agent configuration once at startup
-        await self._load_agent_config()
+        # � PHASE 4.4.1: DYNAMIC CONFIG - Remove static agent config loading
+        # Agent configuration will be fetched dynamically when needed
 
         await self._register_handlers()
 
@@ -983,44 +1030,13 @@ class TelegramIntegrationBot(ServiceComponentBase):
         await super().cleanup() # Calls ServiceComponentBase.cleanup()
         self.logger.info(f"TelegramIntegrationBot cleanup finished.")
 
-    async def _load_agent_config(self) -> None:
-        """
-        Загружает конфигурацию агента один раз при инициализации интеграции
-        """
-        try:
-            import httpx
-            self.logger.debug(f"Loading agent config for {self.agent_id}")
-            
-            async with httpx.AsyncClient() as client:
-                response = await client.get(f"http://{settings.MANAGER_HOST}:{settings.MANAGER_PORT}/api/v1/agents/{self.agent_id}/config")
-                if response.status_code == 200:
-                    self.agent_config = response.json()
-                    self.logger.info(f"Successfully loaded agent config for {self.agent_id}")
-                    
-                    # Check if voice is enabled
-                    voice_enabled = (
-                        self.agent_config
-                        .get("config", {})
-                        .get("simple", {})
-                        .get("settings", {})
-                        .get("voice_settings", {})
-                        .get("enabled", False)
-                    )
-                    self.logger.info(f"Voice features enabled for agent {self.agent_id}: {voice_enabled}")
-                    
-                else:
-                    self.logger.error(f"Failed to load agent config: HTTP {response.status_code}")
-                    # Set fallback config
-                    self.agent_config = self._get_fallback_agent_config()
-                    
-        except Exception as e:
-            self.logger.error(f"Error loading agent config: {e}")
-            # Set fallback config
-            self.agent_config = self._get_fallback_agent_config()
-    
     def _get_fallback_agent_config(self) -> Dict[str, Any]:
         """
-        Возвращает базовую конфигурацию агента в случае ошибки загрузки
+        🎯 PHASE 4.4.1: Fallback agent configuration for error cases
+        Provides minimal configuration when dynamic config loading fails.
+        
+        Returns:
+            Dict containing fallback agent configuration
         """
         return {
             "config": {

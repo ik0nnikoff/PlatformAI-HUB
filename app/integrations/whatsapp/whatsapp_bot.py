@@ -72,8 +72,9 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
         # Image orchestrator (will be initialized in setup())
         self.image_orchestrator = None
 
-        # 🆕 Agent configuration cache (loaded once at startup)
-        self.agent_config: Optional[Dict[str, Any]] = None
+        # � PHASE 4.4.2: DYNAMIC CONFIG - Remove static agent_config caching
+        # Agent configuration now fetched dynamically when needed
+        # This allows runtime configuration updates without restart
 
         # Initialize helper components
         self.media_handler = MediaHandler(self)
@@ -101,7 +102,10 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             await self._setup_http_client()
             await self._setup_socketio_client()
             await self._setup_orchestrators()
-            await self._load_agent_config()
+            
+            # 🎯 PHASE 4.4.2: DYNAMIC CONFIG - Remove static agent config loading
+            # Agent configuration will be fetched dynamically when needed
+            
             self.logger.info("WhatsApp integration setup completed for session %s", self.session_name)
 
         except Exception as e:
@@ -627,10 +631,12 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             await self._stop_typing_for_chat(chat_id)
             await asyncio.sleep(0.5)  # Natural typing simulation
 
-            # Try voice message first, fallback to text
-            voice_sent = await self._try_send_voice_message(chat_id, audio_url)
-            if not voice_sent:
-                await self.api_handler.send_message(chat_id, response_text)
+            # 🎯 PHASE 4.4.2: UNIFIED TTS RESPONSE - Consistent with Telegram pattern
+            # Voice responses from LangGraph agent through voice tools
+            await self._send_voice_response(chat_id, audio_url)
+            
+            # Always send text response (voice is additional, not replacement)
+            await self.api_handler.send_message(chat_id, response_text)
 
         except json.JSONDecodeError as e:
             self.logger.error(f"Failed to decode agent response: {e}")
@@ -651,6 +657,37 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             return False
 
         return True
+
+    async def _send_voice_response(self, chat_id: str, audio_url: Optional[str]) -> bool:
+        """
+        🎯 PHASE 4.4.2: Unified voice response sending
+        Handles voice message delivery with standardized error handling.
+        Consistent with Telegram pattern for unified voice processing.
+        
+        Args:
+            chat_id: WhatsApp chat ID
+            audio_url: URL to audio file from LangGraph voice tools
+            
+        Returns:
+            bool: True if voice message sent successfully, False otherwise
+        """
+        if not audio_url:
+            return False
+
+        try:
+            self.logger.info(f"Sending voice response from LangGraph agent to chat {chat_id}: {audio_url}")
+            success = await self.api_handler.send_voice_message(chat_id, audio_url)
+
+            if success:
+                self.logger.info(f"Voice message sent successfully to WhatsApp chat {chat_id}")
+                return True
+            else:
+                self.logger.warning(f"Failed to send voice message to WhatsApp chat {chat_id}")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"Error sending voice response to WhatsApp chat {chat_id}: {e}", exc_info=True)
+            return False
 
     async def _try_send_voice_message(self, chat_id: str, audio_url: Optional[str]) -> bool:
         """
@@ -750,77 +787,38 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
                 self.typing_tasks[chat_id].cancel()
                 del self.typing_tasks[chat_id]
 
-    async def _process_voice_message_with_orchestrator(
-        self,
-        audio_data: bytes,
-        filename: str,
-        chat_id: str,
-        platform_user_id: str,
-        user_data: Dict[str, Any]
-    ) -> None:
-        """Process voice message using MediaHandler orchestrator."""
-        voice_params = {
-            "audio_data": audio_data,
-            "filename": filename,
-            "chat_id": chat_id,
-            "platform_user_id": platform_user_id,
-            "user_data": user_data
-        }
-        await self.media_handler.process_voice_message_with_orchestrator(
-            voice_params
-        )
-
-    async def _load_agent_config(self) -> None:
+    async def _get_agent_config(self) -> Dict[str, Any]:
         """
-        Загружает конфигурацию агента один раз при инициализации интеграции
+        🎯 PHASE 4.4.2: DYNAMIC CONFIG - Get agent configuration dynamically
+        Fetches current agent configuration at runtime, enabling real-time updates.
+        
+        Returns:
+            Dict containing current agent configuration
         """
         try:
-            self.logger.debug("Loading agent config for %s", self.agent_id)
-
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    "http://%s:%s/api/v1/agents/%s/config" % (
-                        settings.MANAGER_HOST,
-                        settings.MANAGER_PORT,
-                        self.agent_id
-                    )
-                )
+            self.logger.debug(f"Fetching dynamic agent config for {self.agent_id}")
+            
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"http://{settings.MANAGER_HOST}:{settings.MANAGER_PORT}/api/v1/agents/{self.agent_id}/config")
                 if response.status_code == 200:
-                    self.agent_config = response.json()
-                    self.logger.info(
-                        "Successfully loaded agent config for %s", self.agent_id
-                    )
-
-                    # Check if voice is enabled
-                    voice_enabled = (
-                        self.agent_config
-                        .get("config", {})
-                        .get("simple", {})
-                        .get("settings", {})
-                        .get("voice_settings", {})
-                        .get("enabled", False)
-                    )
-                    self.logger.info(
-                        "Voice features enabled for agent %s: %s",
-                        self.agent_id, voice_enabled
-                    )
-
+                    config = response.json()
+                    self.logger.debug(f"Successfully fetched dynamic agent config for {self.agent_id}")
+                    return config
                 else:
-                    self.logger.error(
-                        "Failed to load agent config: HTTP %s",
-                        response.status_code
-                    )
-                    # Set fallback config
-                    self.agent_config = self._get_fallback_agent_config()
-
+                    self.logger.warning(f"Failed to fetch agent config: HTTP {response.status_code}, using fallback")
+                    return self._get_fallback_agent_config()
+                    
         except Exception as e:
-            self.logger.error("Error loading agent config: %s", e)
-            # Set fallback config
-            self.agent_config = self._get_fallback_agent_config()
+            self.logger.warning(f"Error fetching dynamic agent config: {e}, using fallback")
+            return self._get_fallback_agent_config()
 
     def _get_fallback_agent_config(self) -> Dict[str, Any]:
         """
-        Возвращает базовую конфигурацию агента в случае ошибки загрузки
+        🎯 PHASE 4.4.2: Fallback agent configuration for error cases
+        Provides minimal configuration when dynamic config loading fails.
+        
+        Returns:
+            Dict containing fallback agent configuration
         """
         return {
             "config": {

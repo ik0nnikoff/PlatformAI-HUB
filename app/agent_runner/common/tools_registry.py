@@ -27,6 +27,16 @@ from functools import partial
 from langchain_core.tools import tool, BaseTool, Tool
 from langgraph.prebuilt import InjectedState
 
+# Import voice_v2 tools
+try:
+    from app.services.voice_v2.integration.voice_intent_analysis_tool import voice_intent_analysis_tool
+    from app.services.voice_v2.integration.voice_response_decision_tool import voice_response_decision_tool
+    VOICE_V2_AVAILABLE = True
+except ImportError:
+    VOICE_V2_AVAILABLE = False
+    voice_intent_analysis_tool = None
+    voice_response_decision_tool = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,26 +58,34 @@ def auth_tool() -> str:
 @tool
 def voice_capabilities_tool() -> str:
     """
-    Получить информацию о голосовых возможностях агента
+    🔶 DEPRECATED: Legacy voice capabilities tool
 
+    ⚠️ WARNING: This tool provides legacy voice capability information.
+    
+    🎯 MIGRATION STATUS: Use voice_v2 LangGraph tools for voice functionality:
+    - voice_intent_analysis_tool - Intelligent voice intent detection
+    - voice_response_decision_tool - Smart voice response decisions  
+    - voice_synthesis_tool - Advanced TTS generation
+    
+    📋 CONTEXT: Phase 4.4.4 - Legacy voice system cleanup
+    
     Returns:
-        str: Описание голосовых функций и как их использовать
+        str: Legacy voice capability description (deprecated)
     """
-    return """У меня есть голосовые функции! Я могу отвечать голосом, если ты используешь ключевые слова:
+    return """🔶 LEGACY VOICE SYSTEM (DEPRECATED)
 
-🎤 Для получения голосового ответа скажи:
-• "отвечай голосом"
-• "ответь голосом" 
-• "скажи"
-• "произнеси"
-• "озвучь"
-• "расскажи голосом"
-• "прочитай вслух"
+⚠️ Это устаревшая информация о голосовых функциях.
 
-Просто добавь одну из этих фраз к своему вопросу, и я отвечу голосом!
+🎯 НОВАЯ СИСТЕМА: Агент теперь использует продвинутую систему голосовых решений:
+• Интеллектуальный анализ намерений (не только ключевые слова)
+• Контекстные голосовые решения 
+• Автоматическое определение когда отвечать голосом
+• Улучшенное качество синтеза речи
 
-Пример: "Расскажи про страйкбол, ответь голосом"
-"""
+✅ ТЕКУЩИЕ ВОЗМОЖНОСТИ:
+Просто спроси что угодно - агент сам решит, когда отвечать голосом на основе контекста!
+
+📋 ФАЗА МИГРАЦИИ: Переход на voice_v2 система"""
 
 
 # @tool
@@ -423,6 +441,9 @@ class ToolsRegistry:
         # 'get_bonus_points': get_bonus_points,
     }
     
+    # Voice v2 tools (conditionally added if available)
+    VOICE_V2_TOOLS = {}
+    
     @classmethod
     def get_predefined(cls, tool_name: str) -> Optional[BaseTool]:
         """Get a predefined tool by name."""
@@ -430,8 +451,38 @@ class ToolsRegistry:
     
     @classmethod
     def get_all_predefined(cls) -> List[BaseTool]:
-        """Get all predefined tools as a list."""
-        return list(cls.PREDEFINED_TOOLS.values())
+        """Get all predefined tools as a list, including voice_v2 tools if available."""
+        all_tools = list(cls.PREDEFINED_TOOLS.values())
+        
+        # Add voice_v2 tools if available
+        if VOICE_V2_AVAILABLE:
+            if not hasattr(cls, '_voice_v2_initialized'):
+                cls._init_voice_v2_tools()
+                cls._voice_v2_initialized = True
+            all_tools.extend(list(cls.VOICE_V2_TOOLS.values()))
+        
+        return all_tools
+    
+    @classmethod
+    def _init_voice_v2_tools(cls):
+        """Initialize voice_v2 tools registry."""
+        if VOICE_V2_AVAILABLE:
+            cls.VOICE_V2_TOOLS = {
+                'voice_intent_analysis_tool': voice_intent_analysis_tool,
+                'voice_response_decision_tool': voice_response_decision_tool,
+            }
+    
+    @classmethod
+    def get_voice_v2_tools(cls) -> List[BaseTool]:
+        """Get voice_v2 tools if available."""
+        if not VOICE_V2_AVAILABLE:
+            return []
+        
+        if not hasattr(cls, '_voice_v2_initialized'):
+            cls._init_voice_v2_tools()
+            cls._voice_v2_initialized = True
+        
+        return list(cls.VOICE_V2_TOOLS.values())
     
     @classmethod
     def get_predefined_names(cls) -> List[str]:

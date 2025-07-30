@@ -1,10 +1,36 @@
 """
-Утилиты для работы с намерениями пользователей в голосовых сообщениях
+🔶 DEPRECATED: app/services/voice/intent_utils.py
+
+⚠️ WARNING: This file contains legacy voice decision logic that has been DEPRECATED.
+
+🎯 MIGRATION STATUS: All voice decision-making has been migrated to LangGraph workflow:
+- Voice intent detection → voice_intent_analysis_tool (LangGraph)
+- Voice response decisions → voice_response_decision_tool (LangGraph)
+- TTS generation → voice_synthesis_tool (LangGraph)
+
+📋 CONTEXT: Phase 4.4.4 - Legacy voice system cleanup
+- Primitive keyword matching replaced with semantic analysis in LangGraph
+- Static rules replaced with intelligent agent decisions
+- All voice decisions now handled by LangGraph workflow, not utility classes
+
+🚫 DO NOT USE FOR NEW FEATURES
+✅ USE INSTEAD: app/services/voice_v2/integration/ - LangGraph voice tools
+
+This file will be removed after complete migration validation.
 """
 
 import re
 from typing import List, Optional, Dict, Any
 import logging
+import warnings
+
+# Issue deprecation warning when module is imported
+warnings.warn(
+    "app.services.voice.intent_utils is deprecated. "
+    "Use app.services.voice_v2.integration LangGraph voice tools instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 class VoiceIntentDetector:

@@ -68,3 +68,9 @@ class AgentState(TypedDict):
     # New fields for token usage tracking
     interaction_id: Optional[str] = None 
     token_usage_events: List[TokenUsageData] = Field(default_factory=list)
+    
+    # Voice workflow fields
+    voice_intent_analysis: Optional[Dict[str, Any]] = None
+    voice_response_decision: Optional[Dict[str, Any]] = None
+    voice_response_mode: str = "auto"  # auto, enabled, disabled
+    voice_provider_config: Optional[Dict[str, Any]] = None

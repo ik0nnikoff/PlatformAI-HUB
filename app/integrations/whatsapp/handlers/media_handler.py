@@ -124,8 +124,9 @@ class MediaHandler:
                 )
                 return
 
-            # Process voice message with new voice orchestrator
-            await self._process_voice_with_orchestrator(
+            # 🎯 PHASE 4.4.2: UNIFIED VOICE PROCESSING - Use real STT orchestrator
+            # Remove simple voice processing path, use only advanced STT processing
+            await self._process_voice_with_stt_orchestrator(
                 voice_data, chat_id, user_context, message_id
             )
 
@@ -139,65 +140,22 @@ class MediaHandler:
             except Exception as send_error:
                 self.logger.error("Failed to send error message: %s", send_error)
 
-    async def _process_voice_with_orchestrator(
+    async def _process_voice_with_stt_orchestrator(
         self,
         voice_data: bytes,
         chat_id: str,
         user_context: Dict[str, Any],
         message_id: str
     ) -> None:
-        """Process voice message using voice orchestrator."""
-        try:
-            # Create voice file info
-            # For now, send voice data directly to agent
-            # Voice processing will be handled by the agent's voice tools
-
-            # Send voice data to agent for processing
-            await self.bot._publish_to_agent(
-                chat_id=chat_id,
-                platform_user_id=user_context["platform_user_id"],
-                message_text="Пользователь отправил голосовое сообщение",
-                user_data=user_context["user_data"]
-            )
-
-        except Exception as e:
-            self.logger.error(
-                "Error processing voice with orchestrator: %s", e, exc_info=True
-            )
-            try:
-                await self.bot.api_handler.send_message(
-                    chat_id,
-                    "Извините, произошла ошибка при обработке голосового сообщения."
-                )
-            except Exception as send_error:
-                self.logger.error("Failed to send error message: %s", send_error)
-
-    async def process_voice_message_with_orchestrator(
-        self,
-        voice_params: Dict[str, Any]
-    ) -> None:
         """
-        Обработка голосового сообщения через voice orchestrator
-
-        Args:
-            voice_params: Dictionary containing:
-                - audio_data: Данные аудиофайла
-                - filename: Имя файла
-                - chat_id: ID чата
-                - platform_user_id: ID пользователя
-                - user_data: Данные пользователя
+        🎯 PHASE 4.4.2: UNIFIED VOICE PROCESSING - Real STT processing
+        Process voice message using voice_v2 orchestrator with full STT.
+        Consistent with Telegram pattern: STT → Agent → voice tools → TTS
         """
-        audio_data = voice_params["audio_data"]
-        filename = voice_params["filename"] 
-        chat_id = voice_params["chat_id"]
-        platform_user_id = voice_params["platform_user_id"]
-        user_data = voice_params["user_data"]
         try:
-            # Get agent config
-            agent_config = (
-                self.bot.agent_config or self.bot._get_fallback_agent_config()
-            )
-
+            # 🎯 PHASE 4.4.2: DYNAMIC CONFIG - Get current agent configuration
+            agent_config = await self.bot._get_agent_config()
+            
             # Use global voice orchestrator if available, otherwise create temporary one
             orchestrator = await self._get_voice_orchestrator()
 
@@ -206,18 +164,21 @@ class MediaHandler:
                 agent_config=agent_config
             )
 
+            # Create filename for voice message
+            filename = f"whatsapp_voice_{message_id}_{self.bot.agent_id}.ogg"
+
             # Process STT
             result = await orchestrator.process_voice_message(
                 agent_id=self.bot.agent_id,
-                user_id=platform_user_id,
-                audio_data=audio_data,
+                user_id=user_context["platform_user_id"],
+                audio_data=voice_data,
                 original_filename=filename,
                 agent_config=agent_config
             )
 
             if result.success and result.text:
                 await self._handle_successful_stt(
-                    chat_id, platform_user_id, result.text, user_data
+                    chat_id, user_context["platform_user_id"], result.text, user_context["user_data"]
                 )
             else:
                 await self._handle_failed_stt(chat_id, result)

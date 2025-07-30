@@ -333,6 +333,15 @@ class VoiceCache:
         self.tts_ttl = 3600   # 1 hour for TTS results
         self.metrics_ttl = 604800  # 7 days for metrics
 
+    async def initialize(self) -> None:
+        """
+        Initialize the voice cache system.
+        Required by VoiceServiceOrchestrator for component initialization.
+        """
+        # VoiceCache initialization is automatic via RedisCacheManager
+        # This method provides compatibility with orchestrator expectations
+        pass
+
     # STTCacheInterface implementation
     async def get_stt_result(
         self,

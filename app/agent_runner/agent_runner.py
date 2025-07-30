@@ -260,13 +260,9 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
                 thread_id=chat_id
             )
 
-            # Process TTS if enabled and keywords detected
-            audio_url = await self._process_response_with_tts(
-                response_content=response_content,
-                user_message=user_text,
-                chat_id=chat_id,
-                channel=channel
-            )
+            # 🎯 PHASE 4.4.3: TTS REMOVAL - Voice decisions moved to LangGraph agent
+            # TTS processing now handled by LangGraph voice tools, not execution layer
+            # This enables intelligent voice decisions based on agent state and context
 
             response_payload = {
                 "chat_id": chat_id,
@@ -274,9 +270,7 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
                 "channel": channel
             }
             
-            # Add audio URL if TTS was processed
-            if audio_url:
-                response_payload["audio_url"] = audio_url
+            # Note: audio_url now comes from LangGraph voice tools if agent decides to use TTS
 
             await redis_cli.publish(self.response_channel, json.dumps(response_payload))
             self.logger.debug(f"Published to {self.response_channel} response: {json.dumps(response_payload)}")
@@ -481,7 +475,6 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
 
         if not enable_memory:
             self.logger.info(f"Context memory is disabled by agent config. History will not be loaded with depth.")
-            memory_depth = 0
         else:
             self.logger.info(f"Using history limit: {history_limit} (enabled: {enable_memory}, configured depth: {history_limit})")
             loaded_msgs: List[BaseMessage] = []
@@ -555,16 +548,16 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
 
     async def _setup_voice_orchestrator(self) -> None:
         """
-        Настройка voice orchestrator для агента (voice_v2 integration)
+        🎯 PHASE 4.4.3: ARCHITECTURAL FIX - Voice orchestrator for LangGraph tools only
         
-        Инициализирует voice_v2 orchestrator с Enhanced Factory pattern
+        Sets up voice_v2 orchestrator as pure execution resource for LangGraph voice tools.
+        NO DECISION MAKING - only provides voice processing infrastructure.
+        Voice decisions are now handled by LangGraph agent, not execution layer.
         """
         try:
-            voice_settings = self.get_voice_settings_from_config(self.agent_config)
-            if not voice_settings or not voice_settings.get('enabled', False):
-                self.logger.debug(f"Voice settings not enabled for agent {self._component_id}")
-                return
-
+            # 🎯 PHASE 4.4.3: NO DECISION MAKING - Remove voice settings checks
+            # Voice orchestrator is infrastructure only, decisions made by LangGraph
+            
             # Import voice_v2 dependencies
             from app.services.voice_v2.providers.enhanced_factory import EnhancedVoiceProviderFactory
             from app.services.voice_v2.infrastructure.cache import VoiceCache
@@ -573,13 +566,22 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
             # Create Enhanced Factory for dynamic provider creation
             enhanced_factory = EnhancedVoiceProviderFactory()
             
-            # Create cache manager (Redis-based)
+            # Create cache manager (Redis-based) - no initialize() method needed
             cache_manager = VoiceCache()
-            await cache_manager.initialize()
             
-            # Create file manager (MinIO-based)
-            file_manager = MinioFileManager()
-            await file_manager.initialize()
+            # Create file manager (MinIO-based) with configuration
+            try:
+                file_manager = MinioFileManager(
+                    endpoint=getattr(settings, 'MINIO_ENDPOINT', 'localhost:9000'),
+                    access_key=getattr(settings, 'MINIO_ACCESS_KEY', 'minioadmin'),
+                    secret_key=getattr(settings, 'MINIO_SECRET_KEY', 'minioadmin'),
+                    bucket_name='voice-files',
+                    secure=getattr(settings, 'MINIO_SECURE', False)
+                )
+                await file_manager.initialize()
+            except Exception as file_error:
+                self.logger.warning(f"MinIO file manager initialization failed: {file_error}, using None")
+                file_manager = None
             
             # Create voice_v2 orchestrator with Enhanced Factory
             self.voice_orchestrator = VoiceServiceOrchestrator(
@@ -590,125 +592,14 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
             
             await self.voice_orchestrator.initialize()
             
-            # Initialize voice services for this agent (pure execution setup)
-            init_result = await self.voice_orchestrator.initialize_voice_services_for_agent(
-                agent_config=self.agent_config
-            )
+            # 🎯 PHASE 4.4.3: MINIMAL SETUP - No agent-specific initialization
+            # Voice services will be initialized by LangGraph voice tools when needed
             
-            if init_result.get('success', False):
-                # Cache voice settings in Redis for fast access
-                await self._cache_voice_settings(voice_settings)
-                self.logger.info(
-                    f"Voice_v2 orchestrator initialized successfully for agent {self._component_id}: "
-                    f"{len(init_result.get('stt_providers', []))} STT, "
-                    f"{len(init_result.get('tts_providers', []))} TTS providers"
-                )
-            else:
-                errors = init_result.get('errors', [])
-                self.logger.warning(
-                    f"Voice_v2 orchestrator initialization failed for agent {self._component_id}: "
-                    f"{'; '.join(errors)}"
-                )
-                self.voice_orchestrator = None
+            self.logger.info(f"Voice orchestrator infrastructure initialized for LangGraph voice tools")
                 
         except Exception as e:
-            self.logger.error(f"Error setting up voice_v2 orchestrator: {e}", exc_info=True)
+            self.logger.error(f"Error setting up voice orchestrator infrastructure: {e}", exc_info=True)
             self.voice_orchestrator = None
-
-    async def _cache_voice_settings(self, voice_settings: Dict[str, Any]) -> None:
-        """
-        Кэширует голосовые настройки агента в Redis
-        
-        Args:
-            voice_settings: Голосовые настройки
-        """
-        try:
-            if self.voice_orchestrator and hasattr(self.voice_orchestrator, 'redis_service'):
-                cache_key = f"agent_voice_settings:{self._component_id}"
-                await self.voice_orchestrator.redis_service.client.setex(
-                    cache_key,
-                    3600,  # 1 час TTL
-                    json.dumps(voice_settings)
-                )
-                self.logger.debug(f"Voice settings cached for agent {self._component_id}")
-        except Exception as e:
-            self.logger.error(f"Error caching voice settings: {e}")
-
-    async def _process_response_with_tts(self, response_content: str, user_message: str, chat_id: str, channel: str) -> Optional[str]:
-        """
-        Обрабатывает ответ агента с TTS (voice_v2 pure execution)
-        
-        NOTE: Intent detection НЕ ВЫПОЛНЯЕТСЯ здесь - это задача LangGraph агента
-        Метод только выполняет TTS synthesis без принятия решений
-        
-        Args:
-            response_content: Текст ответа агента
-            user_message: Оригинальное сообщение пользователя (не используется для intent)
-            chat_id: ID чата
-            channel: Канал (telegram, whatsapp)
-            
-        Returns:
-            URL аудиофайла если TTS был выполнен, иначе None
-        """
-        if not self.voice_orchestrator:
-            return None
-            
-        try:
-            # Получаем конфигурацию агента для TTS настроек
-            if not self.agent_config:
-                self.logger.debug("No agent config available for TTS")
-                return None
-            
-            # Pure execution TTS synthesis (NO intent detection)
-            result = await self.voice_orchestrator.synthesize_response(
-                agent_id=self._component_id,
-                user_id=chat_id,
-                text=response_content,
-                agent_config=self.agent_config
-            )
-            
-            if result.success and result.file_info:
-                # Generate temporary URL for audio file
-                try:
-                    # Use file_info to get MinIO URL
-                    if hasattr(result.file_info, 'minio_key') and hasattr(result.file_info, 'minio_bucket'):
-                        # Create presigned URL through file manager
-                        audio_url = f"minio://{result.file_info.minio_bucket}/{result.file_info.minio_key}"
-                        self.logger.info(f"TTS synthesis successful for {chat_id}: {audio_url}")
-                        return audio_url
-                    else:
-                        self.logger.warning(f"Invalid file_info structure for {chat_id}")
-                        return None
-                except Exception as e:
-                    self.logger.error(f"Failed to generate audio URL for {chat_id}: {e}")
-                    return None
-            else:
-                # Log synthesis failure
-                error_msg = result.error_message if hasattr(result, 'error_message') else "Unknown TTS error"
-                self.logger.debug(f"TTS synthesis failed for {chat_id}: {error_msg}")
-                return None
-                
-        except Exception as e:
-            self.logger.error(f"Error in TTS processing for {chat_id}: {e}", exc_info=True)
-            return None
-
-
-    def get_voice_settings_from_config(self, agent_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Извлекает голосовые настройки из конфигурации агента
-        
-        Args:
-            agent_config: Конфигурация агента
-            
-        Returns:
-            Голосовые настройки или None
-        """
-        try:
-            # Извлекаем из config.simple.settings.voice_settings
-            return agent_config.get("config", {}).get("simple", {}).get("settings", {}).get("voice_settings")
-        except Exception as e:
-            self.logger.error(f"Error extracting voice settings from config: {e}")
-            return None
 
     async def cleanup(self) -> None:
         """

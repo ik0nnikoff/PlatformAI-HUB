@@ -350,6 +350,162 @@ class GraphFactory(AgentConfigMixin):
             # return {"messages": [response], "token_usage_events": current_token_events}
             return {"messages": [response]}
         except Exception as e:
+            self.logger.error(f"Error in agent node: {e}", exc_info=True)
+            # Return a fallback response
+            fallback_response = AIMessage(content="Извините, произошла ошибка при обработке вашего запроса.")
+            return {"messages": [fallback_response]}
+
+    async def _voice_decision_node(self, state: AgentState) -> Dict[str, Any]:
+        """
+        Voice decision node - analyzes if response should be generated as voice.
+        Runs voice intent analysis and voice response decision.
+        """
+        self.logger.info("---VOICE DECISION NODE---")
+        
+        try:
+            messages = state["messages"]
+            if not messages:
+                self.logger.warning("No messages in state for voice decision")
+                return {"voice_response_mode": "disabled"}
+            
+            # Get the latest assistant message
+            latest_message = None
+            for msg in reversed(messages):
+                if hasattr(msg, 'type') and msg.type == 'ai':
+                    latest_message = msg
+                    break
+            
+            if not latest_message or not hasattr(latest_message, 'content'):
+                self.logger.warning("No assistant message found for voice decision")
+                return {"voice_response_mode": "disabled"}
+            
+            response_text = latest_message.content
+            if not response_text or not isinstance(response_text, str):
+                self.logger.warning("No valid text content for voice decision")
+                return {"voice_response_mode": "disabled"}
+            
+            # Check if voice_v2 tools are available
+            voice_v2_tools = [tool for tool in self.safe_tools 
+                            if tool.name in ['voice_intent_analysis_tool', 'voice_response_decision_tool']]
+            
+            if len(voice_v2_tools) < 2:
+                self.logger.info("Voice v2 tools not available, skipping voice decision")
+                return {"voice_response_mode": "disabled"}
+            
+            # Find voice tools
+            intent_tool = next((tool for tool in voice_v2_tools if tool.name == 'voice_intent_analysis_tool'), None)
+            decision_tool = next((tool for tool in voice_v2_tools if tool.name == 'voice_response_decision_tool'), None)
+            
+            if not intent_tool or not decision_tool:
+                self.logger.warning("Voice tools not found in available tools")
+                return {"voice_response_mode": "disabled"}
+            
+            # Prepare voice analysis state
+            voice_state = dict(state)
+            voice_state.update({
+                "messages": list(messages),
+                "config": {"configurable": {"agent_id": self.agent_id}},
+                "channel": state.get("channel", "web"),
+                "user_data": state.get("user_data", {}),
+                "platform_user_id": state.get("user_data", {}).get("id", "unknown")
+            })
+            
+            # Run voice intent analysis
+            self.logger.info("Running voice intent analysis")
+            intent_result = await asyncio.get_event_loop().run_in_executor(
+                None, intent_tool.func, response_text, voice_state
+            )
+            
+            if not intent_result:
+                self.logger.warning("Voice intent analysis returned no result")
+                return {"voice_response_mode": "disabled"}
+            
+            # Parse intent result
+            import json
+            try:
+                intent_data = json.loads(intent_result) if isinstance(intent_result, str) else intent_result
+            except (json.JSONDecodeError, TypeError):
+                self.logger.warning(f"Failed to parse intent analysis result: {intent_result}")
+                return {"voice_response_mode": "disabled"}
+            
+            # Run voice response decision
+            self.logger.info("Running voice response decision")
+            decision_result = await asyncio.get_event_loop().run_in_executor(
+                None, decision_tool.func, response_text, voice_state
+            )
+            
+            if not decision_result:
+                self.logger.warning("Voice response decision returned no result")
+                return {"voice_response_mode": "disabled"}
+            
+            # Parse decision result
+            try:
+                decision_data = json.loads(decision_result) if isinstance(decision_result, str) else decision_result
+            except (json.JSONDecodeError, TypeError):
+                self.logger.warning(f"Failed to parse decision result: {decision_result}")
+                return {"voice_response_mode": "disabled"}
+            
+            # Extract voice decision
+            voice_decision = decision_data.get("voice_decision", {})
+            should_generate_tts = voice_decision.get("should_generate_tts", False)
+            
+            # Update state with voice analysis results
+            voice_response_mode = "enabled" if should_generate_tts else "disabled"
+            
+            self.logger.info(f"Voice decision: {voice_response_mode} (should_generate_tts: {should_generate_tts})")
+            
+            return {
+                "voice_intent_analysis": intent_data,
+                "voice_response_decision": decision_data,
+                "voice_response_mode": voice_response_mode,
+                "voice_provider_config": voice_decision.get("provider_info")
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error in voice decision node: {e}", exc_info=True)
+            return {"voice_response_mode": "disabled"}
+
+    def _should_run_voice_decision(self, state: AgentState) -> str:
+        """
+        Decides whether to run voice decision based on agent configuration and latest message.
+        """
+        try:
+            # Check if voice is enabled in agent config
+            voice_settings = self.agent_config.get("config", {}).get("voice_settings", {})
+            if not voice_settings.get("enabled", False):
+                self.logger.info("Voice disabled in agent config, skipping voice decision")
+                return END
+            
+            # Check if we have voice tools available
+            voice_v2_tools = [tool for tool in self.safe_tools 
+                            if tool.name in ['voice_intent_analysis_tool', 'voice_response_decision_tool']]
+            
+            if len(voice_v2_tools) < 2:
+                self.logger.info("Voice v2 tools not available, skipping voice decision")
+                return END
+            
+            # Check if latest message is from AI and has content
+            messages = state.get("messages", [])
+            if not messages:
+                return END
+            
+            latest_message = None
+            for msg in reversed(messages):
+                if hasattr(msg, 'type') and msg.type == 'ai':
+                    latest_message = msg
+                    break
+            
+            if not latest_message or not hasattr(latest_message, 'content') or not latest_message.content:
+                self.logger.info("No AI message with content found, skipping voice decision")
+                return END
+            
+            self.logger.info("Running voice decision analysis")
+            return "voice_decision"
+            
+        except Exception as e:
+            self.logger.error(f"Error determining voice decision route: {e}", exc_info=True)
+            return END
+        except Exception as e:
             self.logger.error(f"Error invoking agent model in _agent_node: {e}", exc_info=True)
             error_message = AIMessage(content=f"Sorry, an error occurred in agent processing: {e}")
             # return {"messages": [error_message], "token_usage_events": state.get("token_usage_events", [])}
@@ -847,6 +1003,14 @@ Rephrased Question:"""
 
     # ===== END CENTRALIZED HELPER METHODS =====
 
+    def _is_voice_v2_available(self) -> bool:
+        """Check if voice_v2 tools are available."""
+        try:
+            from app.services.voice_v2.integration import voice_intent_analysis_tool
+            return True
+        except ImportError:
+            return False
+
     def create_graph(self) -> Any:
         """
         Creates the LangGraph application and returns the compiled app.
@@ -868,6 +1032,11 @@ Rephrased Question:"""
         # Add nodes
         workflow.add_node("agent", self._agent_node)
         self.logger.info("Added node: agent")
+
+        # Add voice decision node if voice_v2 tools are available
+        if self._is_voice_v2_available():
+            workflow.add_node("voice_decision", self._voice_decision_node)
+            self.logger.info("Added node: voice_decision")
 
         if self.datastore_names:
             if self.datastore_tools: # Check if tools were actually created
@@ -899,6 +1068,10 @@ Rephrased Question:"""
             workflow.add_edge("safe_tools", "agent")
             self.logger.info("Added edge: safe_tools -> agent")
 
+        if "voice_decision" in workflow.nodes:
+            workflow.add_edge("voice_decision", END)
+            self.logger.info("Added edge: voice_decision -> END")
+
         if "retrieve" in workflow.nodes: # This implies grade_documents, rewrite, generate are also there if configured correctly
             workflow.add_edge("retrieve", "grade_documents")
             workflow.add_edge("rewrite", "agent") # After rewriting, go back to agent for new tool call with rewritten query
@@ -920,6 +1093,8 @@ Rephrased Question:"""
             possible_routes["safe_tools"] = "safe_tools"
         if "retrieve" in workflow.nodes: # This is the entry point for datastore tools
             possible_routes["retrieve"] = "retrieve"
+        if "voice_decision" in workflow.nodes:
+            possible_routes["voice_decision"] = "voice_decision"
         possible_routes[END] = END # Always have an END route
 
         if "safe_tools" in workflow.nodes or "retrieve" in workflow.nodes:

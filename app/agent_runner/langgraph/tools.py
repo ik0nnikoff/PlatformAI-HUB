@@ -33,7 +33,8 @@ from app.agent_runner.common.tools_registry import (
     auth_tool,
     get_user_info_tool,
     voice_capabilities_tool,
-    configure_tools_centralized
+    configure_tools_centralized,
+    ToolsRegistry
 )
 from app.services.media.image_orchestrator import ImageOrchestrator
 
@@ -65,9 +66,24 @@ def _add_centralized_tools(agent_config: Dict, agent_id: str, safe_tools: List, 
 
 
 def _add_predefined_tools(safe_tools: List, logger):
-    """Add predefined tools to safe tools list."""
+    """
+    Add predefined tools to safe tools list.
+    
+    🔶 LEGACY WARNING: voice_capabilities_tool is deprecated
+    - Use voice_v2 tools instead for new voice functionality
+    - Legacy tool maintained for compatibility during migration
+    """
+    # 🔶 DEPRECATED: voice_capabilities_tool replaced by voice_v2 tools
     safe_tools.extend([auth_tool, get_user_info_tool, voice_capabilities_tool])
-    logger.info("Added predefined tools: auth, user_info, voice_capabilities")
+    logger.info("Added predefined tools: auth, user_info, voice_capabilities (LEGACY)")
+    
+    # ✅ PREFERRED: Add voice_v2 tools if available
+    voice_v2_tools = ToolsRegistry.get_voice_v2_tools()
+    if voice_v2_tools:
+        safe_tools.extend(voice_v2_tools)
+        logger.info(f"Added voice_v2 tools: {[tool.name for tool in voice_v2_tools]}")
+    else:
+        logger.info("Voice_v2 tools not available")
 
 
 def _add_vision_tools(vision_settings: Dict, safe_tools: List, logger):
