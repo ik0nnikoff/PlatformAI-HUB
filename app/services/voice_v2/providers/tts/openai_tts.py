@@ -206,9 +206,10 @@ class OpenAITTSProvider(BaseTTSProvider):
         # Upload to MinIO and get URL (following reference system pattern)
         audio_url = await self._upload_audio_to_storage(audio_data, request)
 
-        # Create result with metadata
+        # Create result with both audio_data and URL for compatibility
         return TTSResult(
-            audio_url=audio_url,
+            audio_data=audio_data,  # Include raw audio data
+            audio_url=audio_url,    # Keep URL for storage reference
             text_length=len(request.text),
             audio_duration=await self.estimate_audio_duration(request.text),
             processing_time=processing_time,
@@ -344,7 +345,13 @@ class OpenAITTSProvider(BaseTTSProvider):
         # TODO: Implement MinIO upload when MinIO manager is available
         # For now, return a placeholder URL
         # In production, this would upload to MinIO and return presigned URL
-        return f"https://minio.example.com/voice-files/{filename}"
+        from app.core.config import settings
+        
+        # Use real MinIO configuration
+        protocol = "https" if getattr(settings, "MINIO_SECURE", False) else "http"
+        endpoint = getattr(settings, "MINIO_ENDPOINT", "127.0.0.1:9000")
+        
+        return f"{protocol}://{endpoint}/voice-files/{filename}"
 
     async def synthesize_long_text(self, text: str, **kwargs) -> List[TTSResult]:
         """

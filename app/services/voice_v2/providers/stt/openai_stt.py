@@ -241,9 +241,11 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
 
         # Language handling (Phase_1_3_1_architecture_review.md LSP compliance)
         if request.language and request.language != "auto":
-            if not ConfigurationValidator.validate_language_code(request.language):
-                raise AudioProcessingError(f"Неподдерживаемый язык: {request.language}")
-            transcription_params["language"] = request.language
+            # Normalize language code for OpenAI Whisper
+            normalized_lang = self._normalize_language(request.language)
+            if not ConfigurationValidator.validate_language_code(normalized_lang):
+                raise AudioProcessingError(f"Language {request.language} unsupported")
+            transcription_params["language"] = normalized_lang
 
         # Custom settings integration (SOLID: Open/Closed principle)
         if hasattr(request, 'custom_settings') and request.custom_settings:
@@ -465,3 +467,29 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
         except Exception as e:
             logger.warning(f"OpenAI STT health check failed: {e}")
             return False
+
+    def _normalize_language(self, language: str) -> str:
+        """Normalize language code for OpenAI Whisper API."""
+        if language == "auto":
+            return "auto"
+
+        # Map complex codes to simple ISO codes for Whisper
+        language_mapping = {
+            "ru-RU": "ru",
+            "en-US": "en", 
+            "en-GB": "en",
+            "es-ES": "es",
+            "fr-FR": "fr",
+            "de-DE": "de",
+            "it-IT": "it",
+            "pt-PT": "pt",
+            "tr-TR": "tr",
+            "uk-UA": "uk",
+            "zh-CN": "zh",
+            "ja-JP": "ja",
+            "ko-KR": "ko"
+        }
+
+        normalized = language_mapping.get(language, language)
+        logger.debug(f"Language normalized: {language} -> {normalized}")
+        return normalized

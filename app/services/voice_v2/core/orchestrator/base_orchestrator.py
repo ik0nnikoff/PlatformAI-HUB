@@ -212,7 +212,21 @@ class VoiceServiceOrchestrator:
         return orchestrator
 
     async def transcribe_audio(self, request: STTRequest) -> STTResponse:
-        """Delegate to modular STT manager when available"""
+        """
+        Core STT transcription method - Phase 4.6.1 Implementation
+        
+        Converts audio to text using available STT providers with fallback chain.
+        This is the main entry point for all STT operations in voice_v2.
+        
+        Args:
+            request: STT request with audio data and settings
+            
+        Returns:
+            STTResponse with transcribed text and metadata
+            
+        Raises:
+            VoiceServiceError: If orchestrator not initialized or all providers fail
+        """
         if not self._initialized:
             raise VoiceServiceError("Orchestrator not initialized")
 
@@ -224,7 +238,21 @@ class VoiceServiceOrchestrator:
         return await self._transcribe_with_enhanced_factory(request)
 
     async def synthesize_speech(self, request: TTSRequest) -> TTSResponse:
-        """Delegate to modular TTS manager when available"""
+        """
+        Core TTS synthesis method - Phase 4.6.1 Implementation
+        
+        Converts text to speech using available TTS providers with fallback chain.
+        This is the main entry point for all TTS operations in voice_v2.
+        
+        Args:
+            request: TTS request with text and voice settings
+            
+        Returns:
+            TTSResponse with audio data and metadata
+            
+        Raises:
+            VoiceServiceError: If orchestrator not initialized or all providers fail
+        """
         if not self._initialized:
             raise VoiceServiceError("Orchestrator not initialized")
 
@@ -293,10 +321,28 @@ class VoiceServiceOrchestrator:
                 logger.info(f"TTS successful with provider {provider_type}")
                 
                 # Convert TTSResult to TTSResponse
-                # Note: TTSResult has audio_url, but TTSResponse expects audio_data
-                # For now, return mock audio_data since we don't have actual audio bytes
+                # TTSResult contains audio_url, need to download actual audio data
+                audio_data = b""
+                if hasattr(result, 'audio_data') and result.audio_data:
+                    # Direct audio data available
+                    audio_data = result.audio_data
+                elif hasattr(result, 'audio_url') and result.audio_url:
+                    # Download audio from URL
+                    try:
+                        import aiohttp
+                        async with aiohttp.ClientSession() as session:
+                            async with session.get(result.audio_url) as response:
+                                if response.status == 200:
+                                    audio_data = await response.read()
+                                    logger.debug(f"Downloaded {len(audio_data)} bytes from {result.audio_url}")
+                                else:
+                                    logger.warning(f"Failed to download audio: HTTP {response.status}")
+                    except Exception as download_error:
+                        logger.warning(f"Failed to download audio from {result.audio_url}: {download_error}")
+                        # Continue with empty audio_data as fallback
+                
                 return TTSResponse(
-                    audio_data=b"mock_audio_data",  # Placeholder - need to download from audio_url
+                    audio_data=audio_data,
                     format=AudioFormat.MP3,  # Default format
                     provider=provider_type,
                     processing_time=result.processing_time or 0.0,

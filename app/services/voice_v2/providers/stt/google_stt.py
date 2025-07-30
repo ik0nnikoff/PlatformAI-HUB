@@ -18,6 +18,7 @@ SOLID Principles Implementation:
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
@@ -33,7 +34,8 @@ from ...core.exceptions import (
     VoiceProviderError,
     VoiceConfigurationError,
     VoiceServiceTimeout,
-    AudioProcessingError
+    AudioProcessingError,
+    ProviderNotAvailableError
 )
 from ..retry_mixin import provider_operation
 
@@ -154,6 +156,14 @@ class GoogleSTTProvider(BaseSTTProvider):
 
         try:
             logger.debug("Initializing Google STT Provider...")
+
+            # Check for credentials availability first
+            if not self.credentials_path and not os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):
+                logger.warning("Google Cloud credentials not configured - provider disabled")
+                raise ProviderNotAvailableError(
+                    provider="Google STT",
+                    reason="No credentials configured (set GOOGLE_APPLICATION_CREDENTIALS)"
+                )
 
             # Initialize credentials following DIP principle
             await self._initialize_credentials()

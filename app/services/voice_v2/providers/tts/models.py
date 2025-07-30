@@ -46,6 +46,7 @@ class TTSResult:
     """TTS operation result with metadata."""
     audio_url: str
     text_length: int
+    audio_data: Optional[bytes] = None  # Added for direct audio data support
     audio_duration: Optional[float] = None
     processing_time: Optional[float] = None
     voice_used: Optional[str] = None

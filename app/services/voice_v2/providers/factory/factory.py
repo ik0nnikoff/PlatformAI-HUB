@@ -153,6 +153,12 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
 
         provider_info = self._providers_registry[provider_name]
 
+        # Check if provider has required API keys (skip if not available)
+        provider_type = provider_info.provider_type.value.lower()
+        if not self._has_required_api_keys(provider_type):
+            logger.info(f"Skipping provider '{provider_name}' - missing required API keys")
+            raise ProviderNotAvailableError(f"Provider '{provider_name}' missing required API keys")
+
         # Check if provider is enabled and healthy
         if not provider_info.enabled:
             raise ProviderNotAvailableError(f"Provider '{provider_name}' is disabled")
@@ -432,27 +438,31 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
     # Дополнительные методы для тестирования
 
     def _get_default_config_for_provider(self, provider_name: str) -> Dict[str, Any]:
-        """Get default configuration for a provider"""
+        """Get default configuration for a provider with real API keys"""
         if provider_name not in self._default_providers:
             return {}
 
         provider_info = self._default_providers[provider_name]
+        
+        # Import settings to get real API keys
+        from app.core.config import settings
 
-        # Default configs by provider type
+        # Default configs by provider type with real API keys
         if provider_info.provider_type == ProviderType.OPENAI:
+            openai_key = settings.OPENAI_API_KEY.get_secret_value() if settings.OPENAI_API_KEY else ""
             if provider_info.category == ProviderCategory.STT:
                 return {
                     "model": "whisper-1",
                     "timeout": 30.0,
                     "max_retries": 3,
-                    "api_key": ""
+                    "api_key": openai_key
                 }
             else:  # TTS
                 return {
                     "model": "tts-1",
                     "voice": "alloy",
                     "timeout": 30.0,
-                    "api_key": ""
+                    "api_key": openai_key
                 }
         elif provider_info.provider_type == ProviderType.GOOGLE:
             if provider_info.category == ProviderCategory.STT:
@@ -460,31 +470,32 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
                     "timeout": 30.0,
                     "max_retries": 3,
                     "language_code": "ru-RU",
-                    "credentials_path": "",
-                    "project_id": ""
+                    "credentials_path": settings.GOOGLE_APPLICATION_CREDENTIALS or "",
+                    "project_id": settings.GOOGLE_CLOUD_PROJECT_ID or ""
                 }
             else:  # TTS
                 return {
                     "timeout": 30.0,
                     "language_code": "ru-RU",
-                    "credentials_path": "",
-                    "project_id": ""
+                    "credentials_path": settings.GOOGLE_APPLICATION_CREDENTIALS or "",
+                    "project_id": settings.GOOGLE_CLOUD_PROJECT_ID or ""
                 }
         elif provider_info.provider_type == ProviderType.YANDEX:
+            yandex_key = settings.YANDEX_API_KEY.get_secret_value() if settings.YANDEX_API_KEY else ""
             if provider_info.category == ProviderCategory.STT:
                 return {
                     "timeout": 30.0,
                     "max_retries": 3,
                     "language": "ru",
-                    "api_key": "",
-                    "folder_id": ""
+                    "api_key": yandex_key,
+                    "folder_id": settings.YANDEX_FOLDER_ID or ""
                 }
             else:  # TTS
                 return {
                     "timeout": 30.0,
                     "language": "ru",
-                    "api_key": "",
-                    "folder_id": ""
+                    "api_key": yandex_key,
+                    "folder_id": settings.YANDEX_FOLDER_ID or ""
                 }
 
         return {}

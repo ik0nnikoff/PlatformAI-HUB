@@ -470,6 +470,7 @@ class ToolsRegistry:
             cls.VOICE_V2_TOOLS = {
                 'voice_intent_analysis_tool': voice_intent_analysis_tool,
                 'voice_response_decision_tool': voice_response_decision_tool,
+                'voice_capabilities_tool': voice_capabilities_tool,  # ✅ Add missing tool
             }
     
     @classmethod

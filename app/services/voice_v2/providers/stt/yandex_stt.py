@@ -348,10 +348,11 @@ class YandexSTTProvider(BaseSTTProvider):
         Phase 3.5.2.3: Uses centralized retry logic from ConnectionManager
         """
         return await self._execute_with_connection_manager(
-            self._execute_yandex_transcription,
-            headers,
-            params,
-            audio_data
+            operation_name="yandex_stt_transcription",
+            request_func=self._execute_yandex_transcription,
+            headers=headers,
+            params=params,
+            audio_data=audio_data
         )
 
     async def _execute_yandex_transcription(
@@ -360,7 +361,7 @@ class YandexSTTProvider(BaseSTTProvider):
         headers: Dict[str, str],
         params: Dict[str, Any],
         audio_data: bytes,
-        operation_name: str = None  # ConnectionManager compatibility
+        **kwargs  # Accept all additional ConnectionManager parameters
     ) -> tuple[str, Dict[str, Any]]:
         """
         Direct Yandex API call - used by ConnectionManager
@@ -400,19 +401,28 @@ class YandexSTTProvider(BaseSTTProvider):
         """
         Process audio data for Yandex compatibility.
 
-        Handles OGG to WAV conversion for WhatsApp files.
+        Handles format conversion for Yandex SpeechKit requirements.
         """
         file_extension = audio_format.lower()
 
         # Check if OGG file needs conversion (WhatsApp compatibility)
         if file_extension == 'ogg':
             return await self._convert_ogg_to_wav(audio_data, file_extension)
+        
+        # Convert MP3 to OPUS for better Yandex compatibility
+        if file_extension == 'mp3':
+            return await self._convert_mp3_to_opus(audio_data)
+        
+        # Check if FLAC needs conversion to WAV for Yandex
+        if file_extension == 'flac':
+            return await self._convert_to_wav(audio_data, file_extension)
 
         # Map file extension to Yandex format
+        # Yandex SpeechKit API expects specific format strings
         format_mapping = {
             'wav': 'lpcm',
-            'mp3': 'mp3',
-            'flac': 'flac',
+            'mp3': 'mp3',       # MP3 as native format
+            'flac': 'lpcm',     # FLAC should be converted to LPCM
             'opus': 'oggopus',
             'ogg': 'oggopus'
         }
@@ -461,6 +471,62 @@ class YandexSTTProvider(BaseSTTProvider):
             logger.warning(f"Audio conversion failed: {e}")
             return audio_data, 'oggopus'
 
+    async def _convert_mp3_to_opus(self, audio_data: bytes) -> tuple[bytes, str]:
+        """Convert MP3 to OPUS for better Yandex SpeechKit compatibility."""
+        try:
+            from pydub import AudioSegment
+
+            # Load MP3 audio data
+            audio_segment = AudioSegment.from_mp3(BytesIO(audio_data))
+
+            if audio_segment:
+                # Convert to OPUS with Yandex-compatible parameters
+                opus_buffer = BytesIO()
+                audio_segment.export(
+                    opus_buffer,
+                    format="opus",
+                    parameters=["-ar", str(self.DEFAULT_SAMPLE_RATE), "-ac", "1"]
+                )
+
+                converted_data = opus_buffer.getvalue()
+                logger.info(f"Converted MP3 to OPUS: {len(audio_data)} -> {len(converted_data)} bytes")
+                return converted_data, 'oggopus'
+
+            # Fallback to original data
+            return audio_data, 'mp3'
+
+        except Exception as e:
+            logger.warning(f"MP3 to OPUS conversion failed: {e}")
+            return audio_data, 'mp3'
+
+    async def _convert_to_wav(self, audio_data: bytes, audio_format: str) -> tuple[bytes, str]:
+        """Convert MP3/FLAC to WAV for Yandex SpeechKit compatibility."""
+        try:
+            from pydub import AudioSegment
+
+            # Load audio data from bytes
+            audio_segment = AudioSegment.from_file(BytesIO(audio_data), format=audio_format)
+
+            if audio_segment:
+                # Convert to WAV with Yandex-compatible parameters
+                wav_buffer = BytesIO()
+                audio_segment.export(
+                    wav_buffer,
+                    format="wav",
+                    parameters=["-ar", str(self.DEFAULT_SAMPLE_RATE), "-ac", "1"]
+                )
+
+                converted_data = wav_buffer.getvalue()
+                logger.info(f"Converted {audio_format.upper()} to WAV: {len(audio_data)} -> {len(converted_data)} bytes")
+                return converted_data, 'lpcm'
+
+            # Fallback to original data
+            return audio_data, 'lpcm'
+
+        except Exception as e:
+            logger.warning(f"Audio conversion from {audio_format} to WAV failed: {e}")
+            return audio_data, 'lpcm'
+
     def _normalize_language(self, language: str) -> str:
         """Normalize language code for Yandex API."""
         if language == "auto":
@@ -494,8 +560,8 @@ class YandexSTTProvider(BaseSTTProvider):
 
         for attempt in range(max_retries + 1):
             try:
-                # Use direct API call method
-                transcript, metadata = await self._execute_yandex_transcription(headers, params, audio_data)
+                # Use direct API call method with self._session for legacy calls
+                transcript, metadata = await self._execute_yandex_transcription(self._session, headers, params, audio_data)
                 # Add attempt info to metadata for compatibility
                 metadata["attempt"] = attempt + 1
                 return transcript, metadata

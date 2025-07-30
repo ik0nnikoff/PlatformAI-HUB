@@ -80,6 +80,9 @@ class RetryMixin:
         if not self._has_connection_manager():
             raise RuntimeError("ConnectionManager not available for retry execution")
 
+        # Remove provider_name from kwargs if present to avoid duplication
+        kwargs.pop('provider_name', None)
+        
         return await self._connection_manager.execute_request(
             provider_name=self.provider_name,
             request_func=request_func,

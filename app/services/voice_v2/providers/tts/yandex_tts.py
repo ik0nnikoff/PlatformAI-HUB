@@ -249,7 +249,8 @@ class YandexTTSProvider(BaseTTSProvider):
             metadata = self._generate_metadata(synthesis_params, len(audio_data), processing_time)
 
             return TTSResult(
-                audio_url=file_path,
+                audio_data=audio_data,  # Include raw audio data
+                audio_url=file_path,    # Keep URL for storage reference
                 text_length=len(request.text),
                 audio_duration=self._estimate_audio_duration(request.text, request.speed or 1.0),
                 processing_time=processing_time,
@@ -285,16 +286,21 @@ class YandexTTSProvider(BaseTTSProvider):
         Enhanced synthesis with ConnectionManager integration
 
         Phase 3.5.2.3: Uses centralized retry logic from ConnectionManager
-        """
+        """        
         return await self._execute_with_connection_manager(
             operation_name="yandex_tts_synthesis",
             request_func=self._execute_yandex_synthesis,
-            synthesis_params=synthesis_params
+            synthesis_params=synthesis_params  # Pass as named parameter
         )
 
-    async def _execute_yandex_synthesis(self, synthesis_params: Dict[str, Any]) -> bytes:
+    async def _execute_yandex_synthesis(self, session, synthesis_params: Dict[str, Any], **kwargs) -> bytes:
         """
         Direct Yandex API call - used by ConnectionManager
+        
+        Args:
+            session: aiohttp session (provided by ConnectionManager)
+            synthesis_params: Synthesis parameters
+            **kwargs: Additional parameters from ConnectionManager (ignored)
 
         Single Responsibility: Only API communication
         """
@@ -305,8 +311,8 @@ class YandexTTSProvider(BaseTTSProvider):
 
         data = "&".join([f"{k}={v}" for k, v in synthesis_params.items()])
 
-        async with self._session.post(
-            self.TTS_API_URL,
+        async with session.post(
+            self.API_BASE_URL,
             headers=headers,
             data=data.encode('utf-8')
         ) as response:
@@ -393,8 +399,8 @@ class YandexTTSProvider(BaseTTSProvider):
         # Use request language if provided, otherwise use voice default
         language = request.language or voice_config["language"]
 
-        # Map audio format
-        format_name = self.FORMAT_MAPPING.get(request.output_format, "mp3")
+        # Map audio format - use default since TTSRequest doesn't have output_format
+        format_name = "mp3"  # Default format for Yandex TTS
 
         params = {
             "text": request.text,
@@ -420,8 +426,8 @@ class YandexTTSProvider(BaseTTSProvider):
 
         for attempt in range(self.MAX_RETRIES):
             try:
-                # Use direct API call method
-                return await self._execute_yandex_synthesis(params)
+                # Use direct API call method with self._session for legacy calls
+                return await self._execute_yandex_synthesis(self._session, params)
 
             except VoiceServiceError as e:
                 # Check for rate limit specifically
