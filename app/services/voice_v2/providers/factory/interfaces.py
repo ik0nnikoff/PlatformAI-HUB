@@ -31,6 +31,16 @@ class IEnhancedProviderFactory(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def create_stt_provider(self, provider_type: str) -> Optional["BaseSTTProvider"]:
+        """Create STT provider instance by type"""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def create_tts_provider(self, provider_type: str) -> Optional["BaseTTSProvider"]:
+        """Create TTS provider instance by type"""
+        raise NotImplementedError
+
+    @abstractmethod
     def register_provider(self, provider_info: "ProviderInfo") -> None:
         """Register new provider in registry"""
         raise NotImplementedError

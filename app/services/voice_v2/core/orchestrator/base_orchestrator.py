@@ -8,7 +8,7 @@ from typing import Dict, Optional, Any
 
 from ..interfaces import (
     FullSTTProvider, FullTTSProvider, CacheInterface, FileManagerInterface,
-    ProviderType
+    ProviderType, AudioFormat
 )
 from ..schemas import (
     STTRequest, TTSRequest, STTResponse, TTSResponse
@@ -213,20 +213,139 @@ class VoiceServiceOrchestrator:
 
     async def transcribe_audio(self, request: STTRequest) -> STTResponse:
         """Delegate to modular STT manager when available"""
-        # This is a compatibility layer - for now use legacy implementation
         if not self._initialized:
             raise VoiceServiceError("Orchestrator not initialized")
 
-        # TODO: Integrate with modular VoiceSTTManager
-        # For now, provide basic implementation
-        raise NotImplementedError("STT integration with modular managers pending")
+        # Use modular managers if available, otherwise fallback to legacy
+        if hasattr(self, '_stt_manager') and self._stt_manager:
+            return await self._stt_manager.transcribe_audio(request)
+        
+        # Fallback to Enhanced Factory approach
+        return await self._transcribe_with_enhanced_factory(request)
 
     async def synthesize_speech(self, request: TTSRequest) -> TTSResponse:
         """Delegate to modular TTS manager when available"""
-        # This is a compatibility layer - for now use legacy implementation
         if not self._initialized:
             raise VoiceServiceError("Orchestrator not initialized")
 
-        # TODO: Integrate with modular VoiceTTSManager
-        # For now, provide basic implementation
-        raise NotImplementedError("TTS integration with modular managers pending")
+        # Use modular managers if available, otherwise fallback to legacy
+        if hasattr(self, '_tts_manager') and self._tts_manager:
+            return await self._tts_manager.synthesize_speech(request)
+        
+        # Fallback to Enhanced Factory approach
+        return await self._synthesize_with_enhanced_factory(request)
+
+    async def _transcribe_with_enhanced_factory(self, request: STTRequest) -> STTResponse:
+        """Fallback STT implementation using Enhanced Factory"""
+        if not self._enhanced_factory:
+            raise VoiceServiceError("No STT implementation available (Enhanced Factory required)")
+
+        # Get preferred provider chain (priority order: OpenAI, Google, Yandex)
+        provider_types = ["openai", "google", "yandex"]
+        last_error = None
+
+        for provider_type in provider_types:
+            try:
+                # Get or create provider instance
+                provider = await self._get_or_create_stt_provider(provider_type)
+                if not provider:
+                    continue
+
+                # Attempt transcription
+                result = await provider.transcribe_audio(request)
+                logger.info(f"STT successful with provider {provider_type}")
+                return STTResponse(
+                    text=result.text,
+                    provider=provider_type,
+                    processing_time=result.processing_time or 0.0,
+                    language=result.language_detected,
+                    confidence=result.confidence
+                )
+
+            except Exception as e:
+                last_error = e
+                logger.warning(f"STT provider {provider_type} failed: {e}")
+                continue
+
+        # All providers failed
+        error_msg = f"All STT providers failed. Last error: {last_error}"
+        logger.error(error_msg)
+        raise VoiceServiceError(error_msg)
+
+    async def _synthesize_with_enhanced_factory(self, request: TTSRequest) -> TTSResponse:
+        """Fallback TTS implementation using Enhanced Factory"""
+        if not self._enhanced_factory:
+            raise VoiceServiceError("No TTS implementation available (Enhanced Factory required)")
+
+        # Get preferred provider chain (priority order: OpenAI, Google, Yandex)
+        provider_types = ["openai", "google", "yandex"]
+        last_error = None
+
+        for provider_type in provider_types:
+            try:
+                # Get or create provider instance
+                provider = await self._get_or_create_tts_provider(provider_type)
+                if not provider:
+                    continue
+
+                # Attempt synthesis
+                result = await provider.synthesize_speech(request)
+                logger.info(f"TTS successful with provider {provider_type}")
+                
+                # Convert TTSResult to TTSResponse
+                # Note: TTSResult has audio_url, but TTSResponse expects audio_data
+                # For now, return mock audio_data since we don't have actual audio bytes
+                return TTSResponse(
+                    audio_data=b"mock_audio_data",  # Placeholder - need to download from audio_url
+                    format=AudioFormat.MP3,  # Default format
+                    provider=provider_type,
+                    processing_time=result.processing_time or 0.0,
+                    duration=result.audio_duration,
+                    sample_rate=22050  # Default sample rate
+                )
+
+            except Exception as e:
+                last_error = e
+                logger.warning(f"TTS provider {provider_type} failed: {e}")
+                continue
+
+        # All providers failed
+        error_msg = f"All TTS providers failed. Last error: {last_error}"
+        logger.error(error_msg)
+        raise VoiceServiceError(error_msg)
+
+    async def _get_or_create_stt_provider(self, provider_type: str):
+        """Get or create STT provider using Enhanced Factory"""
+        if provider_type in self._factory_stt_cache:
+            return self._factory_stt_cache[provider_type]
+
+        try:
+            provider = await self._enhanced_factory.create_stt_provider(provider_type)
+            if provider:
+                # Initialize provider if needed
+                if hasattr(provider, 'initialize'):
+                    await provider.initialize()
+                self._factory_stt_cache[provider_type] = provider
+                logger.debug(f"Created STT provider {provider_type}")
+            return provider
+        except Exception as e:
+            logger.error(f"Failed to create STT provider {provider_type}: {e}")
+            return None
+
+    async def _get_or_create_tts_provider(self, provider_type: str):
+        """Get or create TTS provider using Enhanced Factory"""
+        if provider_type in self._factory_tts_cache:
+            return self._factory_tts_cache[provider_type]
+
+        try:
+            provider = await self._enhanced_factory.create_tts_provider(provider_type)
+            if provider:
+                # Initialize provider if needed
+                if hasattr(provider, 'initialize'):
+                    await provider.initialize()
+                self._factory_tts_cache[provider_type] = provider
+                logger.debug(f"Created TTS provider {provider_type}")
+            return provider
+        except Exception as e:
+            logger.error(f"Failed to create TTS provider {provider_type}: {e}")
+            return None

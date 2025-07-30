@@ -28,7 +28,8 @@ from aiohttp import ClientTimeout, ClientSession, TCPConnector
 
 from app.core.config import settings
 from app.services.voice_v2.providers.stt.base_stt import BaseSTTProvider
-from app.services.voice_v2.providers.stt.models import STTRequest, STTResult, STTCapabilities, STTQuality
+from app.services.voice_v2.core.schemas import STTRequest
+from app.services.voice_v2.providers.stt.models import STTResult, STTCapabilities, STTQuality
 from app.services.voice_v2.core.interfaces import ProviderType, AudioFormat
 from app.services.voice_v2.core.exceptions import (
     VoiceServiceError,
@@ -219,34 +220,36 @@ class YandexSTTProvider(BaseSTTProvider):
 
     async def _validate_request(self, request: STTRequest) -> None:
         """Override request validation to handle language normalization."""
-        from ...utils.validators import AudioValidator, ConfigurationValidator
+        from ...utils.validators import ConfigurationValidator
 
-        # Basic file validation
-        audio_path = Path(request.audio_file_path)
+        # Validate audio data exists
+        if not request.audio_data or len(request.audio_data) == 0:
+            raise AudioProcessingError("Audio data is empty")
 
-        if not audio_path.exists():
-            raise AudioProcessingError(f"File not found: {audio_path}")
-
-        if not AudioValidator.validate_audio_format(audio_path):
-            raise AudioProcessingError(f"Bad format: {audio_path.suffix}")
-
-        if not AudioValidator.validate_audio_size(audio_path.stat().st_size):
-            raise AudioProcessingError("File too large")
+        # Validate audio data size (approximate check)
+        if len(request.audio_data) > 25 * 1024 * 1024:  # 25MB limit
+            raise AudioProcessingError("Audio data too large")
 
         if not ConfigurationValidator.validate_language_code(request.language):
             raise AudioProcessingError(f"Bad language: {request.language}")
 
         # Check capabilities with language normalization
         caps = await self.get_capabilities()
-        fmt = audio_path.suffix.lower().lstrip('.')
+        
+        # Use format from request or default to mp3
+        if request.format:
+            fmt = request.format.value
+        else:
+            fmt = "mp3"  # Default format
 
         # Convert AudioFormat enums to strings for comparison
         supported_formats = [af.value for af in caps.supported_formats]
         if fmt not in supported_formats:
             raise AudioProcessingError(f"Format {fmt} unsupported")
 
-        if request.quality not in caps.supports_quality_levels:
-            raise AudioProcessingError(f"Quality {request.quality.value} unsupported")
+        # Quality check - use default STANDARD quality (no quality in new schema)
+        # if request.quality not in caps.supports_quality_levels:
+        #     raise AudioProcessingError(f"Quality {request.quality.value} unsupported")
 
         # Language validation with normalization for Yandex
         if request.language != "auto":
@@ -269,9 +272,8 @@ class YandexSTTProvider(BaseSTTProvider):
 
         with PerformanceTimer("yandex_stt_transcribe") as timer:
             try:
-                # Load and validate audio file
-                audio_path = Path(request.audio_file_path)
-                audio_data = await self._load_audio_file(audio_path)
+                # Use audio_data directly from request
+                audio_data = request.audio_data
 
                 # Validate file size
                 if len(audio_data) > self.MAX_FILE_SIZE_MB * 1024 * 1024:
@@ -280,7 +282,9 @@ class YandexSTTProvider(BaseSTTProvider):
                     )
 
                 # Process audio data for Yandex compatibility
-                processed_audio, yandex_format = await self._process_audio_data(audio_data, audio_path)
+                # Use format from request or default
+                audio_format = request.format.value if request.format else "mp3"
+                processed_audio, yandex_format = await self._process_audio_data(audio_data, audio_format)
 
                 # Prepare API request
                 headers = {
@@ -295,9 +299,9 @@ class YandexSTTProvider(BaseSTTProvider):
                     "sampleRateHertz": self.DEFAULT_SAMPLE_RATE
                 }
 
-                # Add custom settings from request
-                if request.custom_settings:
-                    params.update(request.custom_settings)
+                # Skip custom settings (not available in new schema)
+                # if request.custom_settings:
+                #     params.update(request.custom_settings)
 
                 # Use ConnectionManager if available, fallback to legacy retry
                 if self._has_connection_manager():
@@ -318,7 +322,7 @@ class YandexSTTProvider(BaseSTTProvider):
                     word_count=len(transcript.split()) if transcript else 0,
                     provider_metadata={
                         "yandex_format": yandex_format,
-                        "original_format": audio_path.suffix.lower().lstrip('.'),
+                        "original_format": audio_format,
                         "file_size_bytes": len(audio_data),
                         "response_metadata": metadata
                     }
@@ -344,25 +348,26 @@ class YandexSTTProvider(BaseSTTProvider):
         Phase 3.5.2.3: Uses centralized retry logic from ConnectionManager
         """
         return await self._execute_with_connection_manager(
-            operation_name="yandex_stt_transcription",
-            request_func=self._execute_yandex_transcription,
-            headers=headers,
-            params=params,
-            audio_data=audio_data
+            self._execute_yandex_transcription,
+            headers,
+            params,
+            audio_data
         )
 
     async def _execute_yandex_transcription(
         self,
+        session,  # ConnectionManager provides session
         headers: Dict[str, str],
         params: Dict[str, Any],
-        audio_data: bytes
+        audio_data: bytes,
+        operation_name: str = None  # ConnectionManager compatibility
     ) -> tuple[str, Dict[str, Any]]:
         """
         Direct Yandex API call - used by ConnectionManager
 
         Single Responsibility: Only API communication
         """
-        async with self._session.post(
+        async with session.post(
             self.STT_API_URL,
             headers=headers,
             params=params,
@@ -391,17 +396,17 @@ class YandexSTTProvider(BaseSTTProvider):
         except Exception as e:
             raise AudioProcessingError(f"Failed to load audio file: {e}") from e
 
-    async def _process_audio_data(self, audio_data: bytes, audio_path: Path) -> tuple[bytes, str]:
+    async def _process_audio_data(self, audio_data: bytes, audio_format: str) -> tuple[bytes, str]:
         """
         Process audio data for Yandex compatibility.
 
         Handles OGG to WAV conversion for WhatsApp files.
         """
-        file_extension = audio_path.suffix.lower().lstrip('.')
+        file_extension = audio_format.lower()
 
         # Check if OGG file needs conversion (WhatsApp compatibility)
         if file_extension == 'ogg':
-            return await self._convert_ogg_to_wav(audio_data, audio_path)
+            return await self._convert_ogg_to_wav(audio_data, file_extension)
 
         # Map file extension to Yandex format
         format_mapping = {
@@ -415,7 +420,7 @@ class YandexSTTProvider(BaseSTTProvider):
         yandex_format = format_mapping.get(file_extension, 'lpcm')
         return audio_data, yandex_format
 
-    async def _convert_ogg_to_wav(self, audio_data: bytes, audio_path: Path) -> tuple[bytes, str]:
+    async def _convert_ogg_to_wav(self, audio_data: bytes, audio_format: str) -> tuple[bytes, str]:
         """Convert OGG to WAV for WhatsApp files using pydub."""
         try:
             from pydub import AudioSegment

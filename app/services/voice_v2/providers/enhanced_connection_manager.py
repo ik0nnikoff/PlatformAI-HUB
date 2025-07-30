@@ -564,6 +564,10 @@ class EnhancedConnectionManager(IConnectionManager):
         except Exception as e:
             logger.error("Error during connection manager shutdown: %s", e, exc_info=True)
 
+    async def cleanup(self) -> None:
+        """Alias for shutdown method for compatibility"""
+        await self.shutdown()
+
 
 # Global connection manager instance
 _connection_manager_instance: Optional[EnhancedConnectionManager] = None

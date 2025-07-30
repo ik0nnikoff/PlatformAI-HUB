@@ -21,7 +21,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from .models import TTSRequest, TTSResult, TTSCapabilities
+from app.services.voice_v2.core.schemas import TTSRequest
+from .models import TTSResult, TTSCapabilities
 from ...core.exceptions import VoiceServiceError, ProviderNotAvailableError, AudioProcessingError
 from ...utils.validators import ConfigurationValidator
 from ..retry_mixin import RetryMixin
@@ -161,11 +162,13 @@ class BaseTTSProvider(ABC, RetryMixin):
                 f"Text too long: {len(request.text)} chars (max: {caps.max_text_length})"
             )
 
-        if request.output_format not in caps.supported_formats:
-            raise AudioProcessingError(f"Format {request.output_format.value} not supported")
+        # Skip format validation (no output_format in new schema)
+        # if request.output_format not in caps.supported_formats:
+        #     raise AudioProcessingError(f"Format {request.output_format.value} not supported")
 
-        if request.quality not in caps.quality_levels:
-            raise AudioProcessingError(f"Quality {request.quality.value} not supported")
+        # Skip quality validation (no quality in new schema)
+        # if request.quality not in caps.quality_levels:
+        #     raise AudioProcessingError(f"Quality {request.quality.value} not supported")
 
     async def health_check(self) -> bool:
         """

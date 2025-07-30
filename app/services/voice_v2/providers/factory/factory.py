@@ -171,10 +171,12 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
             module = importlib.import_module(provider_info.module_path)
             provider_class = getattr(module, provider_info.class_name)
 
-            # Create instance with configuration
+            # Create instance with configuration and provider info
             provider_instance = provider_class(
                 provider_name=provider_name,
                 config=config,
+                priority=provider_info.priority,
+                enabled=provider_info.enabled,
                 connection_manager=self._connection_manager
             )
 
@@ -200,6 +202,86 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
 
             logger.error(f"Failed to create provider '{provider_name}': {e}")
             raise VoiceServiceError(f"Failed to create provider '{provider_name}': {e}")
+
+    async def create_stt_provider(self, provider_type: str) -> Optional[BaseSTTProvider]:
+        """Create STT provider instance by type"""
+        if not self._initialized:
+            await self.initialize()
+
+        # Check if API keys are available for provider
+        if not self._has_required_api_keys(provider_type):
+            logger.info(f"Skipping {provider_type} STT provider - missing API keys")
+            return None
+
+        # Map provider type to provider name
+        provider_name_map = {
+            "openai": "openai_stt",
+            "google": "google_stt", 
+            "yandex": "yandex_stt"
+        }
+
+        provider_name = provider_name_map.get(provider_type.lower())
+        if not provider_name:
+            logger.warning(f"Unknown STT provider type: {provider_type}")
+            return None
+
+        try:
+            # Get default config for provider
+            config = self._get_default_config_for_provider(provider_name)
+            
+            # Create provider using generic create_provider method
+            provider = await self.create_provider(provider_name, config)
+            
+            # Validate it's actually an STT provider
+            if not isinstance(provider, BaseSTTProvider):
+                logger.error(f"Provider {provider_name} is not an STT provider")
+                return None
+                
+            return provider
+            
+        except Exception as e:
+            logger.error(f"Failed to create STT provider {provider_type}: {e}")
+            return None
+
+    async def create_tts_provider(self, provider_type: str) -> Optional[BaseTTSProvider]:
+        """Create TTS provider instance by type"""
+        if not self._initialized:
+            await self.initialize()
+
+        # Check if API keys are available for provider
+        if not self._has_required_api_keys(provider_type):
+            logger.info(f"Skipping {provider_type} TTS provider - missing API keys")
+            return None
+
+        # Map provider type to provider name
+        provider_name_map = {
+            "openai": "openai_tts",
+            "google": "google_tts",
+            "yandex": "yandex_tts"
+        }
+
+        provider_name = provider_name_map.get(provider_type.lower())
+        if not provider_name:
+            logger.warning(f"Unknown TTS provider type: {provider_type}")
+            return None
+
+        try:
+            # Get default config for provider
+            config = self._get_default_config_for_provider(provider_name)
+            
+            # Create provider using generic create_provider method
+            provider = await self.create_provider(provider_name, config)
+            
+            # Validate it's actually a TTS provider
+            if not isinstance(provider, BaseTTSProvider):
+                logger.error(f"Provider {provider_name} is not a TTS provider")
+                return None
+                
+            return provider
+            
+        except Exception as e:
+            logger.error(f"Failed to create TTS provider {provider_type}: {e}")
+            return None
 
     def register_provider(self, provider_info: ProviderInfo) -> None:
         """Register new provider in registry"""
@@ -433,3 +515,20 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
         )
 
         return provider_instance
+
+    def _has_required_api_keys(self, provider_type: str) -> bool:
+        """Check if provider has required API keys configured"""
+        from app.core.config import settings
+        
+        provider_type = provider_type.lower()
+        
+        if provider_type == "openai":
+            return settings.OPENAI_API_KEY is not None
+        elif provider_type == "google":
+            return (settings.GOOGLE_APPLICATION_CREDENTIALS is not None and 
+                   settings.GOOGLE_CLOUD_PROJECT_ID is not None)
+        elif provider_type == "yandex":
+            return settings.YANDEX_API_KEY is not None
+        else:
+            logger.warning(f"Unknown provider type for API key check: {provider_type}")
+            return False

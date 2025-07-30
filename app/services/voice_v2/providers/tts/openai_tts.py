@@ -30,8 +30,9 @@ from app.services.voice_v2.core.exceptions import (
     VoiceServiceTimeout
 )
 from app.services.voice_v2.providers.tts.base_tts import BaseTTSProvider
+from app.services.voice_v2.core.schemas import TTSRequest
 from app.services.voice_v2.providers.tts.models import (
-    TTSRequest, TTSResult, TTSCapabilities, TTSQuality
+    TTSResult, TTSCapabilities, TTSQuality
 )
 from app.services.voice_v2.core.interfaces import ProviderType, AudioFormat
 from app.services.voice_v2.providers.retry_mixin import provider_operation
@@ -249,21 +250,11 @@ class OpenAITTSProvider(BaseTTSProvider):
 
         Implements voice quality optimization features.
         """
-        # Determine model based on quality
-        model = self._model
-        if request.quality == TTSQuality.HIGH or request.quality == TTSQuality.PREMIUM:
-            model = "tts-1-hd"  # High-definition model for better quality
-        elif request.quality == TTSQuality.LOW:
-            model = "tts-1"  # Standard model for faster processing
+        # Determine model - use default (no quality in new schema)
+        model = self._model  # Default to standard quality
 
-        # Map AudioFormat to OpenAI response format
-        format_mapping = {
-            AudioFormat.MP3: "mp3",
-            AudioFormat.OPUS: "opus",
-            AudioFormat.FLAC: "flac",
-            AudioFormat.WAV: "wav"
-        }
-        response_format = format_mapping.get(request.output_format, "mp3")
+        # Default response format (no output_format in new schema)
+        response_format = "mp3"  # Default format
 
         # Base parameters
         params = {
@@ -277,13 +268,13 @@ class OpenAITTSProvider(BaseTTSProvider):
         if request.speed != 1.0 and 0.25 <= request.speed <= 4.0:
             params["speed"] = request.speed
 
-        # Add custom settings
-        if request.custom_settings:
-            # Only add safe custom parameters
-            safe_params = ["speed", "response_format"]
-            for key, value in request.custom_settings.items():
-                if key in safe_params:
-                    params[key] = value
+        # Skip custom settings (not available in new schema)
+        # if request.custom_settings:
+        #     # Only add safe custom parameters
+        #     safe_params = ["speed", "response_format"]
+        #     for key, value in request.custom_settings.items():
+        #         if key in safe_params:
+        #             params[key] = value
 
         return params
 
@@ -347,7 +338,7 @@ class OpenAITTSProvider(BaseTTSProvider):
         """
         # Generate unique filename
         text_hash = hashlib.sha256(request.text.encode()).hexdigest()[:8]
-        format_ext = request.output_format.value
+        format_ext = "mp3"  # Default format (no output_format in new schema)
         filename = f"tts_openai_{text_hash}_{int(time.time())}.{format_ext}"
 
         # TODO: Implement MinIO upload when MinIO manager is available

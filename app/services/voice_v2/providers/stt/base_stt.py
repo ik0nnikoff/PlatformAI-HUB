@@ -3,12 +3,12 @@
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from .models import STTRequest, STTResult, STTCapabilities
+from app.services.voice_v2.core.schemas import STTRequest
+from .models import STTResult, STTCapabilities
 from ...core.exceptions import VoiceServiceError, ProviderNotAvailableError, AudioProcessingError
-from ...utils.validators import AudioValidator, ConfigurationValidator
+from ...utils.validators import ConfigurationValidator
 from ..retry_mixin import RetryMixin
 
 if TYPE_CHECKING:
@@ -111,31 +111,33 @@ class BaseSTTProvider(ABC, RetryMixin):
 
     async def _validate_request(self, request: STTRequest) -> None:
         """Quick request validation."""
-        audio_path = Path(request.audio_file_path)
+        # Validate audio data exists and is not empty
+        if not request.audio_data or len(request.audio_data) == 0:
+            raise AudioProcessingError("Audio data is empty")
 
-        if not audio_path.exists():
-            raise AudioProcessingError(f"File not found: {audio_path}")
-
-        if not AudioValidator.validate_audio_format(audio_path):
-            raise AudioProcessingError(f"Bad format: {audio_path.suffix}")
-
-        if not AudioValidator.validate_audio_size(audio_path.stat().st_size):
-            raise AudioProcessingError("File too large")
+        # Validate audio data size (approximate check)
+        if len(request.audio_data) > 25 * 1024 * 1024:  # 25MB limit
+            raise AudioProcessingError("Audio data too large")
 
         if not ConfigurationValidator.validate_language_code(request.language):
             raise AudioProcessingError(f"Bad language: {request.language}")
 
         # Check capabilities
         caps = await self.get_capabilities()
-        fmt = audio_path.suffix.lower().lstrip('.')
+        # Use format from request or default
+        if request.format:
+            fmt = request.format.value
+        else:
+            fmt = "mp3"  # Default format
 
         # Convert AudioFormat enums to strings for comparison
         supported_formats = [af.value for af in caps.supported_formats]
         if fmt not in supported_formats:
             raise AudioProcessingError(f"Format {fmt} unsupported")
 
-        if request.quality not in caps.supports_quality_levels:
-            raise AudioProcessingError(f"Quality {request.quality.value} unsupported")
+        # Quality validation - request.quality field not in core schemas, use default
+        # Note: Core schemas don't include quality field, so we skip quality validation
+        # Provider-specific quality handling should be done in implementation
 
         if request.language != "auto" and request.language not in caps.supported_languages:
             raise AudioProcessingError(f"Language {request.language} unsupported")
