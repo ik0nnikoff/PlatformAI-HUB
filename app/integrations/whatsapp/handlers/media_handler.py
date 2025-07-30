@@ -75,14 +75,14 @@ class MediaHandler:
                 }]
             )
 
-        except Exception as e:
+        except (ValueError, KeyError, TypeError) as e:
             self.logger.error("Error handling image message: %s", e, exc_info=True)
             try:
                 await self.bot.api_handler.send_message(
                     chat_id,
                     "Извините, произошла ошибка при обработке изображения."
                 )
-            except Exception as send_error:
+            except (ConnectionError, TimeoutError) as send_error:
                 self.logger.error("Failed to send error message: %s", send_error)
 
     async def handle_voice_message(
@@ -174,22 +174,24 @@ class MediaHandler:
 
     async def process_voice_message_with_orchestrator(
         self,
-        audio_data: bytes,
-        filename: str,
-        chat_id: str,
-        platform_user_id: str,
-        user_data: Dict[str, Any]
+        voice_params: Dict[str, Any]
     ) -> None:
         """
         Обработка голосового сообщения через voice orchestrator
 
         Args:
-            audio_data: Данные аудиофайла
-            filename: Имя файла
-            chat_id: ID чата
-            platform_user_id: ID пользователя
-            user_data: Данные пользователя
+            voice_params: Dictionary containing:
+                - audio_data: Данные аудиофайла
+                - filename: Имя файла
+                - chat_id: ID чата
+                - platform_user_id: ID пользователя
+                - user_data: Данные пользователя
         """
+        audio_data = voice_params["audio_data"]
+        filename = voice_params["filename"] 
+        chat_id = voice_params["chat_id"]
+        platform_user_id = voice_params["platform_user_id"]
+        user_data = voice_params["user_data"]
         try:
             # Get agent config
             agent_config = (

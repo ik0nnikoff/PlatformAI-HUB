@@ -1,10 +1,25 @@
-import logging
-import requests
-import json
-from typing import Annotated, Dict, List, Tuple, Set, Optional, Any
-from functools import partial
+"""
+LangGraph tools configuration and image analysis tools.
 
-from langchain_core.tools import tool, BaseTool, Tool
+This module provides tools configuration for LangGraph agen    tool_id = kb_config.get("id",
+                           f"kb_retriever_{'_'.join([str(kb_id) "
+                           f"for kb_id in kb_ids])}")   kb_description = kb_settings.get("description",
+                                    f"Searches and returns information "
+                                    f"from the {qdrant_collection} knowledge base.")includi        logger.warning("KnowledgeBase tool '%s' configured but no "
+                      "knowledgeBaseIds provided. Skipping.", tool_id):
+- Knowledge Base / Retriever tools
+- Web Search tools
+- Internal tools (voice capabilities)
+- Vision analysis tools for image processing
+"""
+import asyncio
+import base64
+import concurrent.futures
+import logging
+from typing import Annotated, Dict, List, Tuple, Set
+
+import httpx
+from langchain_core.tools import tool, BaseTool
 from langgraph.prebuilt import InjectedState
 from langchain_openai import OpenAIEmbeddings
 from qdrant_client import QdrantClient, models
@@ -16,281 +31,366 @@ from app.core.config import settings as app_settings
 from app.agent_runner.common.config_mixin import AgentConfigMixin
 from app.agent_runner.common.tools_registry import (
     auth_tool,
-    get_user_info_tool, 
+    get_user_info_tool,
     voice_capabilities_tool,
-    ToolsRegistry,
     configure_tools_centralized
 )
+from app.services.media.image_orchestrator import ImageOrchestrator
 
 
-def configure_tools(agent_config: Dict, agent_id: str, logger) -> Tuple[List[BaseTool], List[BaseTool], List[BaseTool], Set[str], int]:
-    """
-    Configures tools based on the agent configuration (simple structure).
-    
-    This function now uses the centralized tools registry for predefined tools
-    and standardized API request handling.
+def _initialize_tool_lists():
+    """Initialize tool lists."""
+    safe_tools = []  # Tools that are safe to use in general conversation
+    datastore_tools = []  # Tools that interact with knowledge bases/datastores
+    datastore_names = set()  # Names of datastore tools
+    return safe_tools, datastore_tools, datastore_names
 
-    Args:
-        agent_config: The agent's configuration dictionary (expects simple structure).
-        agent_id: The ID of the agent for logging context.
 
-    Returns:
-        A tuple containing:
-        - List of all configured tools (instances of BaseTool).
-        - List of safe tools (non-retriever).
-        - List of datastore tools (retriever tools).
-        - Set of datastore tool names (strings).
-        - Maximum number of rewrite attempts configured (int).
-    """
-    # logger = logging.LoggerAdapter(logger, {'agent_id': agent_id})
-
-    # --- Access configuration using the provided structure ---
-    config_simple = agent_config.get("config", {}).get("simple", {})
-    if not config_simple:
-        logger.warning("Agent configuration 'config.simple' not found. No tools will be configured.")
-        return [], [], [], set(), 3 # Default max_rewrites
-
-    settings = config_simple.get("settings", {})
-    if not settings:
-        logger.warning("Agent configuration 'config.simple.settings' not found. No tools will be configured.")
-        return [], [], [], set(), 3
-
-    tool_settings = settings.get("tools", []) # List of tool configs
-    if not tool_settings:
-        logger.info("No tools specified in 'config.simple.settings.tools'.")
-        return [], [], [], set(), 3
-    
-    tools_list: List[BaseTool] = []
-    safe_tools: List[BaseTool] = []
-    datastore_tools: List[BaseTool] = []
-    datastore_names: Set[str] = set()
-    max_rewrites = 3 # Default
-    
-    # Default max_rewrites from model settings or a global default
-    config_mixin = AgentConfigMixin()
-    max_rewrites = config_mixin.get_max_rewrites(agent_config) 
-
-    # --- Use centralized tools configuration for predefined tools and API requests ---
+def _add_centralized_tools(agent_config: Dict, agent_id: str, safe_tools: List, logger):
+    """Add centralized tools to safe tools list."""
     try:
         # Get centralized tools configuration
-        centralized_tools, centralized_safe, centralized_api = configure_tools_centralized(
+        _, centralized_safe, centralized_api = configure_tools_centralized(
             agent_config, agent_id
         )
-        
+
         # Add centralized tools to our lists
         safe_tools.extend(centralized_safe)
         safe_tools.extend(centralized_api)  # Add API tools to safe tools
-        
-        logger.info(f"Added {len(centralized_safe + centralized_api)} tools from centralized registry")
-        
-    except Exception as e:
-        logger.error(f"Failed to configure centralized tools: {e}", exc_info=True)
-        # Continue with local configuration as fallback 
-        
-        # Fallback: Add predefined tools manually if centralized configuration fails
-        predefined_tools_map = {
-            "auth_tool": auth_tool,
-            "get_user_info_tool": get_user_info_tool,
-            "voice_capabilities_tool": voice_capabilities_tool,
-        }
-        for tool_name, tool_instance in predefined_tools_map.items():
-            safe_tools.append(tool_instance)
-            logger.info(f"Added predefined tool (fallback): {tool_name}")
 
-    # Add vision tools if image processing is enabled (always try this, independent of centralized config)
+        logger.info("Configured %d centralized tools",
+                   len(centralized_safe) + len(centralized_api))
+    except Exception as e:
+        logger.error("Failed to configure centralized tools: %s", e, exc_info=True)
+
+
+def _add_predefined_tools(safe_tools: List, logger):
+    """Add predefined tools to safe tools list."""
+    safe_tools.extend([auth_tool, get_user_info_tool, voice_capabilities_tool])
+    logger.info("Added predefined tools: auth, user_info, voice_capabilities")
+
+
+def _add_vision_tools(vision_settings: Dict, safe_tools: List, logger):
+    """Add vision analysis tools."""
+    if vision_settings.get("enabled", False):
+        safe_tools.append(analyze_images)
+        safe_tools.append(describe_image_content)
+        logger.info("Vision tools enabled and added")
+
+
+def _add_tavily_tools(use_tavily_search: bool, safe_tools: List, logger):
+    """Add Tavily search tools if enabled."""
+    if use_tavily_search and app_settings.TAVILY_API_KEY:
+        tavily_search = TavilySearchResults(max_results=5)
+        safe_tools.append(tavily_search)
+        logger.info("Tavily search tool added")
+    elif use_tavily_search:
+        logger.warning("Tavily search requested but TAVILY_API_KEY not configured")
+
+
+def _setup_qdrant_connection(logger):
+    """Setup Qdrant connection and vector store."""
+    qdrant_url = app_settings.QDRANT_URL
+    qdrant_collection = app_settings.QDRANT_COLLECTION
+
+    if not qdrant_url or not qdrant_collection:
+        logger.warning("QDRANT_URL or QDRANT_COLLECTION not set. Knowledge base tools disabled.")
+        return None, None, None
+
     try:
-        vision_tools = ToolsRegistry.get_vision_tools()
-        if vision_tools:
-            safe_tools.extend(vision_tools)
-            logger.info(f"Added {len(vision_tools)} vision analysis tools: {[t.name for t in vision_tools]}")
-        else:
-            logger.warning("No vision tools returned from ToolsRegistry")
+        embeddings = OpenAIEmbeddings()
+        qdrant_client = QdrantClient(url=qdrant_url, timeout=20)
+        vector_store = QdrantVectorStore(
+            client=qdrant_client,
+            collection_name=qdrant_collection,
+            embedding=embeddings,
+        )
+        logger.info("Connected to Qdrant at %s, collection: %s",
+                   qdrant_url, qdrant_collection)
+        return embeddings, qdrant_client, vector_store
     except Exception as e:
-        logger.warning(f"Failed to add vision tools: {e}")
+        logger.error("Failed to setup Qdrant connection: %s", e, exc_info=True)
+        return None, None, None
 
 
-    # --- Knowledge Base / Retriever Tools ---
-    kb_configs = [t for t in tool_settings if t.get("type") == "knowledgeBase"]
-    if kb_configs:
-        logger.info(f"Configuring {len(kb_configs)} Knowledge Base tool(s)...")
-        qdrant_url = app_settings.QDRANT_URL
-        qdrant_collection = app_settings.QDRANT_COLLECTION
-        
-        if not qdrant_url or not qdrant_collection:
-             logger.warning("QDRANT_URL or QDRANT_COLLECTION not set. Knowledge base tools disabled.")
-        else:
-            try:
-                embeddings = OpenAIEmbeddings()
-                qdrant_client = QdrantClient(
-                    url=qdrant_url,
-                    timeout=20
-                )
-                vector_store = QdrantVectorStore(
-                    client=qdrant_client,
-                    collection_name=qdrant_collection,
-                    embedding=embeddings,
-                )
-                logger.info(f"Connected to Qdrant at {qdrant_url}, collection: {qdrant_collection}")
+def _create_kb_retriever_tool(kb_config: Dict, agent_config: Dict,
+                             vector_store, qdrant_collection: str,
+                             logger):
+    """Create a single Knowledge Base retriever tool."""
+    kb_settings = kb_config.get("settings", {})
+    kb_ids = kb_settings.get("knowledgeBaseIds", [])
+    search_limit = kb_settings.get("retrievalLimit", 4)
+    tool_id = kb_config.get("id",
+                           f"kb_retriever_{'_'.join([str(kb_id) for kb_id in kb_ids])}")
+    tool_name = kb_settings.get("name", "Knowledge Base Search")
+    kb_description = kb_settings.get("description",
+                                    f"Searches and returns information from the {qdrant_collection} knowledge base.")
+    tool_enabled = kb_settings.get("enabled", True)
 
-                # Get client_id from the top level of agent_config
-                client_id = agent_config.get("ownerId")
-                if not client_id:
-                    logger.warning("Missing 'ownerId' in agent_config, cannot filter KB by client.")
-                    # Decide if KB should be disabled or proceed without client filter
+    if not tool_enabled:
+        logger.info("Skipping disabled Knowledge Base tool '%s' (ID: %s)",
+                   tool_name, tool_id)
+        return None, None
 
-                for kb_config in kb_configs:
-                    kb_settings = kb_config.get("settings", {})
-                    kb_ids = kb_settings.get("knowledgeBaseIds", []) # List of datasource IDs
-                    search_limit = kb_settings.get("retrievalLimit", 4) # Use retrievalLimit
-                    max_rewrites = kb_settings.get("rewriteAttempts", max_rewrites)
-                    tool_id = kb_config.get("id", f"kb_retriever_{'_'.join([str(kb_id) for kb_id in kb_ids])}") # Generate ID if missing
-                    tool_name = kb_settings.get("name", "Knowledge Base Search") # Name for LLM
-                    kb_description = kb_settings.get("description", f"Searches and returns information from the {qdrant_collection} knowledge base.")
-                    
-                    # New configuration fields
-                    return_to_agent = kb_settings.get("returnToAgent", True)
-                    rewrite_query = kb_settings.get("rewriteQuery", True)
-                    tool_enabled = kb_settings.get("enabled", True)
+    if not kb_ids:
+        logger.warning("KnowledgeBase tool '%s' configured but no knowledgeBaseIds provided. Skipping.",
+                      tool_id)
+        return None, None
 
-                    # Skip disabled tools
-                    if not tool_enabled:
-                        logger.info(f"Skipping disabled Knowledge Base tool '{tool_name}' (ID: {tool_id})")
-                        continue
+    client_id = agent_config.get("ownerId")
+    must_conditions = []
 
-                    if not kb_ids:
-                        logger.warning(f"KnowledgeBase tool '{tool_id}' configured but no knowledgeBaseIds provided. Skipping.")
-                        continue
-                    
-                    must_conditions = []
-                    # Add client_id filter if available
-                    if client_id:
-                         must_conditions.append(
-                             models.FieldCondition(key="metadata.client_id", match=models.MatchValue(value=str(client_id)))
-                         )
-                    # Add datasource_id filter using MatchAny
-                    must_conditions.append(
-                        models.FieldCondition(
-                            # key="metadata.datasource_id",
-                            key="metadata.datastoreId", # Use datastoreId for consistency
-                            match=models.MatchAny(any=[str(kb_id) for kb_id in kb_ids]) # Use MatchAny for list of IDs
-                        )
-                    )
+    if client_id:
+        must_conditions.append(
+            models.FieldCondition(
+                key="metadata.client_id",
+                match=models.MatchValue(value=str(client_id))
+            )
+        )
 
-                    qdrant_filter = models.Filter(must=must_conditions)
+    must_conditions.append(
+        models.FieldCondition(
+            key="metadata.datastoreId",
+            match=models.MatchAny(any=[str(kb_id) for kb_id in kb_ids])
+        )
+    )
 
-                    retriever = vector_store.as_retriever(
-                        search_kwargs={"k": search_limit, "filter": qdrant_filter}
-                    )
-                    
-                    retriever_tool = create_retriever_tool(
-                        retriever,
-                        tool_id, # Use tool_id instead of kb_id
-                        kb_description, # Use kb_description for LLM to understand the tool purpose
-                        document_separator="\n---RETRIEVER_DOC---\n",
-                    )
-                    datastore_tools.append(retriever_tool)
-                    datastore_names.add(tool_id) # Use tool_id instead of kb_id
-                    logger.info(f"Configured Knowledge Base tool '{tool_name}' (ID: {tool_id}) for datastores: {kb_ids} with description: {kb_description}")
+    qdrant_filter = models.Filter(must=must_conditions)
+    retriever = vector_store.as_retriever(
+        search_kwargs={"k": search_limit, "filter": qdrant_filter}
+    )
 
-            except Exception as e:
-                logger.error(f"Failed to configure Knowledge Base tools: {e}", exc_info=True)
-    else:
+    retriever_tool = create_retriever_tool(
+        retriever,
+        tool_id,
+        kb_description,
+        document_separator="\n---RETRIEVER_DOC---\n",
+    )
+
+    logger.info("Configured Knowledge Base tool '%s' (ID: %s) for datastores: %s",
+               tool_name, tool_id, kb_ids)
+    return retriever_tool, tool_id
+
+
+def _configure_knowledge_base_tools(kb_configs: List[Dict], agent_config: Dict, logger) -> Tuple[List[BaseTool], Set[str]]:
+    """Configure Knowledge Base / Retriever Tools."""
+    datastore_tools = []
+    datastore_names = set()
+
+    if not kb_configs:
         logger.info("No Knowledge Base tools configured.")
+        return datastore_tools, datastore_names
+
+    logger.info("Configuring %d Knowledge Base tool(s)...", len(kb_configs))
+
+    # Setup Qdrant connection
+    _, _, vector_store = _setup_qdrant_connection(logger)
+    if not vector_store:
+        return datastore_tools, datastore_names
+
+    # Check for client_id once
+    client_id = agent_config.get("ownerId")
+    if not client_id:
+        logger.warning("Missing 'ownerId' in agent_config, cannot filter KB by client.")
+
+    # Process each Knowledge Base configuration
+    for kb_config in kb_configs:
+        try:
+            retriever_tool, tool_id = _create_kb_retriever_tool(
+                kb_config, agent_config, vector_store,
+                app_settings.QDRANT_COLLECTION, logger
+            )
+            if retriever_tool and tool_id:
+                datastore_tools.append(retriever_tool)
+                datastore_names.add(tool_id)
+        except Exception as e:
+            logger.error("Failed to create KB tool: %s", e, exc_info=True)
+
+    return datastore_tools, datastore_names
 
 
-    logger.info(f"Using max_rewrites: {max_rewrites}")
+def _configure_web_search_tools(web_search_configs: List[Dict], logger) -> List[BaseTool]:
+    """Configure Web Search Tools."""
+    safe_tools_web = []
 
-    # --- Web Search Tools ---
-    web_search_configs = [t for t in tool_settings if t.get("type") == "webSearch"]
-    if web_search_configs:
-        logger.info(f"Configuring {len(web_search_configs)} Web Search tool(s)...")
-        tavily_api_key = app_settings.TAVILY_API_KEY
-        if not tavily_api_key:
-            logger.warning("TAVILY_API_KEY not set. Web search tools disabled.")
-        else:
-            for ws_config in web_search_configs:
-                ws_settings = ws_config.get("settings", {})
-                ws_id = ws_config.get("id", f"web_search_{web_search_configs.index(ws_config)}") # Use ID from config with fallback
-                ws_name = ws_settings.get("name", "Web Search") # Name for LLM
-                ws_description = ws_settings.get("description", "Performs a web search for recent information.") # Use description from config if available
-                ws_enabled = ws_settings.get("enabled", True)
-                search_limit = ws_settings.get("searchLimit", 3)
-                include_domains = ws_settings.get("include_domains", [])
-                exclude_domains = ws_settings.get("excludeDomains", [])
-
-                if not ws_enabled:
-                    logger.info(f"Skipping disabled Web Search tool '{ws_name}' (ID: {ws_id})")
-                    continue
-
-                try:
-                    web_search_tool = TavilySearchResults(
-                        max_results=int(search_limit),
-                        name=ws_id, # Use ID from config
-                        description=ws_description, # Use description from config
-                        include_domains=include_domains, # Use domainLimit from config
-                        exclude_domains=exclude_domains,
-                    )
-                    safe_tools.append(web_search_tool)
-                    logger.info(f"Configured Web Search tool '{ws_name}' (ID: {ws_id}) with description: {ws_description}")
-                except Exception as e:
-                    logger.error(f"Failed to create Web Search tool '{ws_name}' (ID: {ws_id}): {e}", exc_info=True)
-    else:
+    if not web_search_configs:
         logger.info("No Web Search tools configured.")
+        return safe_tools_web
+
+    logger.info("Configuring %d Web Search tool(s)...", len(web_search_configs))
+    tavily_api_key = app_settings.TAVILY_API_KEY
+
+    if not tavily_api_key:
+        logger.warning("TAVILY_API_KEY not set. Web search tools disabled.")
+        return safe_tools_web
+
+    for ws_config in web_search_configs:
+        ws_settings = ws_config.get("settings", {})
+        ws_id = ws_config.get("id", f"web_search_{web_search_configs.index(ws_config)}")
+        ws_name = ws_settings.get("name", "Web Search")
+        ws_description = ws_settings.get("description", "Performs a web search for recent information.")
+        ws_enabled = ws_settings.get("enabled", True)
+        search_limit = ws_settings.get("searchLimit", 3)
+        include_domains = ws_settings.get("include_domains", [])
+        exclude_domains = ws_settings.get("excludeDomains", [])
+
+        if not ws_enabled:
+            logger.info("Skipping disabled Web Search tool '%s' (ID: %s)",
+                       ws_name, ws_id)
+            continue
+
+        try:
+            web_search_tool = TavilySearchResults(
+                max_results=int(search_limit),
+                name=ws_id,
+                description=ws_description,
+                include_domains=include_domains,
+                exclude_domains=exclude_domains,
+            )
+            safe_tools_web.append(web_search_tool)
+            logger.info("Configured Web Search tool '%s' (ID: %s)", ws_name, ws_id)
+        except Exception as e:
+            logger.error("Failed to create Web Search tool '%s' (ID: %s): %s",
+                        ws_name, ws_id, e, exc_info=True)
+
+    return safe_tools_web
 
 
-    # --- Dynamic API Request Tools ---
-    # Note: Basic API tools are now handled by centralized configuration above.
-    # This section handles any additional specialized API tool configuration that 
-    # might not be covered by the centralized approach.
-    api_request_configs = [t for t in tool_settings if t.get("type") == "apiRequest"]
-    if api_request_configs:
-        logger.info(f"Found {len(api_request_configs)} additional API request configurations")
-        # Additional specialized API handling can be added here if needed
-        # For now, rely on centralized configuration
-    else:
-        logger.debug("No additional API request tools to configure")
-
-
-    # --- Internal Tools (like voice capabilities) ---
-    internal_configs = [t for t in tool_settings if t.get("type") == "internal"]
+def _configure_internal_tools(internal_configs: List[Dict], safe_tools: List, logger):
+    """Configure Internal Tools."""
     for internal_config in internal_configs:
         try:
             tool_id = internal_config.get("id")
             tool_settings_internal = internal_config.get("settings", {})
             tool_name = tool_settings_internal.get("name", "Internal Tool")
             tool_enabled = tool_settings_internal.get("enabled", True)
-            
+
             if not tool_enabled:
-                logger.info(f"Skipping disabled internal tool '{tool_name}' (ID: {tool_id})")
+                logger.info("Skipping disabled internal tool '%s' (ID: %s)",
+                       tool_name, tool_id)
                 continue
-                
-            # For voice capabilities tool specifically
+
             if "voiceCapabilities" in tool_id:
-                # Add voice capabilities tool if it's not already added
                 if voice_capabilities_tool not in safe_tools:
                     safe_tools.append(voice_capabilities_tool)
-                    logger.info(f"Added internal tool: {tool_name} (ID: {tool_id})")
+                    logger.info("Added internal tool: %s (ID: %s)", tool_name, tool_id)
                 else:
-                    logger.debug(f"Voice capabilities tool already configured")
+                    logger.debug("Voice capabilities tool already configured")
             else:
-                logger.warning(f"Unknown internal tool type: {tool_id}")
-                
+                logger.warning("Unknown internal tool type: %s", tool_id)
+
         except Exception as e:
-            logger.error(f"Failed to configure internal tool: {e}", exc_info=True)
-    
-
-    # --- Predefined tools are now handled by centralized configuration above ---
-    # No need for manual predefined tool configuration as they are included
-    # in the centralized_safe_tools from configure_tools_centralized()
+            logger.error("Failed to configure internal tool: %s", e, exc_info=True)
 
 
-    # Combine lists: safe tools first, then datastore tools
-    tools_list.extend(safe_tools)
-    tools_list.extend(datastore_tools) 
+def _validate_agent_config(agent_config: Dict, logger) -> Tuple[Dict, Dict, List]:
+    """Validate and extract agent configuration settings."""
+    config_simple = agent_config.get("config", {}).get("simple", {})
+    if not config_simple:
+        logger.warning("Agent configuration 'config.simple' not found. No tools will be configured.")
+        return {}, {}, []
 
-    logger.info(f"Total tools configured: {len(tools_list)} ({len(safe_tools)} safe, {len(datastore_tools)} datastore).")
-    logger.info(f"Tool names: {[tool.name for tool in tools_list]}")
+    settings = config_simple.get("settings", {})
+    if not settings:
+        logger.warning("Agent configuration 'config.simple.settings' not found. No tools will be configured.")
+        return {}, {}, []
+
+    tool_settings = settings.get("tools", [])
+    if not tool_settings:
+        logger.info("No tools specified in 'config.simple.settings.tools'.")
+        return {}, {}, []
+
+    return config_simple, settings, tool_settings
+
+
+def _configure_basic_tools(agent_config: Dict, agent_id: str, settings: Dict, safe_tools: List, logger):
+    """Configure basic tools (centralized, predefined, vision)."""
+    # Add centralized tools
+    _add_centralized_tools(agent_config, agent_id, safe_tools, logger)
+
+    # Add predefined tools as fallback
+    _add_predefined_tools(safe_tools, logger)
+
+    # Add vision tools
+    _add_vision_tools(settings.get("vision", {}), safe_tools, logger)
+
+
+def _configure_specialized_tools(tool_settings: List, agent_config: Dict, logger) -> Tuple[List[BaseTool], List[BaseTool], Set[str]]:
+    """Configure specialized tools (KB, Web Search, Internal)."""
+    datastore_tools = []
+    datastore_names = set()
+    web_tools = []
+
+    # Configure Knowledge Base tools
+    kb_configs = [t for t in tool_settings if t.get("type") == "knowledgeBase"]
+    kb_tools, kb_names = _configure_knowledge_base_tools(kb_configs, agent_config, logger)
+    datastore_tools.extend(kb_tools)
+    datastore_names.update(kb_names)
+
+    # Configure Web Search tools
+    web_search_configs = [t for t in tool_settings if t.get("type") == "webSearch"]
+    web_tools = _configure_web_search_tools(web_search_configs, logger)
+
+    # Handle API Request tools (handled by centralized configuration)
+    api_request_configs = [t for t in tool_settings if t.get("type") == "apiRequest"]
+    if api_request_configs:
+        logger.info("Found %d additional API request configurations",
+                   len(api_request_configs))
+
+    return datastore_tools, web_tools, datastore_names
+
+
+def _finalize_tools_configuration(safe_tools: List, datastore_tools: List,
+                                 datastore_names: Set, max_rewrites: int,
+                                 logger) -> Tuple[List[BaseTool], List[BaseTool],
+                                                List[BaseTool], Set[str], int]:
+    """Finalize tools configuration and return results."""
+    tools_list = safe_tools + datastore_tools
+
+    logger.info("Total tools configured: %d (%d safe, %d datastore).",
+               len(tools_list), len(safe_tools), len(datastore_tools))
+    logger.info("Tool names: %s", [tool.name for tool in tools_list])
+    logger.info("Using max_rewrites: %d", max_rewrites)
+
     return tools_list, safe_tools, datastore_tools, datastore_names, max_rewrites
+
+
+def configure_tools(agent_config: Dict, agent_id: str,
+                   logger) -> Tuple[List[BaseTool], List[BaseTool],
+                                  List[BaseTool], Set[str], int]:
+    """Configure tools based on agent configuration (simple structure)."""
+    # Initialize tool lists and variables
+    safe_tools, datastore_tools, datastore_names = _initialize_tool_lists()
+    max_rewrites = 3  # Default
+
+    # Validate and extract configuration
+    _, settings, tool_settings = _validate_agent_config(agent_config, logger)
+    if not tool_settings:
+        return [], [], [], set(), max_rewrites
+
+    # Get max_rewrites setting
+    config_mixin = AgentConfigMixin()
+    max_rewrites = config_mixin.get_max_rewrites(agent_config)
+
+    # Configure basic tools (centralized, predefined, vision)
+    _configure_basic_tools(agent_config, agent_id, settings, safe_tools, logger)
+
+    # Configure specialized tools (KB, Web Search, Internal)
+    spec_datastore_tools, web_tools, spec_datastore_names = _configure_specialized_tools(
+        tool_settings, agent_config, logger
+    )
+
+    # Combine results
+    datastore_tools.extend(spec_datastore_tools)
+    datastore_names.update(spec_datastore_names)
+    safe_tools.extend(web_tools)
+
+    # Configure Internal tools
+    internal_configs = [t for t in tool_settings if t.get("type") == "internal"]
+    _configure_internal_tools(internal_configs, safe_tools, logger)
+
+    # Finalize and return results
+    return _finalize_tools_configuration(safe_tools, datastore_tools, datastore_names, max_rewrites, logger)
 
 
 # --- Vision Tools ---
@@ -303,27 +403,27 @@ def analyze_images(
 ) -> str:
     """
     Analyzes images using available Vision API providers.
-    
+
     This tool processes a list of image URLs and returns detailed analysis
     of their contents using computer vision models like GPT-4V, Google Vision API, or Claude.
-    
+
     Args:
         image_urls: List of URLs pointing to images to be analyzed
         analysis_prompt: Custom prompt to guide the analysis (optional)
         state: LangGraph state (injected automatically)
-    
+
     Returns:
         Detailed description of image contents or error message
     """
     logger = logging.getLogger(__name__)
-    
+
     try:
         if not image_urls:
             return "No images provided for analysis."
-        
+
         # Check if images are available in state
         state_image_urls = state.get("image_urls", []) if state else []
-        
+
         # Use state images if no specific URLs provided, or validate provided URLs against state
         if not image_urls and state_image_urls:
             image_urls = state_image_urls
@@ -333,36 +433,37 @@ def analyze_images(
             if not valid_urls:
                 return "Provided image URLs are not available in current context."
             image_urls = valid_urls
-        
+
         if not image_urls:
             return "No valid images available for analysis."
-        
-        logger.info(f"Analyzing {len(image_urls)} images with prompt: '{analysis_prompt[:100]}...'")
-        
+
+        logger.info("Analyzing %d images with prompt: '%.100s...'",
+                   len(image_urls), analysis_prompt)
+
         # Check IMAGE_VISION_MODE setting
-        from app.core.config import settings as app_settings
         vision_mode = getattr(app_settings, 'IMAGE_VISION_MODE', 'binary')
-        logger.info(f"Using vision mode: {vision_mode}")
-        
+        logger.info("Using vision mode: %s", vision_mode)
+
         # Since this is a sync tool, we need to handle async operations properly
-        import asyncio
-        
+
         try:
             if vision_mode == "url":
                 # URL mode: Pass URLs directly to Vision APIs (for production with public MinIO)
-                result = _run_async_in_sync(_analyze_images_url_mode, image_urls, analysis_prompt, state, logger)
+                result = _run_async_in_sync(_analyze_images_url_mode,
+                                          image_urls, analysis_prompt, state, logger)
             else:
                 # Binary mode: Download images and pass base64 data (for dev/local MinIO)
-                result = _run_async_in_sync(_analyze_images_binary_mode, image_urls, analysis_prompt, state, logger)
-            
+                result = _run_async_in_sync(_analyze_images_binary_mode,
+                                          image_urls, analysis_prompt, state, logger)
+
             return result
-            
+
         except Exception as e:
-            logger.error(f"Error during image analysis: {e}", exc_info=True)
+            logger.error("Error during image analysis: %s", e, exc_info=True)
             return f"Error analyzing images: {str(e)}"
-    
+
     except Exception as e:
-        logger.error(f"Unexpected error in analyze_images tool: {e}", exc_info=True)
+        logger.error("Unexpected error in analyze_images tool: %s", e, exc_info=True)
         return f"Unexpected error during image analysis: {str(e)}"
 
 
@@ -370,10 +471,6 @@ def _run_async_in_sync(async_func, *args):
     """
     Helper function to run async function in sync context
     """
-    import asyncio
-    import concurrent.futures
-    import threading
-    
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
@@ -385,30 +482,30 @@ def _run_async_in_sync(async_func, *args):
                     return new_loop.run_until_complete(async_func(*args))
                 finally:
                     new_loop.close()
-            
+
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(run_in_thread)
                 return future.result(timeout=60)  # 60 second timeout
-        else:
-            # No loop running, we can use it directly
-            return loop.run_until_complete(async_func(*args))
+
+        # No loop running, we can use it directly
+        return loop.run_until_complete(async_func(*args))
     except RuntimeError:
         # No event loop, create a new one
         return asyncio.run(async_func(*args))
 
 
-async def _analyze_images_url_mode(image_urls: List[str], analysis_prompt: str, state: Dict, logger) -> str:
+async def _analyze_images_url_mode(image_urls: List[str], analysis_prompt: str,
+                                  state: Dict, logger) -> str:
     """
     URL mode: Pass URLs directly to Vision APIs
     Used when MinIO is publicly accessible (production)
     """
     try:
-        from app.services.media.image_orchestrator import ImageOrchestrator
         orchestrator = ImageOrchestrator()
         await orchestrator.initialize()
-        
+
         result = await orchestrator.analyze_images(image_urls, analysis_prompt)
-        
+
         if result.success and result.analysis:
             # Store analysis in state
             if state is not None:
@@ -422,145 +519,162 @@ async def _analyze_images_url_mode(image_urls: List[str], analysis_prompt: str, 
                     "mode": "url",
                     "timestamp": getattr(result, 'timestamp', None)
                 })
-            
-            logger.info(f"Image analysis completed using {result.provider_name} (URL mode)")
+
+            logger.info("Image analysis completed using %s (URL mode)",
+                       result.provider_name)
             return result.analysis
-        else:
-            error_msg = result.error_message or "Failed to analyze images"
-            logger.warning(f"Image analysis failed (URL mode): {error_msg}")
-            return f"Image analysis failed: {error_msg}"
-            
+
+        error_msg = result.error_message or "Failed to analyze images"
+        logger.warning("Image analysis failed (URL mode): %s", error_msg)
+        return f"Image analysis failed: {error_msg}"
+
     except Exception as e:
-        logger.error(f"Error during URL mode image analysis: {e}", exc_info=True)
+        logger.error("Error during URL mode image analysis: %s", e, exc_info=True)
         return f"Error analyzing images in URL mode: {str(e)}"
 
 
-async def _analyze_images_binary_mode(image_urls: List[str], analysis_prompt: str, state: Dict, logger) -> str:
+async def _download_images_to_base64(image_urls: List[str], logger) -> List[str]:
+    """Download images and convert to base64 data URLs."""
+    image_data_urls = []
+    async with httpx.AsyncClient() as client:
+        for image_url in image_urls:
+            try:
+                response = await client.get(image_url)
+                if response.status_code == 200:
+                    # Convert to base64 data URL
+                    image_bytes = response.content
+                    image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+
+                    # Detect content type
+                    content_type = response.headers.get('content-type', 'image/jpeg')
+                    data_url = f"data:{content_type};base64,{image_base64}"
+                    image_data_urls.append(data_url)
+
+                    logger.debug("Downloaded and converted image: %d bytes",
+                                len(image_bytes))
+                else:
+                    logger.warning("Failed to download image from %s: HTTP %d",
+                                  image_url, response.status_code)
+            except Exception as e:
+                logger.error("Error downloading image from %s: %s", image_url, e)
+
+    return image_data_urls
+
+
+async def _store_analysis_in_state(state: Dict, analysis_prompt: str, image_urls: List[str], result, _logger):
+    """Store analysis result in state."""
+    if state is not None:
+        if "image_analysis" not in state:
+            state["image_analysis"] = []
+        state["image_analysis"].append({
+            "prompt": analysis_prompt,
+            "image_urls": image_urls,  # Original URLs for reference
+            "analysis": result.analysis,
+            "provider": result.provider_name,
+            "mode": "binary",
+            "timestamp": getattr(result, 'timestamp', None)
+        })
+
+
+async def _analyze_images_binary_mode(image_urls: List[str], analysis_prompt: str,
+                                     state: Dict, logger) -> str:
     """
     Binary mode: Download images locally and pass base64 data to Vision APIs
     Used when MinIO is not publicly accessible (localhost/dev)
     """
     try:
-        # Import ImageOrchestrator inside the tool to avoid circular imports
-        from app.services.media.image_orchestrator import ImageOrchestrator
-        import httpx
-        import base64
-        
         # Initialize orchestrator
         orchestrator = ImageOrchestrator()
         await orchestrator.initialize()
-        
+
         # Download images and convert to base64 data URLs
-        image_data_urls = []
-        async with httpx.AsyncClient() as client:
-            for image_url in image_urls:
-                try:
-                    response = await client.get(image_url)
-                    if response.status_code == 200:
-                        # Convert to base64 data URL
-                        image_bytes = response.content
-                        image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-                        
-                        # Detect content type
-                        content_type = response.headers.get('content-type', 'image/jpeg')
-                        data_url = f"data:{content_type};base64,{image_base64}"
-                        image_data_urls.append(data_url)
-                        
-                        logger.debug(f"Downloaded and converted image: {len(image_bytes)} bytes")
-                    else:
-                        logger.warning(f"Failed to download image from {image_url}: HTTP {response.status_code}")
-                        return f"Failed to download image: HTTP {response.status_code}"
-                except Exception as e:
-                    logger.error(f"Error downloading image from {image_url}: {e}")
-                    return f"Error downloading image: {str(e)}"
-        
+        image_data_urls = await _download_images_to_base64(image_urls, logger)
+
         if not image_data_urls:
             return "Failed to download any images for analysis."
-        
+
         # Analyze images using data URLs instead of remote URLs
         result = await orchestrator.analyze_images(image_data_urls, analysis_prompt)
-        
+
         if result.success and result.analysis:
             # Store analysis in state
-            if state is not None:
-                if "image_analysis" not in state:
-                    state["image_analysis"] = []
-                state["image_analysis"].append({
-                    "prompt": analysis_prompt,
-                    "image_urls": image_urls,  # Original URLs for reference
-                    "analysis": result.analysis,
-                    "provider": result.provider_name,
-                    "mode": "binary",
-                    "timestamp": getattr(result, 'timestamp', None)
-                })
-            
-            logger.info(f"Image analysis completed using {result.provider_name} (binary mode)")
+            await _store_analysis_in_state(state, analysis_prompt, image_urls,
+                                          result, logger)
+
+            logger.info("Image analysis completed using %s (binary mode)",
+                       result.provider_name)
             return result.analysis
-        else:
-            error_msg = result.error_message or "Failed to analyze images"
-            logger.warning(f"Image analysis failed (binary mode): {error_msg}")
-            return f"Image analysis failed: {error_msg}"
-            
+
+        error_msg = result.error_message or "Failed to analyze images"
+        logger.warning("Image analysis failed (binary mode): %s", error_msg)
+        return f"Image analysis failed: {error_msg}"
+
     except Exception as e:
-        logger.error(f"Error during binary mode image analysis: {e}", exc_info=True)
-        return f"Error analyzing images in binary mode: {str(e)}"
-        
-    except Exception as e:
-        logger.error(f"Unexpected error in analyze_images tool: {e}", exc_info=True)
-        return f"Unexpected error during image analysis: {str(e)}"
+        logger.error("Error during image analysis: %s", e, exc_info=True)
+        return f"Error analyzing images: {str(e)}"
 
 
 @tool
 def describe_image_content(
-    image_url: Annotated[str, "URL of the image to describe"], 
+    image_url: Annotated[str, "URL of the image to describe"],
     focus: Annotated[str, "What to focus on in the description"] = "general content",
     state: Annotated[Dict, InjectedState] = None
 ) -> str:
     """
     Provides detailed description of a single image's content.
-    
+
     This tool is optimized for describing one image in detail, with options
     to focus on specific aspects like text content, objects, people, etc.
-    
+
     Args:
         image_url: URL of the image to describe
         focus: What aspect to focus on (e.g., "text", "objects", "people", "general content")
         state: LangGraph state (injected automatically)
-    
+
     Returns:
         Detailed description of the image content
     """
     logger = logging.getLogger(__name__)
-    
+
     try:
         if not image_url:
             return "No image URL provided."
-        
+
         # Check if image is available in state
         state_image_urls = state.get("image_urls", []) if state else []
         if state_image_urls and image_url not in state_image_urls:
             return "Requested image is not available in current context."
-        
+
         # Create focused prompt based on the focus parameter
         focus_prompts = {
-            "text": "Extract and transcribe any text visible in this image. Include signs, labels, documents, or any written content.",
-            "objects": "Identify and describe all objects, items, and things visible in this image. Be specific about their appearance, location, and any notable features.",
-            "people": "Describe any people in this image, including their appearance, clothing, actions, and positioning. Be respectful and factual.",
-            "scene": "Describe the overall scene, setting, and environment shown in this image. Include lighting, mood, and context.",
-            "colors": "Analyze the color palette, dominant colors, and color relationships in this image.",
-            "technical": "Provide technical analysis of this image including composition, lighting, style, and photographic aspects.",
-            "general content": "Provide a comprehensive description of everything visible in this image."
+            "text": ("Extract and transcribe any text visible in this image. "
+                    "Include signs, labels, documents, or any written content."),
+            "objects": ("Identify and describe all objects, items, and things "
+                       "visible in this image. Be specific about their appearance, "
+                       "location, and any notable features."),
+            "people": ("Describe any people in this image, including their "
+                      "appearance, clothing, actions, and positioning. "
+                      "Be respectful and factual."),
+            "scene": ("Describe the overall scene, setting, and environment "
+                     "shown in this image. Include lighting, mood, and context."),
+            "colors": ("Analyze the color palette, dominant colors, and color "
+                      "relationships in this image."),
+            "technical": ("Provide technical analysis of this image including "
+                         "composition, lighting, style, and photographic aspects."),
+            "general content": ("Provide a comprehensive description of "
+                              "everything visible in this image.")
         }
-        
-        analysis_prompt = focus_prompts.get(focus.lower(), focus_prompts["general content"])
+
+        analysis_prompt = focus_prompts.get(focus.lower(),
+                                           focus_prompts["general content"])
         if focus.lower() not in focus_prompts:
             analysis_prompt = f"Focus on {focus} in this image: {analysis_prompt}"
-        
-        logger.info(f"Describing image with focus on: {focus}")
-        
+
+        logger.info("Describing image with focus on: %s", focus)
+
         # Use analyze_images tool for single image
         return analyze_images([image_url], analysis_prompt, state)
-        
+
     except Exception as e:
-        logger.error(f"Error in describe_image_content tool: {e}", exc_info=True)
+        logger.error("Error in describe_image_content tool: %s", e, exc_info=True)
         return f"Error describing image: {str(e)}"

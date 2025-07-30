@@ -143,16 +143,35 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
     async def _setup_voice_orchestrator(self) -> None:
         """Initialize voice orchestrator with error handling."""
         try:
-            from app.services.voice.voice_orchestrator import VoiceServiceOrchestrator
-            from app.services.redis_wrapper import RedisService
+            # Import voice_v2 dependencies
+            from app.services.voice_v2.providers.enhanced_factory import (
+                EnhancedVoiceProviderFactory
+            )
+            from app.services.voice_v2.infrastructure.cache import VoiceCache
+            from app.services.voice_v2.infrastructure.minio_manager import (
+                MinioFileManager
+            )
+            from app.services.voice_v2.core.orchestrator import (
+                VoiceServiceOrchestrator
+            )
 
-            redis_service = RedisService()
-            await redis_service.initialize()
-            self.voice_orchestrator = VoiceServiceOrchestrator(redis_service, self.logger)
+            # Initialize components with enhanced voice_v2 architecture
+            enhanced_factory = EnhancedVoiceProviderFactory()
+            cache_manager = VoiceCache()
+            await cache_manager.initialize()
+
+            file_manager = MinioFileManager()
+            await file_manager.initialize()
+
+            self.voice_orchestrator = VoiceServiceOrchestrator(
+                enhanced_factory=enhanced_factory,
+                cache_manager=cache_manager,
+                file_manager=file_manager
+            )
             await self.voice_orchestrator.initialize()
-            self.logger.info("Voice orchestrator initialized for WhatsApp bot")
+            self.logger.info("Voice orchestrator v2 initialized for WhatsApp bot")
         except Exception as e:
-            self.logger.warning("Failed to initialize voice orchestrator: %s", e)
+            self.logger.warning("Failed to initialize voice orchestrator v2: %s", e)
             self.voice_orchestrator = None
 
     async def _setup_image_orchestrator(self) -> None:
@@ -343,7 +362,7 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             )
             # Stop typing indicator if error occurred
             chat_id = (
-                data.get("response", {}).get("chatId") 
+                data.get("response", {}).get("chatId")
                 or data.get("response", {}).get("from", "")
             )
             if chat_id and chat_id in self.typing_tasks:
@@ -483,10 +502,10 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             del self.typing_tasks[chat_id]
 
     async def _get_or_create_user(
-        self, 
-        platform_user_id: str, 
-        first_name: str, 
-        last_name: Optional[str] = None, 
+        self,
+        platform_user_id: str,
+        first_name: str,
+        last_name: Optional[str] = None,
         phone_number: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """Get or create user using UserManager helper."""
@@ -498,11 +517,11 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
         )
 
     async def _publish_to_agent(
-        self, 
-        chat_id: str, 
-        platform_user_id: str, 
-        message_text: str, 
-        user_data: Dict[str, Any], 
+        self,
+        chat_id: str,
+        platform_user_id: str,
+        message_text: str,
+        user_data: Dict[str, Any],
         image_urls: Optional[List[str]] = None
     ) -> None:
         """
@@ -521,7 +540,7 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
                 "Redis client not available for publishing to agent: %s", e
             )
             await self._send_error_message(
-                chat_id, 
+                chat_id,
                 "Ошибка: Не удалось связаться с агентом (сервис недоступен)."
             )
             return
@@ -540,7 +559,7 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
         if image_urls:
             payload["image_urls"] = image_urls
             self.logger.info(
-                "Adding %s image URLs to WhatsApp message payload", 
+                "Adding %s image URLs to WhatsApp message payload",
                 len(image_urls)
             )
 
@@ -649,7 +668,7 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
 
         try:
             self.logger.debug(
-                "Attempting to send voice message to %s with audio_url: %s", 
+                "Attempting to send voice message to %s with audio_url: %s",
                 chat_id, audio_url
             )
             success = await self.api_handler.send_voice_message(chat_id, audio_url)
@@ -667,7 +686,7 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
 
         except Exception as e:
             self.logger.error(
-                "Error sending voice message to WhatsApp chat %s: %s", 
+                "Error sending voice message to WhatsApp chat %s: %s",
                 chat_id, e
             )
             return False
@@ -680,7 +699,7 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
         """Обработка переподключения к wppconnect-server"""
         if self.reconnect_attempts >= self.max_reconnect_attempts:
             self.logger.error(
-                "Max reconnection attempts (%s) reached", 
+                "Max reconnection attempts (%s) reached",
                 self.max_reconnect_attempts
             )
             await self.mark_as_error("Max reconnection attempts reached")
@@ -694,14 +713,19 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
 
         try:
             await asyncio.sleep(self.reconnect_delay)
-            socketio_url = f"{self.wppconnect_base_url}"
+            socketio_url = "%s" % self.wppconnect_base_url
             if not self.sio:
                 self.logger.error("Socket.IO client not initialized for reconnection")
                 return
-            await self.sio.connect(socketio_url, socketio_path=settings.WPPCONNECT_SOCKETIO_PATH)
+            await self.sio.connect(
+                socketio_url, socketio_path=settings.WPPCONNECT_SOCKETIO_PATH
+            )
 
         except Exception as e:
-            self.logger.error(f"Reconnection attempt {self.reconnect_attempts} failed: {e}")
+            self.logger.error(
+                "Reconnection attempt %s failed: %s",
+                self.reconnect_attempts, e
+            )
 
     async def _handle_image_message(self, response: Dict[str, Any], chat_id: str, sender_info: Dict[str, Any]) -> None:
         """Handle image message using MediaHandler."""
@@ -713,23 +737,37 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             # Delegate to media handler
             await self.media_handler.handle_voice_message(response, chat_id, sender_info)
         except Exception as e:
-            self.logger.error(f"Error in _handle_voice_message: {e}", exc_info=True)
-            await self._send_error_message(chat_id, "⚠️ Произошла ошибка при обработке голосового сообщения.")
+            self.logger.error(
+                "Error in _handle_voice_message: %s", e, exc_info=True
+            )
+            await self._send_error_message(
+                chat_id,
+                "⚠️ Произошла ошибка при обработке голосового сообщения."
+            )
         finally:
             # Stop typing indicator
             if chat_id in self.typing_tasks:
                 self.typing_tasks[chat_id].cancel()
                 del self.typing_tasks[chat_id]
 
-    async def _process_voice_message_with_orchestrator(self,
-                                                      audio_data: bytes,
-                                                      filename: str,
-                                                      chat_id: str,
-                                                      platform_user_id: str,
-                                                      user_data: Dict[str, Any]) -> None:
+    async def _process_voice_message_with_orchestrator(
+        self,
+        audio_data: bytes,
+        filename: str,
+        chat_id: str,
+        platform_user_id: str,
+        user_data: Dict[str, Any]
+    ) -> None:
         """Process voice message using MediaHandler orchestrator."""
+        voice_params = {
+            "audio_data": audio_data,
+            "filename": filename,
+            "chat_id": chat_id,
+            "platform_user_id": platform_user_id,
+            "user_data": user_data
+        }
         await self.media_handler.process_voice_message_with_orchestrator(
-            audio_data, filename, chat_id, platform_user_id, user_data
+            voice_params
         )
 
     async def _load_agent_config(self) -> None:
@@ -737,13 +775,21 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
         Загружает конфигурацию агента один раз при инициализации интеграции
         """
         try:
-            self.logger.debug(f"Loading agent config for {self.agent_id}")
+            self.logger.debug("Loading agent config for %s", self.agent_id)
 
             async with httpx.AsyncClient() as client:
-                response = await client.get(f"http://{settings.MANAGER_HOST}:{settings.MANAGER_PORT}/api/v1/agents/{self.agent_id}/config")
+                response = await client.get(
+                    "http://%s:%s/api/v1/agents/%s/config" % (
+                        settings.MANAGER_HOST,
+                        settings.MANAGER_PORT,
+                        self.agent_id
+                    )
+                )
                 if response.status_code == 200:
                     self.agent_config = response.json()
-                    self.logger.info(f"Successfully loaded agent config for {self.agent_id}")
+                    self.logger.info(
+                        "Successfully loaded agent config for %s", self.agent_id
+                    )
 
                     # Check if voice is enabled
                     voice_enabled = (
@@ -754,15 +800,21 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
                         .get("voice_settings", {})
                         .get("enabled", False)
                     )
-                    self.logger.info(f"Voice features enabled for agent {self.agent_id}: {voice_enabled}")
+                    self.logger.info(
+                        "Voice features enabled for agent %s: %s",
+                        self.agent_id, voice_enabled
+                    )
 
                 else:
-                    self.logger.error(f"Failed to load agent config: HTTP {response.status_code}")
+                    self.logger.error(
+                        "Failed to load agent config: HTTP %s",
+                        response.status_code
+                    )
                     # Set fallback config
                     self.agent_config = self._get_fallback_agent_config()
 
         except Exception as e:
-            self.logger.error(f"Error loading agent config: {e}")
+            self.logger.error("Error loading agent config: %s", e)
             # Set fallback config
             self.agent_config = self._get_fallback_agent_config()
 
