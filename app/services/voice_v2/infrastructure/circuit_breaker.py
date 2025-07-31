@@ -87,27 +87,22 @@ class CircuitBreakerInterface(ABC):
     @abstractmethod
     async def call(self, func: Callable, *args, **kwargs) -> Any:
         """Execute function through circuit breaker"""
-        pass
 
     @abstractmethod
     async def is_available(self) -> bool:
         """Check if circuit breaker allows requests"""
-        pass
 
     @abstractmethod
     def get_state(self) -> CircuitBreakerState:
         """Get current circuit breaker state"""
-        pass
 
     @abstractmethod
     def get_metrics(self) -> CircuitBreakerMetrics:
         """Get circuit breaker metrics"""
-        pass
 
     @abstractmethod
     async def reset(self) -> None:
         """Reset circuit breaker to CLOSED state"""
-        pass
 
 
 T = TypeVar('T')

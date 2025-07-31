@@ -21,7 +21,6 @@ import hashlib
 import time
 from typing import Dict, List, Optional, Any
 import logging
-
 from openai import AsyncOpenAI, APIError, APIConnectionError, RateLimitError, AuthenticationError
 
 from app.core.config import settings
@@ -303,9 +302,7 @@ class OpenAITTSProvider(BaseTTSProvider):
                         attempt + 1)
                     await asyncio.sleep(delay)
                     continue
-                raise AudioProcessingError(
-                    f"Rate limit exceeded after {
-                        self._max_retries} retries: {e}")
+                raise AudioProcessingError(f"Rate limit exceeded after {self._max_retries} retries: {e}")
 
             except APIConnectionError as e:
                 last_exception = e
@@ -317,9 +314,7 @@ class OpenAITTSProvider(BaseTTSProvider):
                         attempt + 1)
                     await asyncio.sleep(delay)
                     continue
-                raise AudioProcessingError(
-                    f"Connection failed after {
-                        self._max_retries} retries: {e}")
+                raise AudioProcessingError(f"Connection failed after {self._max_retries} retries: {e}")
 
             except AuthenticationError as e:
                 # Don't retry authentication errors
@@ -339,9 +334,7 @@ class OpenAITTSProvider(BaseTTSProvider):
                 raise VoiceServiceTimeout("synthesis", self._timeout)
 
         # If we get here, all retries failed
-        raise AudioProcessingError(
-            f"Synthesis failed after {
-                self._max_retries} retries: {last_exception}")
+        raise AudioProcessingError(f"Synthesis failed after {self._max_retries} retries: {last_exception}")
 
     async def _upload_audio_to_storage(self, audio_data: bytes, request: TTSRequest) -> str:
         """
@@ -353,11 +346,6 @@ class OpenAITTSProvider(BaseTTSProvider):
         text_hash = hashlib.sha256(request.text.encode()).hexdigest()[:8]
         format_ext = "mp3"  # Default format (no output_format in new schema)
         filename = f"tts_openai_{text_hash}_{int(time.time())}.{format_ext}"
-
-        # TODO: Implement MinIO upload when MinIO manager is available
-        # For now, return a placeholder URL
-        # In production, this would upload to MinIO and return presigned URL
-        from app.core.config import settings
 
         # Use real MinIO configuration
         protocol = "https" if getattr(settings, "MINIO_SECURE", False) else "http"
@@ -467,7 +455,4 @@ class OpenAITTSProvider(BaseTTSProvider):
         return chunks
 
     def __repr__(self) -> str:
-        return f"OpenAITTSProvider(model={
-            self._model}, voice={
-            self._voice}, enabled={
-            self.enabled})"
+        return f"OpenAITTSProvider(model={self._model}, voice={self._voice}, enabled={self.enabled})"
