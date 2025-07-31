@@ -29,9 +29,9 @@ class MetricsBackendInterface(ABC):
 
     @abstractmethod
     async def get_metrics(self,
-                         name_pattern: str = "*",
-                         start_time: Optional[float] = None,
-                         end_time: Optional[float] = None) -> List[MetricRecord]:
+                          name_pattern: str = "*",
+                          start_time: Optional[float] = None,
+                          end_time: Optional[float] = None) -> List[MetricRecord]:
         """Retrieve metrics by criteria"""
 
     @abstractmethod
@@ -63,9 +63,9 @@ class MemoryMetricsBackend(MetricsBackendInterface):
                 self.records = self.records[-self.max_records:]
 
     async def get_metrics(self,
-                         name_pattern: str = "*",
-                         start_time: Optional[float] = None,
-                         end_time: Optional[float] = None) -> List[MetricRecord]:
+                          name_pattern: str = "*",
+                          start_time: Optional[float] = None,
+                          end_time: Optional[float] = None) -> List[MetricRecord]:
         """Get metrics with filtering"""
         async with self._lock:
             results = []
@@ -136,9 +136,9 @@ class RedisMetricsBackend(MetricsBackendInterface):
             logger.error("Failed to store batch in Redis: %s", exc)
 
     async def get_metrics(self,
-                         name_pattern: str = "*",
-                         start_time: Optional[float] = None,
-                         end_time: Optional[float] = None) -> List[MetricRecord]:
+                          name_pattern: str = "*",
+                          start_time: Optional[float] = None,
+                          end_time: Optional[float] = None) -> List[MetricRecord]:
         """Get metrics from Redis"""
         try:
             pattern = f"{self.key_prefix}:{name_pattern}:*"

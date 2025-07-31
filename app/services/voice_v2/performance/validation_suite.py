@@ -61,7 +61,7 @@ class PerformanceValidationSuite:
         self.last_validation_report: Optional[ValidationReport] = None
 
     def configure_components(self, integration_monitor, stt_optimizer,
-                           tts_optimizer, decision_optimizer):
+                             tts_optimizer, decision_optimizer):
         """Configure performance components for validation"""
         self.integration_monitor = integration_monitor
         self.stt_optimizer = stt_optimizer
@@ -107,7 +107,7 @@ class PerformanceValidationSuite:
             self.validation_history.append(validation_report)
 
             logger.info("Validation completed: %s, Success rate: %.1f%%",
-                       validation_report.overall_status.value, validation_report.success_rate)
+                        validation_report.overall_status.value, validation_report.success_rate)
 
             return validation_report
 
@@ -121,7 +121,7 @@ class PerformanceValidationSuite:
             return error_report
 
     async def _execute_validation_phases(self, test_cases: List[ValidationTestCase],
-                                       duration_minutes: int) -> None:
+                                         duration_minutes: int) -> None:
         """Execute all validation phases in sequence"""
         logger.info("Phase 1: Component Health Validation")
         await self.validation_engine.validate_component_health(test_cases)
@@ -147,7 +147,7 @@ class PerformanceValidationSuite:
                 test_case.status = self.validation_engine.evaluate_test_case(test_case)
 
     async def _run_load_test_validation(self, test_cases: List[ValidationTestCase],
-                                      duration_minutes: int) -> None:
+                                        duration_minutes: int) -> None:
         """Run load test and update performance test cases"""
         if not self.integration_monitor:
             logger.warning("Integration monitor not configured - skipping load test")
@@ -175,7 +175,7 @@ class PerformanceValidationSuite:
                     test_case.error_message = f"Load test failed: {exc}"
 
     def _update_test_cases_from_load_test(self, test_cases: List[ValidationTestCase],
-                                        load_results: Dict) -> None:
+                                          load_results: Dict) -> None:
         """Update test cases with load test results"""
         metrics = load_results.get("metrics", {})
 
@@ -204,7 +204,7 @@ class PerformanceValidationSuite:
         }
 
     def _update_stt_test_cases(self, test_cases: List[ValidationTestCase],
-                              stt_metrics: Dict) -> None:
+                               stt_metrics: Dict) -> None:
         """Update STT-related test cases"""
         for test_case in test_cases:
             if test_case.name == "STT Average Latency" and stt_metrics["avg_latency"] is not None:
@@ -215,7 +215,7 @@ class PerformanceValidationSuite:
                 test_case.actual_value = stt_metrics["success_rate"]
 
     def _update_tts_test_cases(self, test_cases: List[ValidationTestCase],
-                              tts_metrics: Dict) -> None:
+                               tts_metrics: Dict) -> None:
         """Update TTS-related test cases"""
         for test_case in test_cases:
             if test_case.name == "TTS Average Latency" and tts_metrics["avg_latency"] is not None:
@@ -254,7 +254,7 @@ class PerformanceValidationSuite:
         logger.info("End-to-end performance validation completed")
 
     def export_validation_report(self, report: ValidationReport,
-                               format_type: str = "json", file_path: Optional[str] = None) -> str:
+                                 format_type: str = "json", file_path: Optional[str] = None) -> str:
         """
         Export validation report in specified format
 

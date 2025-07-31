@@ -74,12 +74,14 @@ class VoiceProcessingResult(BaseModel):
     """
 
     success: bool = Field(..., description="Whether processing was successful")
-    text: Optional[str] = Field(default=None, description="Transcribed text (STT) or input text (TTS)")
+    text: Optional[str] = Field(default=None,
+                                description="Transcribed text (STT) or input text (TTS)")
     audio_data: Optional[bytes] = Field(default=None, description="Audio data for TTS results")
     file_info: Optional[VoiceFileInfo] = Field(default=None, description="File information")
     error_message: Optional[str] = Field(default=None, description="Error message if failed")
     processing_time: float = Field(default=0.0, ge=0, description="Processing time in seconds")
-    provider_used: Optional[str] = Field(default=None, description="Provider that processed the request")
+    provider_used: Optional[str] = Field(default=None,
+                                         description="Provider that processed the request")
     cached: bool = Field(default=False, description="Whether result came from cache")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
@@ -97,9 +99,11 @@ class VoiceSettings(BaseModel):
     auto_stt: bool = Field(default=True, description="Automatic STT processing")
     auto_tts_on_keywords: bool = Field(default=False, description="Auto TTS based on keywords")
     intent_keywords: List[str] = Field(default_factory=list, description="Voice intent keywords")
-    providers: List[Dict[str, Any]] = Field(default_factory=list, description="Provider configurations")
+    providers: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Provider configurations")
     max_file_size_mb: int = Field(default=25, ge=1, le=100, description="Max file size in MB")
-    rate_limit_per_minute: int = Field(default=30, ge=1, le=100, description="Rate limit per minute")
+    rate_limit_per_minute: int = Field(
+        default=30, ge=1, le=100, description="Rate limit per minute")
     cache_enabled: bool = Field(default=True, description="Whether caching is enabled")
     cache_ttl_hours: int = Field(default=24, ge=1, le=168, description="Cache TTL in hours")
 
@@ -135,7 +139,8 @@ class STTRequest(BaseModel):
 
     def get_cache_key(self) -> str:
         """Generate cache key for STT request"""
-        content = base64.b64encode(self.audio_data).decode()[:100]  # First 100 chars of encoded data
+        content = base64.b64encode(self.audio_data).decode()[
+            :100]  # First 100 chars of encoded data
         key_data = f"{content}_{self.format}_{self.language}"
         return hashlib.sha256(key_data.encode()).hexdigest()
 

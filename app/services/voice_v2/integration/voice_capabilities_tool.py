@@ -146,7 +146,10 @@ async def _get_voice_v2_capabilities(
         # Platform limitations
         capabilities["limitations"] = _get_platform_limitations(channel)
 
-        log_adapter.debug(f"Voice capabilities retrieved: {len(tts_providers)} TTS, {len(stt_providers)} STT providers")
+        log_adapter.debug(
+            f"Voice capabilities retrieved: {
+                len(tts_providers)} TTS, {
+                len(stt_providers)} STT providers")
 
     except Exception as e:
         log_adapter.warning(f"Error querying voice_v2 capabilities: {e}")
@@ -298,34 +301,34 @@ def _generate_capabilities_response(
 
     # Создаем компоненты ответа
     response_sections = []
-    
+
     # Добавляем информацию о TTS
     tts_section = _create_tts_section(capabilities)
     if tts_section:
         response_sections.append(tts_section)
-    
+
     # Добавляем информацию о STT
     stt_section = _create_stt_section(capabilities)
     if stt_section:
         response_sections.append(stt_section)
-    
+
     # Добавляем информацию о платформе
     platform_section = _create_platform_section(capabilities, channel)
     response_sections.append(platform_section)
-    
+
     # Добавляем ограничения
     limitations_section = _create_limitations_section(capabilities)
     if limitations_section:
         response_sections.append(limitations_section)
-    
+
     # Добавляем информацию о fallback провайдерах
     fallback_section = _create_fallback_section(capabilities)
     if fallback_section:
         response_sections.append(fallback_section)
-    
+
     # Финальное сообщение
     response_sections.append("✅ **Система готова к работе с голосом!**")
-    
+
     log_adapter.debug("Generated user-friendly capabilities response")
     return "\n\n".join(response_sections)
 
@@ -341,18 +344,18 @@ def _create_tts_section(capabilities: Dict[str, Any]) -> str:
     """Создает секцию с информацией о TTS."""
     if not capabilities["tts_available"]:
         return ""
-    
+
     tts_providers = capabilities["providers"]["tts"]
     primary_provider = tts_providers[0] if tts_providers else None
-    
+
     if not primary_provider:
         return ""
-    
+
     # Формируем список голосов
     voices = ", ".join(primary_provider["voices"][:3])
     if len(primary_provider["voices"]) > 3:
-        voices += f" и {len(primary_provider['voices'])-3} других"
-    
+        voices += f" и {len(primary_provider['voices']) - 3} других"
+
     return f"""🎤 **Голосовые ответы доступны!**
 
 **Основной провайдер**: {primary_provider["name"].upper()}
@@ -374,7 +377,7 @@ def _create_stt_section(capabilities: Dict[str, Any]) -> str:
     """Создает секцию с информацией о STT."""
     if not capabilities["stt_available"]:
         return ""
-    
+
     return """🎧 **Распознавание речи доступно!**
 
 Отправьте голосовое сообщение, и я его обработаю.
@@ -384,7 +387,7 @@ def _create_stt_section(capabilities: Dict[str, Any]) -> str:
 def _create_platform_section(capabilities: Dict[str, Any], channel: str) -> str:
     """Создает секцию с информацией о платформе."""
     platform_caps = capabilities["platform_capabilities"]
-    
+
     return f"""📱 **Возможности платформы ({channel.upper()})**:
 • Максимальная длительность: {platform_caps.get("max_duration", 60)} сек
 • Поддерживаемые форматы: {", ".join(platform_caps.get("supported_formats", []))}"""
@@ -395,7 +398,7 @@ def _create_limitations_section(capabilities: Dict[str, Any]) -> str:
     limitations = capabilities["limitations"]
     if not limitations:
         return ""
-    
+
     limitations_list = "\n".join([f"• {limit}" for limit in limitations])
     return f"""⚠️ **Ограничения**:
 {limitations_list}"""
@@ -406,7 +409,7 @@ def _create_fallback_section(capabilities: Dict[str, Any]) -> str:
     tts_providers_count = len(capabilities["providers"]["tts"])
     if tts_providers_count <= 1:
         return ""
-    
+
     fallback_count = tts_providers_count - 1
     return f"🔄 **Резервные провайдеры**: {fallback_count} доступно"
 

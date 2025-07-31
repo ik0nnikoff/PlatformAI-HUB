@@ -1,27 +1,38 @@
-import os
+"""
+Agent Runner for LangGraph-based AI Agents in PlatformAI Hub.
+
+This module provides the core agent execution functionality including:
+- LangGraph workflow orchestration
+- Voice_v2 integration for TTS decisions
+- Redis-based state management  
+- Performance monitoring and metrics
+- Agent lifecycle management
+"""
+
 import asyncio
-import logging
 import json
+import logging
+import os
 import uuid
-from typing import Dict, Optional, Any, List, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
-from datetime import datetime, timezone
-
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from redis import exceptions as redis_exceptions
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent_runner.langgraph.factory import create_agent_app # Updated import
-from app.agent_runner.langgraph.models import TokenUsageData # Updated import
-from app.agent_runner.common.config_mixin import AgentConfigMixin # Added import
+from app.agent_runner.common.config_mixin import AgentConfigMixin  # Added import
+from app.agent_runner.langgraph.factory import create_agent_app  # Updated import
+from app.agent_runner.langgraph.models import TokenUsageData  # Updated import
+from app.core.base.service_component import ServiceComponentBase  # Added import
+from app.core.config import settings
 from app.db.alchemy_models import ChatMessageDB, SenderType
 from app.db.crud.chat_crud import db_get_recent_chat_history
-from app.core.config import settings
-from app.core.base.service_component import ServiceComponentBase # Added import
 from app.services.voice_v2.core.orchestrator import VoiceServiceOrchestrator
 
 # --- Helper Functions (some might become methods or stay as utilities) ---
+
 
 async def fetch_config(config_url: str, logger: logging.Logger) -> Optional[Dict]:
     """Fetches agent configuration from the management service using httpx."""
@@ -39,12 +50,16 @@ async def fetch_config(config_url: str, logger: logging.Logger) -> Optional[Dict
         logger.error(f"Failed to fetch configuration from {config_url} due to request error: {e}")
     except json.JSONDecodeError as e:
         logger.error(f"Failed to decode JSON from configuration response ({config_url}): {e}")
-    except Exception as e: # Catch-all for unexpected errors
-        logger.error(f"Unexpected error fetching configuration from {config_url}: {e}", exc_info=True)
+    except Exception as e:  # Catch-all for unexpected errors
+        logger.error(
+            f"Unexpected error fetching configuration from {config_url}: {e}", exc_info=True
+        )
     return None
 
 
-def convert_db_to_langchain(db_messages: List[ChatMessageDB], logger: logging.Logger) -> List[BaseMessage]:
+def convert_db_to_langchain(
+    db_messages: List[ChatMessageDB], logger: logging.Logger
+) -> List[BaseMessage]:
     """Converts messages from DB format (ChatMessageDB) to LangChain BaseMessage list."""
     converted = []
     if not ChatMessageDB or not SenderType:
@@ -53,19 +68,21 @@ def convert_db_to_langchain(db_messages: List[ChatMessageDB], logger: logging.Lo
 
     for msg in db_messages:
         if not isinstance(msg, ChatMessageDB):
-             logger.warning(f"Skipping message conversion due to unexpected type: {type(msg)}")
-             continue
-        
+            logger.warning(f"Skipping message conversion due to unexpected type: {type(msg)}")
+            continue
+
         if msg.sender_type == SenderType.USER:
             converted.append(HumanMessage(content=msg.content))
         elif msg.sender_type == SenderType.AGENT:
             converted.append(AIMessage(content=msg.content))
         else:
-            logger.warning(f"Skipping message conversion due to unhandled sender_type: {msg.sender_type}")
+            logger.warning(
+                f"Skipping message conversion due to unhandled sender_type: {msg.sender_type}"
+            )
     return converted
 
 
-class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMixin inheritance
+class AgentRunner(ServiceComponentBase, AgentConfigMixin):  # Added AgentConfigMixin inheritance
     """
     Управляет жизненным циклом и выполнением одного экземпляра агента.
     Наследуется от ServiceComponentBase для унифицированного управления состоянием и жизненным циклом.
@@ -88,10 +105,12 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         agent_app (Optional[Any]): Экземпляр приложения LangGraph агента.
     """
 
-    def __init__(self,
-                 agent_id: str,
-                 db_session_factory: Optional[async_sessionmaker[AsyncSession]],
-                 logger_adapter: logging.LoggerAdapter):
+    def __init__(
+        self,
+        agent_id: str,
+        db_session_factory: Optional[async_sessionmaker[AsyncSession]],
+        logger_adapter: logging.LoggerAdapter,
+    ):
         """
         Инициализатор AgentRunner.
 
@@ -100,10 +119,10 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
             db_session_factory: Фабрика для создания асинхронных сессий БД.
             logger_adapter: Адаптер логгера.
         """
-        super().__init__(component_id=agent_id,
-                         status_key_prefix="agent_status:",
-                         logger_adapter=logger_adapter)
-        
+        super().__init__(
+            component_id=agent_id, status_key_prefix="agent_status:", logger_adapter=logger_adapter
+        )
+
         # Initialize AgentConfigMixin
         AgentConfigMixin.__init__(self)
 
@@ -121,8 +140,9 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         # Voice processing orchestrator
         self.voice_orchestrator: Optional[VoiceServiceOrchestrator] = None
 
-        self.logger.info(f"AgentRunner for agent {self._component_id} initialized. PID: {os.getpid()}")
-
+        self.logger.info(
+            f"AgentRunner for agent {self._component_id} initialized. PID: {os.getpid()}"
+        )
 
     async def _load_config(self) -> bool:
         """
@@ -141,7 +161,6 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         # Extract any additional config if needed in future
         self.logger.info(f"Agent configuration loaded and prepared successfully.")
         return True
-
 
     async def _setup_app(self) -> bool:
         """
@@ -163,7 +182,6 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
 
         self.logger.info(f"LangGraph application created successfully.")
         return True
-
 
     async def _handle_pubsub_message(self, message_data: bytes) -> None:
         """
@@ -200,11 +218,11 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         except RuntimeError as e:
             self.logger.error(f"Redis client not available for handling pubsub message: {e}")
             return
-        
+
         data_str: Optional[str] = None
-        payload: Optional[Dict[str, Any]] = None # Инициализируем payload
+        payload: Optional[Dict[str, Any]] = None  # Инициализируем payload
         try:
-            data_str = message_data.decode('utf-8')
+            data_str = message_data.decode("utf-8")
             payload = json.loads(data_str)
             self.logger.info(f"Processing message for chat_id: {payload.get('chat_id')}")
 
@@ -217,10 +235,12 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
 
             interaction_id = str(uuid.uuid4())
             self.logger.debug(f"Generated InteractionID: {interaction_id} for Thread: {chat_id}")
-            
+
             # Log image URLs if present
             if image_urls:
-                self.logger.info(f"Processing message with {len(image_urls)} images for chat_id: {chat_id}")
+                self.logger.info(
+                    f"Processing message with {len(image_urls)} images for chat_id: {chat_id}"
+                )
 
             if not chat_id or user_text is None:
                 self.logger.warning(f"Missing 'text' or 'chat_id' in Redis payload: {payload}")
@@ -231,9 +251,8 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
                 thread_id=chat_id,
                 content=user_text,
                 channel=channel,
-                interaction_id=interaction_id
+                interaction_id=interaction_id,
             )
-
 
             history_db = await self._get_history(thread_id=chat_id)
 
@@ -244,7 +263,7 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
                 thread_id=chat_id,
                 channel=channel,
                 interaction_id=interaction_id,
-                image_urls=image_urls
+                image_urls=image_urls,
             )
 
             await self._save_history(
@@ -252,13 +271,10 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
                 thread_id=chat_id,
                 content=response_content,
                 channel=channel,
-                interaction_id=interaction_id
+                interaction_id=interaction_id,
             )
 
-            await self._save_tokens(
-                interaction_id=interaction_id,
-                thread_id=chat_id
-            )
+            await self._save_tokens(interaction_id=interaction_id, thread_id=chat_id)
 
             # 🎯 PHASE 4.4.3: TTS REMOVAL - Voice decisions moved to LangGraph agent
             # TTS processing now handled by LangGraph voice tools, not execution layer
@@ -267,44 +283,45 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
             response_payload = {
                 "chat_id": chat_id,
                 "response": response_content,
-                "channel": channel
+                "channel": channel,
             }
-            
+
             # Note: audio_url now comes from LangGraph voice tools if agent decides to use TTS
 
             await redis_cli.publish(self.response_channel, json.dumps(response_payload))
-            self.logger.debug(f"Published to {self.response_channel} response: {json.dumps(response_payload)}")
+            self.logger.debug(
+                f"Published to {self.response_channel} response: {json.dumps(response_payload)}"
+            )
 
             await self.update_last_active_time()
 
         except json.JSONDecodeError as e:
-            self.logger.error(f"JSONDecodeError processing PubSub message: {e}. Data: {data_str}", exc_info=True)
+            self.logger.error(
+                f"JSONDecodeError processing PubSub message: {e}. Data: {data_str}", exc_info=True
+            )
         except Exception as e:
             self.logger.error(f"Error processing PubSub message: {e}", exc_info=True)
             # Optionally, publish an error response
-            if 'payload' in locals() and 'chat_id' in payload and 'interaction_id' in payload:
+            if "payload" in locals() and "chat_id" in payload and "interaction_id" in payload:
                 error_channel = f"agent_responses:{payload['chat_id']}"
                 error_data = {
-                    "chat_id": payload['chat_id'],
+                    "chat_id": payload["chat_id"],
                     "agent_id": self._component_id,
-                    "interaction_id": payload['interaction_id'],
+                    "interaction_id": payload["interaction_id"],
                     "error": str(e),
-                    "timestamp": datetime.now(timezone.utc).isoformat()
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
 
                 try:
                     # Changed from rpush to publish
-                    await redis_cli.publish(error_channel, json.dumps(error_data).encode('utf-8'))
+                    await redis_cli.publish(error_channel, json.dumps(error_data).encode("utf-8"))
                     self.logger.info(f"Published error notification to {error_channel}")
                 except Exception as pub_err:
-                    self.logger.error(f"Failed to publish error notification: {pub_err}", exc_info=True)
+                    self.logger.error(
+                        f"Failed to publish error notification: {pub_err}", exc_info=True
+                    )
 
-
-    async def _save_tokens(
-            self,
-            interaction_id: str,
-            thread_id: str
-            ) -> None:
+    async def _save_tokens(self, interaction_id: str, thread_id: str) -> None:
         """
         Сохраняет данные об использовании токенов в Redis для дальнейшей обработки.
         Отправляет данные в очередь Redis для обработки `TokenUsageWorker`.
@@ -314,24 +331,33 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         except RuntimeError as e:
             self.logger.error(f"Redis client not available for handling pubsub message: {e}")
             return
-        
+
         # Получение финального состояния графа ---
         final_state: Optional[Dict[str, Any]] = None
         try:
             graph_state = self.agent_app.get_state(self.config)
             if graph_state:
                 final_state = graph_state.values
-                self.logger.debug(f"Retrieved final graph state snapshot for InteractionID {interaction_id}")
+                self.logger.debug(
+                    f"Retrieved final graph state snapshot for InteractionID {interaction_id}"
+                )
             else:
-                self.logger.warning(f"self.agent_app.get_state(config) returned None for InteractionID {interaction_id}")
+                self.logger.warning(
+                    f"self.agent_app.get_state(config) returned None for InteractionID {interaction_id}"
+                )
         except Exception as e_get_state:
-            self.logger.error(f"Error calling self.agent_app.get_state(config) for InteractionID {interaction_id}: {e_get_state}", exc_info=True)
+            self.logger.error(
+                f"Error calling self.agent_app.get_state(config) for InteractionID {interaction_id}: {e_get_state}",
+                exc_info=True,
+            )
 
         # Используем final_state ---
         if final_state and "token_usage_events" in final_state:
             token_events: List[TokenUsageData] = final_state["token_usage_events"]
             if token_events:
-                self.logger.info(f"Found {len(token_events)} token usage events for InteractionID: {interaction_id}.")
+                self.logger.info(
+                    f"Found {len(token_events)} token usage events for InteractionID: {interaction_id}."
+                )
                 for token_data in token_events:
                     try:
                         token_payload = {
@@ -343,56 +369,69 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
                             "prompt_tokens": token_data.prompt_tokens,
                             "completion_tokens": token_data.completion_tokens,
                             "total_tokens": token_data.total_tokens,
-                            "timestamp": token_data.timestamp
+                            "timestamp": token_data.timestamp,
                         }
-                        await redis_cli.lpush(settings.REDIS_TOKEN_USAGE_QUEUE_NAME, json.dumps(token_payload))
-                        self.logger.debug(f"Queued token usage data to '{settings.REDIS_TOKEN_USAGE_QUEUE_NAME}': {token_payload}")
+                        await redis_cli.lpush(
+                            settings.REDIS_TOKEN_USAGE_QUEUE_NAME, json.dumps(token_payload)
+                        )
+                        self.logger.debug(
+                            f"Queued token usage data to '{settings.REDIS_TOKEN_USAGE_QUEUE_NAME}': {token_payload}"
+                        )
                     except redis_exceptions.RedisError as e:
-                        self.logger.error(f"Failed to queue token usage data for InteractionID {interaction_id}: {e}")
+                        self.logger.error(
+                            f"Failed to queue token usage data for InteractionID {interaction_id}: {e}"
+                        )
                     except Exception as e_gen:
-                        self.logger.error(f"Unexpected error queuing token usage data for InteractionID {interaction_id}: {e_gen}", exc_info=True)
+                        self.logger.error(
+                            f"Unexpected error queuing token usage data for InteractionID {interaction_id}: {e_gen}",
+                            exc_info=True,
+                        )
             else:
-                self.logger.info(f"No token usage events recorded in retrieved final state for InteractionID: {interaction_id}.")
+                self.logger.info(
+                    f"No token usage events recorded in retrieved final state for InteractionID: {interaction_id}."
+                )
         else:
-            self.logger.warning(f"Could not retrieve token_usage_events from final graph state for InteractionID: {interaction_id}. State: {final_state is not None}")
-
+            self.logger.warning(
+                f"Could not retrieve token_usage_events from final graph state for InteractionID: {interaction_id}. State: {final_state is not None}"
+            )
 
     async def _invoke_agent(
-            self,
-            history_db: List[BaseMessage],
-            user_input: str,
-            user_data: Dict[str, Any],
-            thread_id: str,
-            channel: Optional[str] = None,
-            interaction_id: Optional[str] = None,
-            image_urls: Optional[List[str]] = None
-            ) -> Tuple[str, Optional[BaseMessage]]:
+        self,
+        history_db: List[BaseMessage],
+        user_input: str,
+        user_data: Dict[str, Any],
+        thread_id: str,
+        channel: Optional[str] = None,
+        interaction_id: Optional[str] = None,
+        image_urls: Optional[List[str]] = None,
+    ) -> Tuple[str, Optional[BaseMessage]]:
         """
         Вызывает агента LangGraph для обработки пользовательского ввода и возвращает ответ.
-        
+
         Если присутствуют изображения, добавляет информацию об этом в пользовательское сообщение,
         чтобы LLM агент знал о необходимости их анализа.
         """
-        
+
         # Modify user input if images are present to inform the LLM
         enhanced_user_input = user_input
         message_content = user_input
-        
+
         if image_urls:
             image_count = len(image_urls)
-            self.logger.info(f"Enhanced user input with image information: {image_count} images attached")
-            
+            self.logger.info(
+                f"Enhanced user input with image information: {image_count} images attached"
+            )
+
             # Check IMAGE_VISION_MODE to determine how to handle images
             if settings.IMAGE_VISION_MODE == "url":
                 # URL mode: Create multimodal message with image URLs for direct Vision API
-                self.logger.info(f"Using URL mode - creating multimodal message with {image_count} images")
+                self.logger.info(
+                    f"Using URL mode - creating multimodal message with {image_count} images"
+                )
                 # Create multimodal content with images for direct Vision API
                 content_parts = [{"type": "text", "text": user_input}]
                 for url in image_urls:
-                    content_parts.append({
-                        "type": "image_url",
-                        "image_url": {"url": url}
-                    })
+                    content_parts.append({"type": "image_url", "image_url": {"url": url}})
                 message_content = content_parts
                 enhanced_user_input = user_input  # Keep original text for graph input
             else:
@@ -405,12 +444,14 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
                 else:
                     # If no text, create a specific request for image analysis
                     enhanced_user_input = f"Пожалуйста, проанализируй {image_count} изображение(я), которые я прикрепил. Используй функцию analyze_images для их анализа."
-                
+
                 # Use text instructions only
                 message_content = enhanced_user_input
-            
-            self.logger.info(f"Image processing mode: {settings.IMAGE_VISION_MODE}. Message type: {'multimodal' if isinstance(message_content, list) else 'text'}")
-        
+
+            self.logger.info(
+                f"Image processing mode: {settings.IMAGE_VISION_MODE}. Message type: {'multimodal' if isinstance(message_content, list) else 'text'}"
+            )
+
         graph_input = {
             "messages": history_db + [HumanMessage(content=message_content)],
             "user_data": user_data,
@@ -424,9 +465,13 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
             "token_usage_events": [],
             # Конфигурация извлекается напрямую из agent_config
         }
-        self.config = {"configurable": {"thread_id": str(thread_id), "agent_id": self._component_id}}
+        self.config = {
+            "configurable": {"thread_id": str(thread_id), "agent_id": self._component_id}
+        }
 
-        self.logger.info(f"Invoking graph for thread_id: {thread_id} (Initial history messages: {len(history_db)})")
+        self.logger.info(
+            f"Invoking graph for thread_id: {thread_id} (Initial history messages: {len(history_db)})"
+        )
         response_content = "No response generated."
         final_message = None
 
@@ -448,19 +493,22 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
 
         return response_content, final_message
 
-
-    async def _get_history(
-            self,
-            thread_id: str
-            ) -> List[BaseMessage]:
+    async def _get_history(self, thread_id: str) -> List[BaseMessage]:
         """
         Получает историю сообщений из БД для указанного thread_id.
         Возвращает список сообщений в формате LangChain BaseMessage.
         Если история не найдена, возвращает пустой список.
         """
-        can_load = db_get_recent_chat_history is not None and self.db_session_factory is not None and ChatMessageDB is not None and SenderType is not None
+        can_load = (
+            db_get_recent_chat_history is not None
+            and self.db_session_factory is not None
+            and ChatMessageDB is not None
+            and SenderType is not None
+        )
         if not can_load:
-            self.logger.warning("Database history loading is disabled (CRUD, DB session factory, ChatMessageDB, or SenderType not available).")
+            self.logger.warning(
+                "Database history loading is disabled (CRUD, DB session factory, ChatMessageDB, or SenderType not available)."
+            )
 
         try:
             redis_cli = await self.redis_client
@@ -474,61 +522,79 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         history_limit = model_config["context_memory_depth"]
 
         if not enable_memory:
-            self.logger.info(f"Context memory is disabled by agent config. History will not be loaded with depth.")
+            self.logger.info(
+                f"Context memory is disabled by agent config. History will not be loaded with depth."
+            )
         else:
-            self.logger.info(f"Using history limit: {history_limit} (enabled: {enable_memory}, configured depth: {history_limit})")
+            self.logger.info(
+                f"Using history limit: {history_limit} (enabled: {enable_memory}, configured depth: {history_limit})"
+            )
             loaded_msgs: List[BaseMessage] = []
             if can_load and history_limit > 0:
                 try:
                     is_loaded = await redis_cli.sismember(self.loaded_threads_key, thread_id)
                     if not is_loaded:
-                        self.logger.info(f"Thread '{thread_id}' not found in cache '{self.loaded_threads_key}'. Loading history from DB with depth {history_limit}.")
+                        self.logger.info(
+                            f"Thread '{thread_id}' not found in cache '{self.loaded_threads_key}'. Loading history from DB with depth {history_limit}."
+                        )
                         async with self.db_session_factory() as session:
                             history_from_db = await db_get_recent_chat_history(
                                 db=session,
                                 agent_id=self._component_id,
                                 thread_id=thread_id,
-                                limit=history_limit
+                                limit=history_limit,
                             )
                             loaded_msgs = convert_db_to_langchain(history_from_db, self.logger)
 
-                        self.logger.info(f"Loaded {len(loaded_msgs)} messages from DB for thread '{thread_id}'.")
+                        self.logger.info(
+                            f"Loaded {len(loaded_msgs)} messages from DB for thread '{thread_id}'."
+                        )
 
                         await redis_cli.sadd(self.loaded_threads_key, thread_id)
-                        self.logger.info(f"Added thread '{thread_id}' to cache '{self.loaded_threads_key}'.")
+                        self.logger.info(
+                            f"Added thread '{thread_id}' to cache '{self.loaded_threads_key}'."
+                        )
                         return loaded_msgs
                     else:
-                        self.logger.info(f"Thread '{thread_id}' found in cache '{self.loaded_threads_key}'. Skipping DB load.")
+                        self.logger.info(
+                            f"Thread '{thread_id}' found in cache '{self.loaded_threads_key}'. Skipping DB load."
+                        )
                         return []
 
                 except redis_exceptions as redis_err:
-                    self.logger.error(f"Redis error checking/adding thread cache for '{thread_id}': {redis_err}. Proceeding without history.")
+                    self.logger.error(
+                        f"Redis error checking/adding thread cache for '{thread_id}': {redis_err}. Proceeding without history."
+                    )
                     return []
                 except Exception as db_err:
-                    self.logger.error(f"Database error loading history for thread '{thread_id}': {db_err}. Proceeding without history.", exc_info=True)
+                    self.logger.error(
+                        f"Database error loading history for thread '{thread_id}': {db_err}. Proceeding without history.",
+                        exc_info=True,
+                    )
                     return []
             else:
                 if not await redis_cli.sismember(self.loaded_threads_key, thread_id):
-                    self.logger.warning(f"Cannot load history for thread '{thread_id}' because DB/CRUD/Models are unavailable (but memory was enabled).")
+                    self.logger.warning(
+                        f"Cannot load history for thread '{thread_id}' because DB/CRUD/Models are unavailable (but memory was enabled)."
+                    )
                     await redis_cli.sadd(self.loaded_threads_key, thread_id)
                     return []
 
-
     async def _save_history(
-            self,
-            sender_type: str,
-            thread_id: str,
-            content: str,
-            channel: Optional[str],
-            interaction_id: str
-            ) -> None:
+        self,
+        sender_type: str,
+        thread_id: str,
+        content: str,
+        channel: Optional[str],
+        interaction_id: str,
+    ) -> None:
 
         try:
             redis_cli = await self.redis_client
         except RuntimeError as e:
             self.logger.error(f"Redis client not available for handling pubsub message: {e}")
             return
-        
+
         message_data = {
             "agent_id": self._component_id,
             "thread_id": thread_id,
@@ -536,20 +602,27 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
             "content": content,
             "channel": channel,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "interaction_id": interaction_id
+            "interaction_id": interaction_id,
         }
         try:
             await redis_cli.lpush(settings.REDIS_HISTORY_QUEUE_NAME, json.dumps(message_data))
-            self.logger.info(f"Queued {sender_type} message for history (Thread: {thread_id}, InteractionID: {interaction_id})")
+            self.logger.info(
+                f"Queued {sender_type} message for history (Thread: {thread_id}, InteractionID: {interaction_id})"
+            )
         except redis_exceptions.RedisError as e:
-            self.logger.error(f"Failed to queue message for history (Thread: {thread_id}): {e}", exc_info=True)
+            self.logger.error(
+                f"Failed to queue message for history (Thread: {thread_id}): {e}", exc_info=True
+            )
         except Exception as e:
-            self.logger.error(f"Unexpected error queuing message for history (Thread: {thread_id}): {e}", exc_info=True)
+            self.logger.error(
+                f"Unexpected error queuing message for history (Thread: {thread_id}): {e}",
+                exc_info=True,
+            )
 
     async def _setup_voice_orchestrator(self) -> None:
         """
         🎯 PHASE 4.4.3: ARCHITECTURAL FIX - Voice orchestrator for LangGraph tools only
-        
+
         Sets up voice_v2 orchestrator as pure execution resource for LangGraph voice tools.
         NO DECISION MAKING - only provides voice processing infrastructure.
         Voice decisions are now handled by LangGraph agent, not execution layer.
@@ -557,48 +630,55 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         try:
             # 🎯 PHASE 4.4.3: NO DECISION MAKING - Remove voice settings checks
             # Voice orchestrator is infrastructure only, decisions made by LangGraph
-            
+
             # Import voice_v2 dependencies
-            from app.services.voice_v2.providers.enhanced_factory import EnhancedVoiceProviderFactory
             from app.services.voice_v2.infrastructure.cache import VoiceCache
             from app.services.voice_v2.infrastructure.minio_manager import MinioFileManager
-            
+            from app.services.voice_v2.providers.enhanced_factory import \
+                EnhancedVoiceProviderFactory
+
             # Create Enhanced Factory for dynamic provider creation
             enhanced_factory = EnhancedVoiceProviderFactory()
-            
+
             # Create cache manager (Redis-based) - no initialize() method needed
             cache_manager = VoiceCache()
-            
+
             # Create file manager (MinIO-based) with configuration
             try:
                 file_manager = MinioFileManager(
-                    endpoint=getattr(settings, 'MINIO_ENDPOINT', 'localhost:9000'),
-                    access_key=getattr(settings, 'MINIO_ACCESS_KEY', 'minioadmin'),
-                    secret_key=getattr(settings, 'MINIO_SECRET_KEY', 'minioadmin'),
-                    bucket_name='voice-files',
-                    secure=getattr(settings, 'MINIO_SECURE', False)
+                    endpoint=getattr(settings, "MINIO_ENDPOINT", "localhost:9000"),
+                    access_key=getattr(settings, "MINIO_ACCESS_KEY", "minioadmin"),
+                    secret_key=getattr(settings, "MINIO_SECRET_KEY", "minioadmin"),
+                    bucket_name="voice-files",
+                    secure=getattr(settings, "MINIO_SECURE", False),
                 )
                 await file_manager.initialize()
             except Exception as file_error:
-                self.logger.warning(f"MinIO file manager initialization failed: {file_error}, using None")
+                self.logger.warning(
+                    f"MinIO file manager initialization failed: {file_error}, using None"
+                )
                 file_manager = None
-            
+
             # Create voice_v2 orchestrator with Enhanced Factory
             self.voice_orchestrator = VoiceServiceOrchestrator(
                 enhanced_factory=enhanced_factory,
                 cache_manager=cache_manager,
-                file_manager=file_manager
+                file_manager=file_manager,
             )
-            
+
             await self.voice_orchestrator.initialize()
-            
+
             # 🎯 PHASE 4.4.3: MINIMAL SETUP - No agent-specific initialization
             # Voice services will be initialized by LangGraph voice tools when needed
-            
-            self.logger.info(f"Voice orchestrator infrastructure initialized for LangGraph voice tools")
-                
+
+            self.logger.info(
+                f"Voice orchestrator infrastructure initialized for LangGraph voice tools"
+            )
+
         except Exception as e:
-            self.logger.error(f"Error setting up voice orchestrator infrastructure: {e}", exc_info=True)
+            self.logger.error(
+                f"Error setting up voice orchestrator infrastructure: {e}", exc_info=True
+            )
             self.voice_orchestrator = None
 
     async def cleanup(self) -> None:
@@ -608,33 +688,39 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         закрытия RedisClientManager и обновления статуса.
         """
         self.logger.info(f"AgentRunner cleanup started.")
-        
+
         try:
             # Cleanup voice orchestrator
             if self.voice_orchestrator:
                 await self.voice_orchestrator.cleanup()
                 self.voice_orchestrator = None
-                
+
             redis_cli = await self.redis_client
             try:
                 deleted_count = await redis_cli.delete(self.loaded_threads_key)
-                self.logger.info(f"Cleared loaded threads cache '{self.loaded_threads_key}' (deleted: {deleted_count}) on cleanup.")
+                self.logger.info(
+                    f"Cleared loaded threads cache '{self.loaded_threads_key}' (deleted: {deleted_count}) on cleanup."
+                )
             except redis_exceptions.RedisError as cache_clear_err:
-                self.logger.error(f"Failed to clear loaded threads cache '{self.loaded_threads_key}': {cache_clear_err}")
+                self.logger.error(
+                    f"Failed to clear loaded threads cache '{self.loaded_threads_key}': {cache_clear_err}"
+                )
         except RuntimeError as e:
             self.logger.error(f"Redis client not available during cleanup: {e}")
-        
+
         # LangGraph app cleanup (if any specific method exists)
-        if hasattr(self.agent_app, 'cleanup'):
+        if hasattr(self.agent_app, "cleanup"):
             try:
                 self.logger.info(f"Cleaning up LangGraph application.")
                 # Убедимся, что это корутина, если это так
                 if asyncio.iscoroutinefunction(self.agent_app.cleanup):
                     await self.agent_app.cleanup()
                 elif callable(self.agent_app.cleanup):
-                    self.agent_app.cleanup() # Если это обычная функция
+                    self.agent_app.cleanup()  # Если это обычная функция
                 else:
-                    self.logger.warning(f"agent_app.cleanup is not callable or a coroutine function.")
+                    self.logger.warning(
+                        f"agent_app.cleanup is not callable or a coroutine function."
+                    )
             except Exception as e:
                 self.logger.error(f"Error during LangGraph application cleanup: {e}", exc_info=True)
 
@@ -648,19 +734,26 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
 
     async def mark_as_error(self, error_message: str, error_type: str = "UnknownError"):
         """Marks the component's status as 'error'."""
-        self.logger.error(f"Marking component as error. Error Type: {error_type}, Message: {error_message}")
+        self.logger.error(
+            f"Marking component as error. Error Type: {error_type}, Message: {error_message}"
+        )
         # Use inherited StatusUpdater methods directly
-        await self.update_status("error", {"error_message": error_message, "error_type": error_type})
+        await self.update_status(
+            "error", {"error_message": error_message, "error_type": error_type}
+        )
 
     async def _handle_status_update_exception(self, e: Exception, phase: str):
         """Handles exceptions during status updates, logging them and marking the component as error."""
         error_message = f"Failed to update status during {phase}: {e}"
         self.logger.error(error_message, exc_info=True)
         # Use inherited StatusUpdater methods directly
-        await self.update_status("error", {
-            "error_message": f"Internal error: Failed to update status during {phase}.",
-            "error_type": "StatusUpdateError"
-        })
+        await self.update_status(
+            "error",
+            {
+                "error_message": f"Internal error: Failed to update status during {phase}.",
+                "error_type": "StatusUpdateError",
+            },
+        )
 
     async def run_loop(self) -> None:
         """
@@ -674,7 +767,7 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
             return
 
         self.logger.info(f"AgentRunner run_loop starting...")
-        
+
         # Регистрируем _pubsub_listener_loop как основную задачу
         # self._pubsub_channel уже установлен в __init__
         self._register_main_task(self._pubsub_listener_loop(), name="AgentPubSubListener")
@@ -696,22 +789,22 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin): # Added AgentConfigMi
         Загружает конфигурацию и создает приложение LangGraph.
         """
         self.logger.info(f"Setting up AgentRunner...")
-        
+
         # Call parent setup
         await super().setup()
-        
+
         # Load configuration
         if not await self._load_config():
             self.logger.critical(f"Failed to load configuration. AgentRunner cannot start.")
             await self.mark_as_error("Failed to load configuration", "ConfigurationError")
             raise RuntimeError("Configuration loading failed.")
-        
+
         # Setup LangGraph application
         if not await self._setup_app():
-            self.logger.critical(f"Failed to setup LangGraph application. AgentRunner cannot start.")
+            self.logger.critical(
+                f"Failed to setup LangGraph application. AgentRunner cannot start."
+            )
             await self.mark_as_error("Failed to setup LangGraph app", "ConfigurationError")
             raise RuntimeError("LangGraph application setup failed.")
-        
+
         self.logger.debug(f"AgentRunner setup completed successfully.")
-
-

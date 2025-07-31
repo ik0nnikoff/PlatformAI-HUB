@@ -36,18 +36,18 @@ def generate_voice_response(
 ) -> str:
     """
     Генерирует голосовой ответ из текста с настройками голоса.
-    
+
     Args:
         text: Текст для синтеза в голосовое сообщение
         voice_config: Настройки голоса (provider, voice_id, speed, etc.)
         state: Состояние агента (автоматически передается)
-    
+
     Returns:
         JSON строка с результатом синтеза или ошибкой
     """
-    
+
     logger.debug(f"TTS Tool: получен запрос на синтез текста длиной {len(text)} символов")
-    
+
     try:
         # Валидация состояния агента
         state_validation = _validate_agent_state(state)
@@ -56,11 +56,11 @@ def generate_voice_response(
                 state_validation["error"],
                 state_validation["error_code"]
             )
-        
+
         chat_id = state_validation["chat_id"]
         agent_id = state_validation["agent_id"]
         user_data = state_validation["user_data"]
-        
+
         # Валидация текста
         text_validation = _validate_synthesis_text(text)
         if not text_validation["valid"]:
@@ -68,14 +68,14 @@ def generate_voice_response(
                 text_validation["error"],
                 text_validation["error_code"]
             )
-        
+
         # Выполнение синтеза
         synthesis_result = _execute_speech_synthesis(
             text, voice_config, agent_id, chat_id, user_data, state
         )
-        
+
         return synthesis_result
-            
+
     except Exception as e:
         logger.error(f"TTS Tool: критическая ошибка - {e}", exc_info=True)
         return _create_error_response(
@@ -93,19 +93,20 @@ def _validate_agent_state(state: Dict) -> Dict[str, Any]:
             "error": "Отсутствует контекст агента",
             "error_code": "NO_AGENT_STATE"
         }
-    
+
     chat_id = state.get("chat_id")
     user_data = state.get("user_data", {})
     agent_id = user_data.get("agent_id")
-    
+
     if not chat_id or not agent_id:
-        logger.error(f"TTS Tool: недостаточно данных для синтеза - chat_id: {chat_id}, agent_id: {agent_id}")
+        logger.error(
+            f"TTS Tool: недостаточно данных для синтеза - chat_id: {chat_id}, agent_id: {agent_id}")
         return {
             "valid": False,
             "error": "Недостаточно данных для синтеза голоса",
             "error_code": "INSUFFICIENT_DATA"
         }
-    
+
     return {
         "valid": True,
         "chat_id": chat_id,
@@ -123,7 +124,7 @@ def _validate_synthesis_text(text: str) -> Dict[str, Any]:
             "error": "Пустой текст для синтеза",
             "error_code": "EMPTY_TEXT"
         }
-    
+
     if len(text) > 4000:  # Ограничение для TTS
         logger.warning(f"TTS Tool: слишком длинный текст ({len(text)} символов)")
         return {
@@ -131,28 +132,28 @@ def _validate_synthesis_text(text: str) -> Dict[str, Any]:
             "error": f"Текст слишком длинный ({len(text)} символов, максимум 4000)",
             "error_code": "TEXT_TOO_LONG"
         }
-    
+
     return {"valid": True}
 
 
 def _execute_speech_synthesis(
-    text: str, 
-    voice_config: Dict[str, Any], 
-    agent_id: str, 
-    chat_id: str, 
-    user_data: Dict[str, Any], 
+    text: str,
+    voice_config: Dict[str, Any],
+    agent_id: str,
+    chat_id: str,
+    user_data: Dict[str, Any],
     state: Dict
 ) -> str:
     """Выполняет синтез речи через оркестратор."""
     import asyncio
     import json
-    
+
     # Создаем оркестратор
     orchestrator = VoiceServiceOrchestrator()
-    
+
     # Подготавливаем конфигурацию TTS
     tts_config = voice_config or {}
-    
+
     # Добавляем контекстную информацию
     synthesis_context = {
         "agent_id": agent_id,
@@ -160,10 +161,10 @@ def _execute_speech_synthesis(
         "user_id": user_data.get("user_id"),
         "channel": state.get("channel", "unknown")
     }
-    
+
     # Выполняем синтез асинхронно
     logger.debug(f"TTS Tool: начинаем синтез с конфигурацией: {tts_config}")
-    
+
     # Создаем и запускаем корутину
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -177,7 +178,7 @@ def _execute_speech_synthesis(
         )
     finally:
         loop.close()
-    
+
     if result.get("success"):
         logger.info(f"TTS Tool: успешный синтез для агента {agent_id}")
         return json.dumps({
@@ -200,16 +201,16 @@ def _execute_speech_synthesis(
 def _create_error_response(error_msg: str, error_code: str, provider: str = None) -> str:
     """Создает стандартизированный ответ об ошибке."""
     import json
-    
+
     response = {
         "success": False,
         "error": error_msg,
         "error_code": error_code
     }
-    
+
     if provider:
         response["provider_used"] = provider
-    
+
     return json.dumps(response, ensure_ascii=False)
 
 

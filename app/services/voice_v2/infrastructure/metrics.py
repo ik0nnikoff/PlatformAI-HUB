@@ -127,11 +127,11 @@ class VoiceMetricsCollector(MetricsCollector):
         )
 
     async def _record_metric(self,
-                           name: str,
-                           value: float,
-                           metric_type: MetricType,
-                           priority: MetricPriority,
-                           tags: Dict[str, str]) -> None:
+                             name: str,
+                             value: float,
+                             metric_type: MetricType,
+                             priority: MetricPriority,
+                             tags: Dict[str, str]) -> None:
         """Internal method to record metric"""
         if not self._active:
             return
@@ -153,7 +153,7 @@ class VoiceMetricsCollector(MetricsCollector):
     # Voice-specific convenience methods
 
     async def record_stt_duration(self, provider: str, duration_ms: float,
-                                 success: bool = True, **extra_tags) -> None:
+                                  success: bool = True, **extra_tags) -> None:
         """Record STT processing duration"""
         tags = {
             "provider": provider,
@@ -163,7 +163,7 @@ class VoiceMetricsCollector(MetricsCollector):
         await self.record_timer("voice.stt.duration_ms", duration_ms, **tags)
 
     async def record_tts_duration(self, provider: str, duration_ms: float,
-                                 success: bool = True, **extra_tags) -> None:
+                                  success: bool = True, **extra_tags) -> None:
         """Record TTS processing duration"""
         tags = {
             "provider": provider,
@@ -173,7 +173,7 @@ class VoiceMetricsCollector(MetricsCollector):
         await self.record_timer("voice.tts.duration_ms", duration_ms, **tags)
 
     async def record_voice_request(self, request_type: str, success: bool = True,
-                                  **extra_tags) -> None:
+                                   **extra_tags) -> None:
         """Record voice request"""
         tags = {
             "type": request_type,
@@ -203,8 +203,8 @@ class VoiceMetricsCollector(MetricsCollector):
     # Metrics retrieval and summary methods (simplified from original)
 
     async def get_metrics_summary(self,
-                                 agent_id: Optional[str] = None,
-                                 time_window_minutes: int = 60) -> Dict[str, Any]:
+                                  agent_id: Optional[str] = None,
+                                  time_window_minutes: int = 60) -> Dict[str, Any]:
         """Get metrics summary для monitoring"""
         end_time = time.time()
         start_time = end_time - (time_window_minutes * 60)
@@ -293,7 +293,8 @@ class VoiceMetricsCollector(MetricsCollector):
         elif "tts" in metric.name:
             raw_data["tts_durations"].append(metric.value)
 
-    def _calculate_aggregated_summary(self, summary: Dict[str, Any], raw_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _calculate_aggregated_summary(
+            self, summary: Dict[str, Any], raw_data: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate final aggregated values"""
         total_requests = sum(raw_data["request_counts"].values())
         total_success = sum(raw_data["success_counts"].values())
@@ -307,10 +308,12 @@ class VoiceMetricsCollector(MetricsCollector):
 
         # Calculate durations
         if raw_data["stt_durations"]:
-            summary["average_stt_duration"] = sum(raw_data["stt_durations"]) / len(raw_data["stt_durations"])
+            summary["average_stt_duration"] = sum(
+                raw_data["stt_durations"]) / len(raw_data["stt_durations"])
 
         if raw_data["tts_durations"]:
-            summary["average_tts_duration"] = sum(raw_data["tts_durations"]) / len(raw_data["tts_durations"])
+            summary["average_tts_duration"] = sum(
+                raw_data["tts_durations"]) / len(raw_data["tts_durations"])
 
         # Calculate cache hit rate
         if raw_data["cache_total"] > 0:

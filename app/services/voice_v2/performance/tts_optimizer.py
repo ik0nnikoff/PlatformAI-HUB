@@ -23,17 +23,23 @@ from app.services.voice_v2.performance.base_optimizer import (
 from app.services.voice_v2.performance.utils import CacheKeyGenerator
 
 logger = logging.getLogger(__name__)
+
+
 class TTSPerformanceTier(Enum):
     """TTS Performance tier classification"""
     REAL_TIME = "real_time"    # ≤1.5s required (immediate response)
-    INTERACTIVE = "interactive" # ≤3.0s required (conversational)
+    INTERACTIVE = "interactive"  # ≤3.0s required (conversational)
     BATCH = "batch"            # ≤5.0s acceptable (background processing)
+
+
 class TTSOptimizationStrategy(Enum):
     """TTS optimization strategies"""
     LATENCY_FIRST = "latency_first"      # Prioritize speed
     QUALITY_FIRST = "quality_first"      # Prioritize audio quality
     BALANCED = "balanced"                # Balance speed and quality
     STREAMING = "streaming"              # Use streaming for long text
+
+
 @dataclass
 class TTSProviderMetrics:
     """TTS Provider performance metrics tracking"""
@@ -89,6 +95,8 @@ class TTSProviderMetrics:
             speed_score * 0.2 +
             quality_score * 0.1
         )
+
+
 @dataclass
 class TTSCacheMetrics:
     """TTS Cache performance metrics"""
@@ -111,12 +119,14 @@ class TTSCacheMetrics:
         if self.cache_storage_mb == 0:
             return 0.0
         return self.cache_hits / self.cache_storage_mb
+
+
 @dataclass
 class TTSOptimizationConfig(BaseOptimizationConfig):
     """TTS optimization configuration"""
     # TTS-specific parameters (inherit base from BaseOptimizationConfig)
     real_time_latency: float = 1.5        # seconds for real-time
-    target_chars_per_second: float = 50.0 # characters per second
+    target_chars_per_second: float = 50.0  # characters per second
 
     enable_streaming: bool = True
     streaming_threshold_chars: int = 200    # Stream if text > 200 chars
@@ -132,6 +142,8 @@ class TTSOptimizationConfig(BaseOptimizationConfig):
     dynamic_provider_selection: bool = True
     quality_vs_speed_weight: float = 0.6   # 0.0 = pure speed, 1.0 = pure quality
     min_samples_for_optimization: int = 10
+
+
 class TTSPerformanceOptimizer(BasePerformanceOptimizer[TTSProviderMetrics]):
     """
     TTS Performance Optimizer
@@ -152,17 +164,22 @@ class TTSPerformanceOptimizer(BasePerformanceOptimizer[TTSProviderMetrics]):
         super().__init__(config)
 
         # TTS-specific cache
-        self._phrase_cache: Dict[str, Tuple[bytes, datetime, float]] = {}  # text_hash -> (audio, timestamp, quality)
+        # text_hash -> (audio, timestamp, quality)
+        self._phrase_cache: Dict[str, Tuple[bytes, datetime, float]] = {}
         self._cache_access_times: Dict[str, List[datetime]] = {}
 
-        logger.info("TTSPerformanceOptimizer initialized with target latency: %ss", config.target_latency)
+        logger.info(
+            "TTSPerformanceOptimizer initialized with target latency: %ss",
+            config.target_latency)
 
     def _create_provider_metrics(self, provider: ProviderType) -> TTSProviderMetrics:
         """Create TTS-specific provider metrics instance"""
         return TTSProviderMetrics(provider_type=provider)
 
-    def determine_optimization_strategy(self, text: str,
-                                      performance_tier: TTSPerformanceTier) -> TTSOptimizationStrategy:
+    def determine_optimization_strategy(
+            self,
+            text: str,
+            performance_tier: TTSPerformanceTier) -> TTSOptimizationStrategy:
         """
         Determine the best optimization strategy for given text and performance requirements.
         """
@@ -181,7 +198,10 @@ class TTSPerformanceOptimizer(BasePerformanceOptimizer[TTSProviderMetrics]):
         else:
             return TTSOptimizationStrategy.QUALITY_FIRST
 
-    def get_optimized_provider_order(self, strategy: Optional[TTSOptimizationStrategy] = None, **kwargs) -> List[ProviderType]:
+    def get_optimized_provider_order(
+            self,
+            strategy: Optional[TTSOptimizationStrategy] = None,
+            **kwargs) -> List[ProviderType]:
         """Get optimized provider order based on strategy and current metrics."""
         if strategy is None:
             strategy = TTSOptimizationStrategy.BALANCED
@@ -197,17 +217,19 @@ class TTSPerformanceOptimizer(BasePerformanceOptimizer[TTSProviderMetrics]):
         complete_order = self._complete_provider_order(optimized_order)
 
         logger.debug("Optimized TTS provider order for %s: %s",
-                    strategy.value, [p.value for p in complete_order])
+                     strategy.value, [p.value for p in complete_order])
 
         return complete_order
 
     def _sort_providers_by_strategy(self, providers: List[Tuple],
-                                   strategy: TTSOptimizationStrategy) -> List[Tuple]:
+                                    strategy: TTSOptimizationStrategy) -> List[Tuple]:
         """Sort providers based on optimization strategy"""
         if strategy == TTSOptimizationStrategy.LATENCY_FIRST:
             return sorted(providers, key=lambda x: x[1].average_latency)
         elif strategy == TTSOptimizationStrategy.QUALITY_FIRST:
-            return sorted(providers, key=lambda x: (-x[1].average_audio_quality_score, x[1].average_latency))
+            return sorted(providers,
+                          key=lambda x: (-x[1].average_audio_quality_score,
+                                         x[1].average_latency))
         elif strategy == TTSOptimizationStrategy.BALANCED:
             return sorted(providers, key=lambda x: -x[1].performance_score)
         elif strategy == TTSOptimizationStrategy.STREAMING:
@@ -306,8 +328,8 @@ class TTSPerformanceOptimizer(BasePerformanceOptimizer[TTSProviderMetrics]):
         logger.debug("Evicted %.2f MB from TTS cache", freed_space_mb)
 
     async def record_performance(self, provider: ProviderType, latency: float,
-                               success: bool, text: Optional[str] = None,
-                               audio_quality_score: Optional[float] = None, **kwargs) -> None:
+                                 success: bool, text: Optional[str] = None,
+                                 audio_quality_score: Optional[float] = None, **kwargs) -> None:
         """Record TTS performance metrics for provider"""
         metrics = self.provider_metrics.get(provider)
         if not metrics:
@@ -324,7 +346,7 @@ class TTSPerformanceOptimizer(BasePerformanceOptimizer[TTSProviderMetrics]):
         await self._update_performance_history(latency, "tts")
 
     async def _record_successful_performance(self, metrics, latency: float, text_length: int,
-                                           audio_quality_score: Optional[float]) -> None:
+                                             audio_quality_score: Optional[float]) -> None:
         """Record successful TTS performance"""
         metrics.successful_requests += 1
         metrics.consecutive_failures = 0

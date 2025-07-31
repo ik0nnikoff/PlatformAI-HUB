@@ -120,7 +120,7 @@ class BasePerformanceOptimizer(Generic[T], ABC):
         self._last_optimization = datetime.now()
 
         logger.info("BasePerformanceOptimizer initialized with target latency: %ss",
-                   config.target_latency)
+                    config.target_latency)
 
     async def initialize_connection_pools(self, providers: List[ProviderType]) -> None:
         """
@@ -207,7 +207,7 @@ class BasePerformanceOptimizer(Generic[T], ABC):
         viable_providers = []
         for provider, metrics in self.provider_metrics.items():
             if (metrics.total_requests >= self.config.min_samples_for_ordering and
-                metrics.is_healthy):
+                    metrics.is_healthy):
                 viable_providers.append((provider, metrics))
         return viable_providers
 
@@ -267,8 +267,8 @@ class BasePerformanceOptimizer(Generic[T], ABC):
             for provider, metrics in self.provider_metrics.items():
                 if not metrics.is_healthy:
                     logger.warning("Provider %s unhealthy: success_rate=%s%%, avg_latency=%ss",
-                                 provider.value, f"{metrics.success_rate:.1f}",
-                                 f"{metrics.average_latency:.2f}")
+                                   provider.value, f"{metrics.success_rate:.1f}",
+                                   f"{metrics.average_latency:.2f}")
                     needs_optimization = True
 
             if needs_optimization:
@@ -293,7 +293,7 @@ class BasePerformanceOptimizer(Generic[T], ABC):
 
     @abstractmethod
     async def record_performance(self, provider: ProviderType, latency: float,
-                               success: bool, **kwargs) -> None:
+                                 success: bool, **kwargs) -> None:
         """Record performance metrics for provider"""
 
     @abstractmethod

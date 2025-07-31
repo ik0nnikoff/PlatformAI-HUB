@@ -26,7 +26,10 @@ class BaselineEngine:
         self.baselines: List[PerformanceBaseline] = []
         logger.info("BaselineEngine initialized")
 
-    def establish_baseline(self, test_metrics: EndToEndMetrics, test_conditions: Dict[str, Any]) -> PerformanceBaseline:
+    def establish_baseline(self,
+                           test_metrics: EndToEndMetrics,
+                           test_conditions: Dict[str,
+                                                 Any]) -> PerformanceBaseline:
         """
         Establish performance baseline from test metrics.
 
@@ -53,7 +56,8 @@ class BaselineEngine:
         # Store baseline
         self.baselines.append(baseline)
 
-        logger.info("Baseline established: %s (confidence: %.2f)", baseline.baseline_id, baseline.confidence_score)
+        logger.info("Baseline established: %s (confidence: %.2f)",
+                    baseline.baseline_id, baseline.confidence_score)
 
         return baseline
 
@@ -130,7 +134,8 @@ class BaselineEngine:
 
         raise ValueError(f"Baseline not found: {baseline_id}")
 
-    def compare_to_baseline(self, current_metrics: EndToEndMetrics, baseline_id: str = None) -> Dict[str, Any]:
+    def compare_to_baseline(self, current_metrics: EndToEndMetrics,
+                            baseline_id: str = None) -> Dict[str, Any]:
         """Compare current metrics to baseline"""
         if baseline_id:
             baseline = self.get_baseline_by_id(baseline_id)

@@ -75,7 +75,10 @@ class YandexAudioProcessor:
             )
 
             converted_data = wav_io.getvalue()
-            logger.debug("Converted OGG to WAV: %s -> %s bytes", len(audio_data), len(converted_data))
+            logger.debug(
+                "Converted OGG to WAV: %s -> %s bytes",
+                len(audio_data),
+                len(converted_data))
 
             return converted_data, "wav"
 
@@ -104,7 +107,10 @@ class YandexAudioProcessor:
             )
 
             converted_data = opus_io.getvalue()
-            logger.debug("Converted MP3 to OPUS: %s -> %s bytes", len(audio_data), len(converted_data))
+            logger.debug(
+                "Converted MP3 to OPUS: %s -> %s bytes",
+                len(audio_data),
+                len(converted_data))
 
             return converted_data, "opus"
 
@@ -139,7 +145,11 @@ class YandexAudioProcessor:
             )
 
             converted_data = wav_io.getvalue()
-            logger.debug("Converted %s to WAV: %s -> %s bytes", audio_format, len(audio_data), len(converted_data))
+            logger.debug(
+                "Converted %s to WAV: %s -> %s bytes",
+                audio_format,
+                len(audio_data),
+                len(converted_data))
 
             return converted_data, "wav"
 

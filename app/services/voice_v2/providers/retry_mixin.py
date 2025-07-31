@@ -111,7 +111,12 @@ def provider_operation(operation_name: str):
                 logger.debug("%s successful for %s", operation_name, provider_name)
                 return result
             except Exception as e:
-                logger.error("%s failed for %s: %s", operation_name, provider_name, e, exc_info=True)
+                logger.error(
+                    "%s failed for %s: %s",
+                    operation_name,
+                    provider_name,
+                    e,
+                    exc_info=True)
                 raise
         return wrapper
     return decorator

@@ -178,7 +178,9 @@ class YandexTTSProvider(BaseTTSProvider):
             await self._health_check()
 
             self._is_initialized = True
-            logger.info("Yandex TTS Provider initialized successfully with voice: %s", self._voice_name)
+            logger.info(
+                "Yandex TTS Provider initialized successfully with voice: %s",
+                self._voice_name)
 
         except Exception as e:
             logger.error("Failed to initialize Yandex TTS Provider: %s", e, exc_info=True)
@@ -293,7 +295,8 @@ class YandexTTSProvider(BaseTTSProvider):
             synthesis_params=synthesis_params  # Pass as named parameter
         )
 
-    async def _execute_yandex_synthesis(self, session, synthesis_params: Dict[str, Any], **kwargs) -> bytes:
+    async def _execute_yandex_synthesis(
+            self, session, synthesis_params: Dict[str, Any], **kwargs) -> bytes:
         """
         Direct Yandex API call - used by ConnectionManager
 
@@ -444,13 +447,20 @@ class YandexTTSProvider(BaseTTSProvider):
                 last_exception = e
                 if attempt < self.MAX_RETRIES - 1:
                     delay = self.RETRY_DELAYS[attempt]
-                    logger.warning("Unexpected error, retrying in %ss (attempt %s): %s", delay, attempt + 1, e)
+                    logger.warning(
+                        "Unexpected error, retrying in %ss (attempt %s): %s",
+                        delay,
+                        attempt + 1,
+                        e)
                     await asyncio.sleep(delay)
                     continue
                 break
 
         # If we get here, all retries failed
-        raise AudioProcessingError(f"TTS synthesis failed after {self.MAX_RETRIES} attempts: {str(last_exception)}")
+        raise AudioProcessingError(
+            f"TTS synthesis failed after {
+                self.MAX_RETRIES} attempts: {
+                str(last_exception)}")
 
     async def _upload_audio_to_storage(
         self,

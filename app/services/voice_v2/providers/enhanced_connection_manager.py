@@ -499,7 +499,11 @@ class EnhancedConnectionManager(IConnectionManager):
                 provider_name, circuit_breaker.failure_count
             )
 
-    def _raise_final_error(self, provider_name: str, config: ConnectionConfig, last_exception: Exception):
+    def _raise_final_error(
+            self,
+            provider_name: str,
+            config: ConnectionConfig,
+            last_exception: Exception):
         """Raise final error after all retries failed"""
         error_msg = f"All {config.max_retries + 1} attempts failed for provider {provider_name}"
         if last_exception:

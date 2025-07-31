@@ -294,7 +294,10 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
     def register_provider(self, provider_info: ProviderInfo) -> None:
         """Register new provider in registry"""
         self._providers_registry[provider_info.name] = provider_info
-        logger.info("Registered provider '%s' (%s)", provider_info.name, provider_info.category.value)
+        logger.info(
+            "Registered provider '%s' (%s)",
+            provider_info.name,
+            provider_info.category.value)
 
     def get_available_providers(
         self,
@@ -319,7 +322,9 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
         """Get provider metadata"""
         return self._providers_registry.get(provider_name)
 
-    async def health_check(self, provider_name: Optional[str] = None) -> Dict[str, ProviderHealthInfo]:
+    async def health_check(self,
+                           provider_name: Optional[str] = None) -> Dict[str,
+                                                                        ProviderHealthInfo]:
         """Perform health check on providers"""
         providers_to_check = self._get_providers_to_check(provider_name)
         health_results = {}
@@ -367,7 +372,8 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
         last_check = self._last_health_check.get(name)
         return last_check and datetime.utcnow() - last_check < self._health_check_interval
 
-    async def _get_or_create_provider_for_health_check(self, name: str, provider_info: ProviderInfo):
+    async def _get_or_create_provider_for_health_check(
+            self, name: str, provider_info: ProviderInfo):
         """Get existing or create new provider instance for health check"""
         if name in self._provider_instances:
             return self._provider_instances[name]
@@ -570,7 +576,7 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
             return settings.OPENAI_API_KEY is not None
         elif provider_type == "google":
             return (settings.GOOGLE_APPLICATION_CREDENTIALS is not None and
-                   settings.GOOGLE_CLOUD_PROJECT_ID is not None)
+                    settings.GOOGLE_CLOUD_PROJECT_ID is not None)
         elif provider_type == "yandex":
             return settings.YANDEX_API_KEY is not None
         else:

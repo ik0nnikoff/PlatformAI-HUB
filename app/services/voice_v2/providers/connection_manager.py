@@ -40,22 +40,18 @@ class IConnectionManager(ABC):
     @abstractmethod
     async def get_session(self, provider_name: str) -> ClientSession:
         """Get HTTP session for provider"""
-        pass
 
     @abstractmethod
     async def release_session(self, provider_name: str, session: ClientSession) -> None:
         """Release HTTP session"""
-        pass
 
     @abstractmethod
     async def health_check_connections(self) -> Dict[str, bool]:
         """Check health of all connections"""
-        pass
 
     @abstractmethod
     async def cleanup(self) -> None:
         """Cleanup all connections"""
-        pass
 
 
 class ConnectionPool:
@@ -154,7 +150,8 @@ class ConnectionPool:
         self._last_used = datetime.utcnow()
         self._request_count += 1
 
-        logger.debug("Session retrieved for %s (requests: %s)", self.provider_name, self._request_count)
+        logger.debug("Session retrieved for %s (requests: %s)",
+                     self.provider_name, self._request_count)
         return self._session
 
     async def health_check(self) -> bool:
@@ -205,7 +202,7 @@ class ConnectionPool:
                 await self._session.close()
             if self._connector:
                 await self._connector.close()
-        except:
+        except BaseException:
             pass  # Ignore errors during partial cleanup
         finally:
             self._session = None

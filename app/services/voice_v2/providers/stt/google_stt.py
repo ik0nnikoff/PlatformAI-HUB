@@ -98,7 +98,10 @@ class GoogleSTTProvider(BaseSTTProvider):
         self._client: Optional[speech.SpeechClient] = None
         self._credentials: Optional[service_account.Credentials] = None
 
-        logger.debug("GoogleSTTProvider initialized: model=%s, lang=%s", self._model, self._language_code)
+        logger.debug(
+            "GoogleSTTProvider initialized: model=%s, lang=%s",
+            self._model,
+            self._language_code)
 
     def get_required_config_fields(self) -> List[str]:
         """
@@ -259,16 +262,20 @@ class GoogleSTTProvider(BaseSTTProvider):
             if self._credentials_json:
                 # From JSON string
                 creds_dict = json.loads(self._credentials_json)
-                self._credentials = service_account.Credentials.from_service_account_info(creds_dict)
+                self._credentials = service_account.Credentials.from_service_account_info(
+                    creds_dict)
                 logger.debug("Loaded credentials from JSON")
 
             elif self._credentials_path:
                 # From file path
                 creds_file = Path(self._credentials_path)
                 if not creds_file.exists():
-                    raise VoiceConfigurationError(f"Credentials file not found: {self._credentials_path}")
+                    raise VoiceConfigurationError(
+                        f"Credentials file not found: {
+                            self._credentials_path}")
 
-                self._credentials = service_account.Credentials.from_service_account_file(str(creds_file))
+                self._credentials = service_account.Credentials.from_service_account_file(
+                    str(creds_file))
                 # Avoid logging any file information to prevent potential credential exposure
                 logger.debug("Loaded credentials from service account file")
 
@@ -360,11 +367,12 @@ class GoogleSTTProvider(BaseSTTProvider):
             encoding=encoding,
             language_code=request.language if request.language != "auto" else self._language_code,
             model=self._model,
-            use_enhanced=self._use_enhanced and request.quality in [STTQuality.HIGH, STTQuality.PREMIUM],
+            use_enhanced=self._use_enhanced and request.quality in [
+                STTQuality.HIGH,
+                STTQuality.PREMIUM],
             enable_word_time_offsets=True,
             enable_automatic_punctuation=True,
-            max_alternatives=1
-        )
+            max_alternatives=1)
 
     async def _transcribe_with_retry(
         self,
@@ -424,7 +432,12 @@ class GoogleSTTProvider(BaseSTTProvider):
             return False
 
         error_type = type(error).__name__
-        logger.warning("Google STT %s (attempt %s)", error_type.lower().replace('_', ' '), attempt + 1)
+        logger.warning(
+            "Google STT %s (attempt %s)",
+            error_type.lower().replace(
+                '_',
+                ' '),
+            attempt + 1)
         return True
 
     def _create_timeout_error(self, error: Exception, attempt: int) -> VoiceServiceTimeout:
@@ -489,6 +502,5 @@ class GoogleSTTProvider(BaseSTTProvider):
                 "provider": "google",
                 "model": self._model,
                 "enhanced": self._use_enhanced,
-                "alternatives_count": len(best_result.alternatives)
-            }
-        )
+                "alternatives_count": len(
+                    best_result.alternatives)})

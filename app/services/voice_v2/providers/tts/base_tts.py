@@ -130,7 +130,8 @@ class BaseTTSProvider(ABC, RetryMixin):
             if result.text_length is None:
                 result.text_length = len(request.text)
 
-            logger.debug("TTS synthesis completed: %s chars, %.2fs", result.text_length, result.processing_time)
+            logger.debug("TTS synthesis completed: %s chars, %.2fs",
+                         result.text_length, result.processing_time)
             return result
 
         except Exception as e:

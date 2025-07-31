@@ -41,7 +41,7 @@ class ValidationEngine:
         self.decision_optimizer: Optional[VoiceDecisionOptimizer] = None
 
     def configure_components(self, integration_monitor, stt_optimizer,
-                           tts_optimizer, decision_optimizer):
+                             tts_optimizer, decision_optimizer):
         """Configure performance components"""
         self.integration_monitor = integration_monitor
         self.stt_optimizer = stt_optimizer
@@ -280,7 +280,7 @@ class ValidationEngine:
         if test_case.category == "component_health":
             return self._evaluate_health_test(test_case)
         if ("Success Rate" in test_case.name and
-            test_case.category in ["stt_performance", "tts_performance"]):
+                test_case.category in ["stt_performance", "tts_performance"]):
             return self._evaluate_success_rate_test(test_case)
         return self._evaluate_performance_test(test_case)
 

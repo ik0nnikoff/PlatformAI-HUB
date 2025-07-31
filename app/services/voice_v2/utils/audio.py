@@ -291,7 +291,7 @@ class AudioProcessor:
                 size_bytes=size_bytes,
                 is_valid=False,
                 error_message=(
-                    f"Файл слишком большой: {size_bytes / (1024*1024):.1f}MB > {max_size}MB"
+                    f"Файл слишком большой: {size_bytes / (1024 * 1024):.1f}MB > {max_size}MB"
                 )
             )
 
@@ -346,7 +346,9 @@ class AudioProcessor:
         if duration_seconds > max_duration:
             return f"Аудио слишком длинное: {duration_seconds:.1f}s > {max_duration}s"
         if duration_seconds < AudioLimits.MIN_DURATION_SECONDS:
-            return f"Аудио слишком короткое: {duration_seconds:.1f}s < {AudioLimits.MIN_DURATION_SECONDS}s"
+            return f"Аудио слишком короткое: {
+                duration_seconds:.1f}s < {
+                AudioLimits.MIN_DURATION_SECONDS}s"
 
         return None
 
@@ -391,7 +393,7 @@ class AudioProcessor:
 
             # Если форматы одинаковые и параметры не заданы, возвращаем исходные данные
             if (source_format == target_format and
-                not sample_rate and not channels):
+                    not sample_rate and not channels):
                 return ConversionResult(
                     success=True,
                     audio_data=audio_data,

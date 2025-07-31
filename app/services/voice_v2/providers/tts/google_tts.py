@@ -84,7 +84,10 @@ class GoogleTTSProvider(BaseTTSProvider):
         # Internal state - lazy initialization pattern
         self._client: Optional[texttospeech_v1.TextToSpeechAsyncClient] = None
 
-        logger.debug("GoogleTTSProvider initialized: voice=%s, language=%s", self._voice_name, self._language_code)
+        logger.debug(
+            "GoogleTTSProvider initialized: voice=%s, language=%s",
+            self._voice_name,
+            self._language_code)
 
     async def get_capabilities(self) -> TTSCapabilities:
         """
@@ -314,7 +317,10 @@ class GoogleTTSProvider(BaseTTSProvider):
                 last_exception = e
                 if attempt < self._max_retries:
                     delay = 2 ** attempt  # Exponential backoff
-                    logger.warning("Google Cloud retry error, retrying in %ss (attempt %s)", delay, attempt + 1)
+                    logger.warning(
+                        "Google Cloud retry error, retrying in %ss (attempt %s)",
+                        delay,
+                        attempt + 1)
                     await asyncio.sleep(delay)
                     continue
                 raise AudioProcessingError(f"Google Cloud retry limit exceeded: {e}")
@@ -325,9 +331,13 @@ class GoogleTTSProvider(BaseTTSProvider):
 
             except google_exceptions.GoogleAPICallError as e:
                 last_exception = e
-                if attempt < self._max_retries and e.code in [429, 503]:  # Rate limit or service unavailable
+                if attempt < self._max_retries and e.code in [
+                        429, 503]:  # Rate limit or service unavailable
                     delay = 2 ** attempt
-                    logger.warning("Google Cloud API error, retrying in %ss (attempt %s)", delay, attempt + 1)
+                    logger.warning(
+                        "Google Cloud API error, retrying in %ss (attempt %s)",
+                        delay,
+                        attempt + 1)
                     await asyncio.sleep(delay)
                     continue
                 raise AudioProcessingError(f"Google Cloud API error: {e}")
@@ -336,13 +346,18 @@ class GoogleTTSProvider(BaseTTSProvider):
                 last_exception = e
                 if attempt < self._max_retries:
                     delay = 2 ** attempt
-                    logger.warning("Unexpected error, retrying in %ss (attempt %s)", delay, attempt + 1)
+                    logger.warning(
+                        "Unexpected error, retrying in %ss (attempt %s)",
+                        delay,
+                        attempt + 1)
                     await asyncio.sleep(delay)
                     continue
                 raise AudioProcessingError(f"Google Cloud TTS synthesis failed: {e}")
 
         # Should not reach here, but in case all retries failed
-        raise AudioProcessingError(f"Google Cloud TTS failed after {self._max_retries} retries: {last_exception}")
+        raise AudioProcessingError(
+            f"Google Cloud TTS failed after {
+                self._max_retries} retries: {last_exception}")
 
     async def get_available_voices(self) -> List[Dict[str, Any]]:
         """
@@ -457,7 +472,10 @@ class GoogleTTSProvider(BaseTTSProvider):
 
     def __str__(self) -> str:
         """String representation of the provider."""
-        return f"GoogleTTSProvider(voice={self._voice_name}, language={self._language_code}, enabled={self.enabled})"
+        return f"GoogleTTSProvider(voice={
+            self._voice_name}, language={
+            self._language_code}, enabled={
+            self.enabled})"
 
     def __repr__(self) -> str:
         """Detailed string representation of the provider."""

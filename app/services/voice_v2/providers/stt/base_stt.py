@@ -93,9 +93,12 @@ class BaseSTTProvider(ABC, RetryMixin):
             request.audio_format,
             request.language
         )
-        
+
         if not validation_result.get("valid", False):
-            raise VoiceServiceError(f"Ошибка валидации аудио: {validation_result.get('error', 'Unknown error')}")
+            raise VoiceServiceError(
+                f"Ошибка валидации аудио: {
+                    validation_result.get(
+                        'error', 'Unknown error')}")
 
         try:
             start_time = asyncio.get_event_loop().time()
@@ -116,19 +119,19 @@ class BaseSTTProvider(ABC, RetryMixin):
             raise VoiceServiceError(f"STT error: {e}") from e
 
     def _validate_request(
-        self, 
-        audio_data: bytes, 
-        audio_format: str, 
+        self,
+        audio_data: bytes,
+        audio_format: str,
         language: str
     ) -> Dict[str, Any]:
         """
         Валидирует параметры запроса на транскрипцию.
-        
+
         Args:
             audio_data: Байты аудио данных
             audio_format: Формат аудио файла
             language: Язык для распознавания
-            
+
         Returns:
             Результат валидации с информацией об ошибках
         """
@@ -136,29 +139,29 @@ class BaseSTTProvider(ABC, RetryMixin):
         audio_validation = self._validate_audio_data(audio_data)
         if not audio_validation["valid"]:
             return audio_validation
-        
+
         # Валидация формата аудио
         format_validation = self._validate_audio_format(audio_format)
         if not format_validation["valid"]:
             return format_validation
-        
+
         # Валидация языка
         language_validation = self._validate_language_parameter(language)
         if not language_validation["valid"]:
             return language_validation
-        
+
         # Валидация размера файла
         size_validation = self._validate_file_size(audio_data)
         if not size_validation["valid"]:
             return size_validation
-        
+
         # Валидация провайдер-специфичных ограничений
         provider_validation = self._validate_provider_specific_constraints(
             audio_data, audio_format, language
         )
         if not provider_validation["valid"]:
             return provider_validation
-        
+
         return {"valid": True, "message": "Валидация прошла успешно"}
 
     def _validate_audio_data(self, audio_data: bytes) -> Dict[str, Any]:
@@ -170,7 +173,7 @@ class BaseSTTProvider(ABC, RetryMixin):
                 "error": "Аудио данные отсутствуют",
                 "error_code": "EMPTY_AUDIO_DATA"
             }
-        
+
         if not isinstance(audio_data, bytes):
             self.logger.error(f"Неверный тип аудио данных: {type(audio_data)}")
             return {
@@ -178,7 +181,7 @@ class BaseSTTProvider(ABC, RetryMixin):
                 "error": "Неверный тип аудио данных",
                 "error_code": "INVALID_AUDIO_TYPE"
             }
-        
+
         return {"valid": True}
 
     def _validate_audio_format(self, audio_format: str) -> Dict[str, Any]:
@@ -186,7 +189,7 @@ class BaseSTTProvider(ABC, RetryMixin):
         if not audio_format:
             self.logger.warning("Формат аудио не указан, используем автоопределение")
             return {"valid": True}
-        
+
         supported_formats = self.get_supported_formats()
         if audio_format.lower() not in [fmt.lower() for fmt in supported_formats]:
             self.logger.error(f"Неподдерживаемый формат: {audio_format}")
@@ -196,7 +199,7 @@ class BaseSTTProvider(ABC, RetryMixin):
                 "error_code": "UNSUPPORTED_FORMAT",
                 "supported_formats": supported_formats
             }
-        
+
         return {"valid": True}
 
     def _validate_language_parameter(self, language: str) -> Dict[str, Any]:
@@ -204,19 +207,19 @@ class BaseSTTProvider(ABC, RetryMixin):
         if not language:
             self.logger.debug("Язык не указан, используем автоопределение")
             return {"valid": True}
-        
+
         supported_languages = self.get_supported_languages()
         if language not in supported_languages:
             self.logger.warning(f"Язык {language} может быть не поддержан")
             # Не блокируем запрос, просто предупреждаем
-        
+
         return {"valid": True}
 
     def _validate_file_size(self, audio_data: bytes) -> Dict[str, Any]:
         """Валидирует размер аудио файла."""
         file_size_mb = len(audio_data) / (1024 * 1024)
         max_size_mb = getattr(self, 'max_file_size_mb', 25)  # По умолчанию 25MB
-        
+
         if file_size_mb > max_size_mb:
             self.logger.error(f"Файл слишком большой: {file_size_mb:.2f}MB > {max_size_mb}MB")
             return {
@@ -226,13 +229,13 @@ class BaseSTTProvider(ABC, RetryMixin):
                 "file_size_mb": file_size_mb,
                 "max_size_mb": max_size_mb
             }
-        
+
         return {"valid": True}
 
     def _validate_provider_specific_constraints(
-        self, 
-        audio_data: bytes, 
-        audio_format: str, 
+        self,
+        audio_data: bytes,
+        audio_format: str,
         language: str
     ) -> Dict[str, Any]:
         """
@@ -268,4 +271,7 @@ class BaseSTTProvider(ABC, RetryMixin):
 
     def __str__(self) -> str:
         """String representation for logging."""
-        return f"STTProvider({self.provider_name}, enabled={self.enabled}, priority={self.priority})"
+        return f"STTProvider({
+            self.provider_name}, enabled={
+            self.enabled}, priority={
+            self.priority})"

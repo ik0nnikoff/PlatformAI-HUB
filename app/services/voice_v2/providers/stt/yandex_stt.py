@@ -47,7 +47,13 @@ class YandexSTTProvider(BaseSTTProvider):
     MAX_FILE_SIZE_MB = 1.0
     DEFAULT_SAMPLE_RATE = 16000
 
-    def __init__(self, provider_name: str, config: Dict[str, Any], priority: int = 3, enabled: bool = True, **kwargs):
+    def __init__(self,
+                 provider_name: str,
+                 config: Dict[str,
+                              Any],
+                 priority: int = 3,
+                 enabled: bool = True,
+                 **kwargs):
         """Initialize Yandex STT provider."""
         super().__init__(provider_name, config, priority, enabled, **kwargs)
 
@@ -217,11 +223,11 @@ class YandexSTTProvider(BaseSTTProvider):
             raise
 
     async def _transcribe_with_retry(self,
-                                   audio_data: bytes,
-                                   audio_format: str,
-                                   language: str,
-                                   enable_profanity_filter: bool = True,
-                                   max_retries: int = 3) -> STTResult:
+                                     audio_data: bytes,
+                                     audio_format: str,
+                                     language: str,
+                                     enable_profanity_filter: bool = True,
+                                     max_retries: int = 3) -> STTResult:
         """Perform transcription with retry logic."""
         normalized_language = self.audio_processor.normalize_language(language)
 

@@ -297,19 +297,29 @@ class OpenAITTSProvider(BaseTTSProvider):
                 last_exception = e
                 if attempt < self._max_retries:
                     delay = min(self._base_delay * (2 ** attempt), self._max_delay)
-                    logger.warning("Rate limit hit, retrying in %ss (attempt %s)", delay, attempt + 1)
+                    logger.warning(
+                        "Rate limit hit, retrying in %ss (attempt %s)",
+                        delay,
+                        attempt + 1)
                     await asyncio.sleep(delay)
                     continue
-                raise AudioProcessingError(f"Rate limit exceeded after {self._max_retries} retries: {e}")
+                raise AudioProcessingError(
+                    f"Rate limit exceeded after {
+                        self._max_retries} retries: {e}")
 
             except APIConnectionError as e:
                 last_exception = e
                 if attempt < self._max_retries:
                     delay = min(self._base_delay * (2 ** attempt), self._max_delay)
-                    logger.warning("Connection error, retrying in %ss (attempt %s)", delay, attempt + 1)
+                    logger.warning(
+                        "Connection error, retrying in %ss (attempt %s)",
+                        delay,
+                        attempt + 1)
                     await asyncio.sleep(delay)
                     continue
-                raise AudioProcessingError(f"Connection failed after {self._max_retries} retries: {e}")
+                raise AudioProcessingError(
+                    f"Connection failed after {
+                        self._max_retries} retries: {e}")
 
             except AuthenticationError as e:
                 # Don't retry authentication errors
@@ -329,7 +339,9 @@ class OpenAITTSProvider(BaseTTSProvider):
                 raise VoiceServiceTimeout("synthesis", self._timeout)
 
         # If we get here, all retries failed
-        raise AudioProcessingError(f"Synthesis failed after {self._max_retries} retries: {last_exception}")
+        raise AudioProcessingError(
+            f"Synthesis failed after {
+                self._max_retries} retries: {last_exception}")
 
     async def _upload_audio_to_storage(self, audio_data: bytes, request: TTSRequest) -> str:
         """
@@ -367,7 +379,8 @@ class OpenAITTSProvider(BaseTTSProvider):
             return [result]
 
         # Split text into chunks
-        chunks = self._split_text_intelligently(text, self._max_text_length - 100)  # Buffer for safety
+        chunks = self._split_text_intelligently(
+            text, self._max_text_length - 100)  # Buffer for safety
 
         # Create requests for each chunk
         tasks = []
@@ -454,4 +467,7 @@ class OpenAITTSProvider(BaseTTSProvider):
         return chunks
 
     def __repr__(self) -> str:
-        return f"OpenAITTSProvider(model={self._model}, voice={self._voice}, enabled={self.enabled})"
+        return f"OpenAITTSProvider(model={
+            self._model}, voice={
+            self._voice}, enabled={
+            self.enabled})"

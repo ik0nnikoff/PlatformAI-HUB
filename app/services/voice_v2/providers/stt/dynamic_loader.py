@@ -129,7 +129,11 @@ class STTProviderManager:
                 raise ValueError(f"Unknown loading strategy: {strategy}")
 
         except Exception as e:
-            self.logger.error("Failed to load providers for agent %s: %s", agent_id, e, exc_info=True)
+            self.logger.error(
+                "Failed to load providers for agent %s: %s",
+                agent_id,
+                e,
+                exc_info=True)
             return []
 
     async def _load_providers_eager(
@@ -157,7 +161,8 @@ class STTProviderManager:
                     self._loaded_providers[provider_key] = loaded_provider
 
                 # Record metrics
-                self._record_load_metrics(agent_id, "eager", time.time() - start_time, len(providers))
+                self._record_load_metrics(
+                    agent_id, "eager", time.time() - start_time, len(providers))
 
                 self.logger.info("Eager loaded %s providers for agent %s", len(providers), agent_id)
                 return providers
@@ -189,7 +194,10 @@ class STTProviderManager:
                 )
                 lazy_providers.append(proxy)
 
-        self.logger.info("Set up lazy loading for %s providers for agent %s", len(lazy_providers), agent_id)
+        self.logger.info(
+            "Set up lazy loading for %s providers for agent %s",
+            len(lazy_providers),
+            agent_id)
         return lazy_providers
 
     async def _setup_on_demand_loading(
@@ -334,7 +342,8 @@ class STTProviderManager:
         for provider_key, loaded_provider in list(self._loaded_providers.items()):
             try:
                 # Check if health check is due
-                if (current_time - loaded_provider.last_health_check) < self.loading_config.health_check_interval:
+                if (current_time -
+                        loaded_provider.last_health_check) < self.loading_config.health_check_interval:
                     continue
 
                 # Perform health check
@@ -352,7 +361,7 @@ class STTProviderManager:
 
                     # Auto-reload if configured
                     if (self.loading_config.auto_reload_on_failure and
-                        loaded_provider.error_count >= 3):
+                            loaded_provider.error_count >= 3):
                         self.logger.info("Auto-reloading unhealthy provider %s", provider_key)
                         agent_id, provider_type = provider_key.split(":", 1)
                         asyncio.create_task(self.reload_provider(agent_id, provider_type))

@@ -231,10 +231,10 @@ Voice enhances interaction? Yes/No + enhancement score.""",
         }
 
     async def make_optimized_decision(self,
-                                    decision_type: VoiceDecisionType,
-                                    context: VoiceContextInfo,
-                                    llm_invoke_func: Any,
-                                    **kwargs) -> VoiceDecision:
+                                      decision_type: VoiceDecisionType,
+                                      context: VoiceContextInfo,
+                                      llm_invoke_func: Any,
+                                      **kwargs) -> VoiceDecision:
         """
         Make optimized voice decision with caching and performance tracking.
         """
@@ -268,7 +268,7 @@ Voice enhances interaction? Yes/No + enhancement score.""",
         return decision
 
     def _generate_cache_key(self, decision_type: VoiceDecisionType,
-                          context: VoiceContextInfo, **kwargs) -> str:
+                            context: VoiceContextInfo, **kwargs) -> str:
         """Generate cache key for decision"""
         key_data = {
             'type': decision_type.value,
@@ -323,10 +323,10 @@ Voice enhances interaction? Yes/No + enhancement score.""",
         logger.debug("Cleaned up %s expired decision cache entries", len(expired_keys))
 
     async def _compute_decision(self,
-                              decision_type: VoiceDecisionType,
-                              context: VoiceContextInfo,
-                              llm_invoke_func: Any,
-                              **kwargs) -> VoiceDecision:
+                                decision_type: VoiceDecisionType,
+                                context: VoiceContextInfo,
+                                llm_invoke_func: Any,
+                                **kwargs) -> VoiceDecision:
         """Compute new voice decision using optimized prompts"""
         template = self._prompt_templates.get(decision_type)
         if not template:
@@ -371,7 +371,7 @@ Voice enhances interaction? Yes/No + enhancement score.""",
             )
 
     def _make_heuristic_decision(self, decision_type: VoiceDecisionType,
-                               context: VoiceContextInfo, **kwargs) -> VoiceDecision:
+                                 context: VoiceContextInfo, **kwargs) -> VoiceDecision:
         """Make heuristic decision for demonstration purposes"""
         if decision_type == VoiceDecisionType.SHOULD_PROCESS_VOICE:
             decision = context.voice_enabled and context.message_type == 'voice'
@@ -386,7 +386,7 @@ Voice enhances interaction? Yes/No + enhancement score.""",
         elif decision_type == VoiceDecisionType.TTS_AUTO_TRIGGER:
             message_length = kwargs.get('message_length', 0)
             decision = (context.voice_preference_score > 0.7 and
-                       message_length > 50 and message_length < 200)
+                        message_length > 50 and message_length < 200)
             confidence = 0.8
             reasoning = f"Preference: {context.voice_preference_score}, length: {message_length}"
 
@@ -439,7 +439,7 @@ Voice enhances interaction? Yes/No + enhancement score.""",
             return "long_ago"
 
     async def _record_decision_metrics(self, decision_type: VoiceDecisionType,
-                                     decision_time: float, cached: bool) -> None:
+                                       decision_time: float, cached: bool) -> None:
         """Record decision performance metrics"""
         if decision_type not in self.decision_metrics:
             self.decision_metrics[decision_type] = VoiceDecisionMetrics(decision_type=decision_type)
@@ -475,9 +475,13 @@ Voice enhances interaction? Yes/No + enhancement score.""",
         # Cleanup old history
         cutoff = datetime.now() - timedelta(hours=24)
         self._decision_history = [
-            (ts, dt, time_val, cached_val) for ts, dt, time_val, cached_val in self._decision_history
-            if ts > cutoff
-        ]
+            (ts,
+             dt,
+             time_val,
+             cached_val) for ts,
+            dt,
+            time_val,
+            cached_val in self._decision_history if ts > cutoff]
 
     def get_performance_summary(self) -> Dict[str, Any]:
         """Get comprehensive voice decision performance summary"""
@@ -512,9 +516,11 @@ Voice enhances interaction? Yes/No + enhancement score.""",
         # Overall statistics
         summary["overall"] = {
             "total_decisions": total_decisions,
-            "overall_cache_hit_rate": (total_cached / total_decisions * 100) if total_decisions > 0 else 0,
-            "meeting_target": overall_meeting_target
-        }
+            "overall_cache_hit_rate": (
+                total_cached /
+                total_decisions *
+                100) if total_decisions > 0 else 0,
+            "meeting_target": overall_meeting_target}
 
         # Recent performance
         if self._decision_history:
@@ -542,7 +548,10 @@ Voice enhances interaction? Yes/No + enhancement score.""",
             # Check decision time performance
             for metrics in self.decision_metrics.values():
                 if not metrics.is_meeting_target:
-                    logger.warning("Decision type %s not meeting target: %.3fs", metrics.decision_type.value, metrics.average_decision_time)
+                    logger.warning(
+                        "Decision type %s not meeting target: %.3fs",
+                        metrics.decision_type.value,
+                        metrics.average_decision_time)
                     needs_optimization = True
 
             # Check cache effectiveness

@@ -165,7 +165,7 @@ class TestVoicePerformanceManager:
     @patch('app.services.voice_v2.core.performance_manager.IntegrationPerformanceMonitor')
     @patch('app.services.voice_v2.core.performance_manager.PerformanceValidationSuite')
     async def test_full_initialization(self, mock_validation, mock_monitor, mock_decision,
-                                     mock_tts, mock_stt, default_config):
+                                       mock_tts, mock_stt, default_config):
         """Test full initialization with all components"""
         # Setup mocks
         mock_stt_instance = AsyncMock()
@@ -207,7 +207,7 @@ class TestVoicePerformanceManager:
     @patch('app.services.voice_v2.core.performance_manager.IntegrationPerformanceMonitor')
     @patch('app.services.voice_v2.core.performance_manager.PerformanceValidationSuite')
     async def test_monitoring_only_initialization(self, mock_validation, mock_monitor,
-                                                monitoring_only_config):
+                                                  monitoring_only_config):
         """Test initialization with monitoring-only config"""
         mock_monitor_instance = AsyncMock()
         mock_monitor.return_value = mock_monitor_instance

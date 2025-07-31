@@ -159,7 +159,10 @@ class STTSystemCoordinator:
             # Cache providers
             self._agent_providers[agent_id] = providers
 
-            self.logger.info("Successfully set up %s STT providers for agent %s", len(providers), agent_id)
+            self.logger.info(
+                "Successfully set up %s STT providers for agent %s",
+                len(providers),
+                agent_id)
             return providers
 
         except Exception as e:
@@ -203,11 +206,16 @@ class STTSystemCoordinator:
             last_error = None
             for i, provider in enumerate(sorted_providers):
                 try:
-                    self.logger.debug("Attempting transcription with provider %s/%s", i+1, len(sorted_providers))
+                    self.logger.debug(
+                        "Attempting transcription with provider %s/%s",
+                        i + 1,
+                        len(sorted_providers))
 
                     # Check provider health
                     if not await provider.health_check():
-                        self.logger.warning("Provider %s is unhealthy, skipping", provider.get_status().provider_type)
+                        self.logger.warning(
+                            "Provider %s is unhealthy, skipping",
+                            provider.get_status().provider_type)
                         continue
 
                     # Perform transcription
@@ -233,8 +241,8 @@ class STTSystemCoordinator:
                 except Exception as e:
                     last_error = e
                     self.logger.warning(
-                        f"Transcription failed with provider {provider.get_status().provider_type}: {e}"
-                    )
+                        f"Transcription failed with provider {
+                            provider.get_status().provider_type}: {e}")
                     continue
 
             # All providers failed
@@ -387,8 +395,10 @@ class STTSystemCoordinator:
             self._metrics.average_response_time = response_time
         else:
             # Running average
-            total_time = self._metrics.average_response_time * (self._metrics.successful_transcriptions - 1)
-            self._metrics.average_response_time = (total_time + response_time) / self._metrics.successful_transcriptions
+            total_time = self._metrics.average_response_time * \
+                (self._metrics.successful_transcriptions - 1)
+            self._metrics.average_response_time = (
+                total_time + response_time) / self._metrics.successful_transcriptions
 
         # Store performance history
         self._performance_history.append({

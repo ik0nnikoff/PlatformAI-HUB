@@ -40,7 +40,7 @@ dependencies = [
     "pytest-asyncio>=0.24.0",
     "qdrant-client>=1.13.3",
     "redis>=5.0.7",
-    "requests>=2.32.3",
+    "requests>=2.32.4",
     "requests-html>=0.10.0",
     "sqlalchemy[asyncio]>=2.0",
     "tavily-python>=0.5.1",
@@ -58,6 +58,7 @@ dependencies = [
     "protobuf>=5.29.5",
     "tornado>=6.5",
     "psutil>=7.0.0",
+    "urllib3>=2.5.0",
 ]
 
 [tool.uv.sources]

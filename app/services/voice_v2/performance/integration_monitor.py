@@ -65,9 +65,9 @@ class IntegrationPerformanceMonitor:
         logger.info("IntegrationPerformanceMonitor initialized")
 
     def set_optimizers(self,
-                      stt_optimizer: Any,
-                      tts_optimizer: Any,
-                      decision_optimizer: Any) -> None:
+                       stt_optimizer: Any,
+                       tts_optimizer: Any,
+                       decision_optimizer: Any) -> None:
         """Set component optimizers for monitoring"""
         self.stt_optimizer = stt_optimizer
         self.tts_optimizer = tts_optimizer

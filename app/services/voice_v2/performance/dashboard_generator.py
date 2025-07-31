@@ -147,10 +147,18 @@ class DashboardDataGenerator:
     def _build_empty_component_status(self) -> Dict[str, Any]:
         """Build component status when no data available"""
         return {
-            "stt": {"status": PerformanceStatus.UNKNOWN.value, "current_latency": 0, "target_latency": 3.5},
-            "tts": {"status": PerformanceStatus.UNKNOWN.value, "current_latency": 0, "target_latency": 3.0},
-            "decision": {"status": PerformanceStatus.UNKNOWN.value, "current_latency": 0, "target_latency": 1.0}
-        }
+            "stt": {
+                "status": PerformanceStatus.UNKNOWN.value,
+                "current_latency": 0,
+                "target_latency": 3.5},
+            "tts": {
+                "status": PerformanceStatus.UNKNOWN.value,
+                "current_latency": 0,
+                "target_latency": 3.0},
+            "decision": {
+                "status": PerformanceStatus.UNKNOWN.value,
+                "current_latency": 0,
+                "target_latency": 1.0}}
 
     def _build_alerts_data(self) -> List[Dict[str, Any]]:
         """Build alerts data for dashboard"""

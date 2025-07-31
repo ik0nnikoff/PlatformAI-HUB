@@ -50,7 +50,10 @@ class LoadTestEngine:
         if self._active:
             raise ValueError("Load test already running")
 
-        logger.info("Starting load test: %s users, %ss duration", self.config.concurrent_users, self.config.test_duration_seconds)
+        logger.info(
+            "Starting load test: %s users, %ss duration",
+            self.config.concurrent_users,
+            self.config.test_duration_seconds)
 
         self._active = True
         start_time = time.time()
@@ -114,7 +117,8 @@ class LoadTestEngine:
             "target_success_rate": self.config.target_success_rate
         }
 
-    def _build_performance_results(self, metrics: EndToEndMetrics, duration: float) -> Dict[str, Any]:
+    def _build_performance_results(self, metrics: EndToEndMetrics,
+                                   duration: float) -> Dict[str, Any]:
         """Build overall performance results"""
         return {
             "total_requests": metrics.total_requests,
@@ -166,11 +170,11 @@ class LoadTestEngine:
     def _build_resource_results(self, metrics: EndToEndMetrics) -> Dict[str, Any]:
         """Build resource usage results"""
         return {
-            "average_memory_mb": statistics.mean(metrics.memory_usage_mb) if metrics.memory_usage_mb else 0,
-            "peak_memory_mb": max(metrics.memory_usage_mb) if metrics.memory_usage_mb else 0,
-            "average_cpu_percent": statistics.mean(metrics.cpu_usage_percent) if metrics.cpu_usage_percent else 0,
-            "peak_cpu_percent": max(metrics.cpu_usage_percent) if metrics.cpu_usage_percent else 0
-        }
+            "average_memory_mb": statistics.mean(
+                metrics.memory_usage_mb) if metrics.memory_usage_mb else 0, "peak_memory_mb": max(
+                metrics.memory_usage_mb) if metrics.memory_usage_mb else 0, "average_cpu_percent": statistics.mean(
+                metrics.cpu_usage_percent) if metrics.cpu_usage_percent else 0, "peak_cpu_percent": max(
+                    metrics.cpu_usage_percent) if metrics.cpu_usage_percent else 0}
 
     def _build_status_results(self, metrics: EndToEndMetrics) -> Dict[str, Any]:
         """Build test status results"""

@@ -91,7 +91,7 @@ class FileStorageConfig(BaseModel):
         description="Storage bucket name"
     )
     upload_path: str = Field(
-        default="/tmp/voice_uploads",
+        default="./temp/voice_uploads",
         description="Local upload path"
     )
     max_file_size_mb: int = Field(default=25, ge=1, le=100, description="Max file size in MB")

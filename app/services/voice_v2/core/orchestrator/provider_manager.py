@@ -58,7 +58,8 @@ class VoiceProviderManager(IProviderManager):
             if provider_name not in self._factory_stt_cache:
                 try:
                     # Use unified create_provider method with STT suffix if needed
-                    stt_provider_name = provider_name if provider_name.endswith('_stt') else f"{provider_name}_stt"
+                    stt_provider_name = provider_name if provider_name.endswith(
+                        '_stt') else f"{provider_name}_stt"
                     provider = await self._enhanced_factory.create_provider(stt_provider_name, {})
                     if provider:
                         self._factory_stt_cache[provider_name] = provider
@@ -89,7 +90,8 @@ class VoiceProviderManager(IProviderManager):
             if provider_name not in self._factory_tts_cache:
                 try:
                     # Use unified create_provider method with TTS suffix if needed
-                    tts_provider_name = provider_name if provider_name.endswith('_tts') else f"{provider_name}_tts"
+                    tts_provider_name = provider_name if provider_name.endswith(
+                        '_tts') else f"{provider_name}_tts"
                     provider = await self._enhanced_factory.create_provider(tts_provider_name, {})
                     if provider:
                         self._factory_tts_cache[provider_name] = provider

@@ -37,7 +37,7 @@ class ValidationReporter:
     """Handles validation report generation and export"""
 
     def generate_validation_report(self, report_id: str, start_time: float,
-                                 test_cases: List[ValidationTestCase]) -> ValidationReport:
+                                   test_cases: List[ValidationTestCase]) -> ValidationReport:
         """Generate comprehensive validation report"""
         end_time = time.time()
         total_duration = end_time - start_time
@@ -204,7 +204,7 @@ class ValidationReporter:
 
             actual_str = f"{tc.actual_value:.2f}" if tc.actual_value is not None else "N/A"
             md_content += (f"| {tc.name} | {tc.category} | {tc.target_value:.2f} | "
-                          f"{actual_str} | {status_emoji} {tc.status.value} |\n")
+                           f"{actual_str} | {status_emoji} {tc.status.value} |\n")
 
         return md_content
 
@@ -427,8 +427,11 @@ class ValidationReporter:
             if test_case.category == "component_health":
                 issues.append(f"Component health failure: {test_case.name}")
             elif test_case.category in ["stt_performance", "tts_performance"]:
-                issues.append(f"Performance target missed: {test_case.name} "
-                            f"(target: {test_case.target_value}, actual: {test_case.actual_value})")
+                issues.append(
+                    f"Performance target missed: {
+                        test_case.name} " f"(target: {
+                        test_case.target_value}, actual: {
+                        test_case.actual_value})")
             elif test_case.category == "resource_usage":
                 issues.append(f"Resource limit exceeded: {test_case.name}")
 

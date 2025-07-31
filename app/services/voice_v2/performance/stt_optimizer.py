@@ -87,7 +87,7 @@ class STTPerformanceOptimizer(BasePerformanceOptimizer[STTProviderMetrics]):
         super().__init__(config)
 
         logger.info("STTPerformanceOptimizer initialized with target latency: %ss",
-                   config.target_latency)
+                    config.target_latency)
 
     def _create_provider_metrics(self, provider: ProviderType) -> STTProviderMetrics:
         """Create STT-specific provider metrics instance"""
@@ -111,12 +111,15 @@ class STTPerformanceOptimizer(BasePerformanceOptimizer[STTProviderMetrics]):
         complete_order = self._complete_provider_order(optimized_order)
 
         logger.debug("Optimized STT provider order for %s: %s", performance_tier.value,
-                    [p.value for p in complete_order])
+                     [p.value for p in complete_order])
 
         return complete_order
 
-    def _sort_providers_by_tier(self, providers: List[Tuple[ProviderType, STTProviderMetrics]],
-                               performance_tier: PerformanceTier) -> List[Tuple[ProviderType, STTProviderMetrics]]:
+    def _sort_providers_by_tier(self,
+                                providers: List[Tuple[ProviderType,
+                                                      STTProviderMetrics]],
+                                performance_tier: PerformanceTier) -> List[Tuple[ProviderType,
+                                                                                 STTProviderMetrics]]:
         """Sort STT providers based on performance tier requirements"""
         if performance_tier == PerformanceTier.CRITICAL:
             return sorted(providers, key=lambda x: x[1].p95_latency)
@@ -148,7 +151,7 @@ class STTPerformanceOptimizer(BasePerformanceOptimizer[STTProviderMetrics]):
         return CacheKeyGenerator.generate_stt_key(audio_data, language)
 
     async def record_performance(self, provider: ProviderType, latency: float,
-                               success: bool) -> None:
+                                 success: bool) -> None:
         """Record performance metrics for provider"""
         metrics = self.provider_metrics.get(provider)
         if not metrics:

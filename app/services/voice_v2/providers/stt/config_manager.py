@@ -258,14 +258,17 @@ class STTConfigManager:
 
         # Provider-specific settings
         if provider_type == "openai":
-            config["settings"]["api_key"] = os.getenv(f"{prefix}_API_KEY", os.getenv("OPENAI_API_KEY"))
+            config["settings"]["api_key"] = os.getenv(
+                f"{prefix}_API_KEY", os.getenv("OPENAI_API_KEY"))
             config["settings"]["model"] = os.getenv(f"{prefix}_MODEL", "whisper-1")
         elif provider_type == "google":
             config["settings"]["credentials_path"] = os.getenv(f"{prefix}_CREDENTIALS_PATH")
             config["settings"]["project_id"] = os.getenv(f"{prefix}_PROJECT_ID")
         elif provider_type == "yandex":
-            config["settings"]["api_key"] = os.getenv(f"{prefix}_API_KEY", os.getenv("YANDEX_API_KEY"))
-            config["settings"]["folder_id"] = os.getenv(f"{prefix}_FOLDER_ID", os.getenv("YANDEX_FOLDER_ID"))
+            config["settings"]["api_key"] = os.getenv(
+                f"{prefix}_API_KEY", os.getenv("YANDEX_API_KEY"))
+            config["settings"]["folder_id"] = os.getenv(
+                f"{prefix}_FOLDER_ID", os.getenv("YANDEX_FOLDER_ID"))
 
         return config
 
@@ -375,7 +378,8 @@ class STTConfigManager:
 
         return provider_type
 
-    def _validate_provider_specific_settings(self, provider_type: str, provider_config: Dict[str, Any]):
+    def _validate_provider_specific_settings(
+            self, provider_type: str, provider_config: Dict[str, Any]):
         """Validate provider-specific settings"""
         settings = provider_config.get("settings", {})
 
@@ -449,7 +453,8 @@ class STTConfigManager:
     ) -> bool:
         """Save agent configuration to file"""
         try:
-            config_path = self.config_dir / "agents" / f"{agent_config.agent_id}.{config_format.value}"
+            config_path = self.config_dir / "agents" / \
+                f"{agent_config.agent_id}.{config_format.value}"
             config_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Convert to dictionary

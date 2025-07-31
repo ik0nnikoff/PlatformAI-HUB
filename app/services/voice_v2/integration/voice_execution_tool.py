@@ -138,8 +138,8 @@ async def voice_execution_tool(
             )
 
             log_adapter.info(f"TTS execution successful: {audio_url} "
-                           f"(provider: {tts_response.provider}, "
-                           f"time: {tts_response.processing_time:.2f}s)")
+                             f"(provider: {tts_response.provider}, "
+                             f"time: {tts_response.processing_time:.2f}s)")
 
             return str(result.to_dict())
         else:
@@ -177,7 +177,7 @@ async def voice_execution_tool(
 
 
 async def _generate_audio_url(tts_response: TTSResponse, agent_id: str,
-                             chat_id: str, log_adapter) -> Optional[str]:
+                              chat_id: str, log_adapter) -> Optional[str]:
     """
     Generate audio URL from TTS response for platform delivery
 
@@ -203,7 +203,8 @@ async def _generate_audio_url(tts_response: TTSResponse, agent_id: str,
         import time
 
         # Create unique file key
-        text_hash = hashlib.sha256(tts_response.provider.encode() + str(time.time()).encode()).hexdigest()[:16]
+        text_hash = hashlib.sha256(tts_response.provider.encode() +
+                                   str(time.time()).encode()).hexdigest()[:16]
         file_key = f"voice/{agent_id}/{chat_id}/tts_{text_hash}.{tts_response.format.value}"
 
         # TODO: Replace with actual MinIO upload and presigned URL generation

@@ -231,7 +231,8 @@ class TTSOrchestrator:
             }
         })
 
-    async def get_available_providers(self, providers_config: List[Dict[str, Any]]) -> List[BaseTTSProvider]:
+    async def get_available_providers(
+            self, providers_config: List[Dict[str, Any]]) -> List[BaseTTSProvider]:
         """
         Get list of available and healthy TTS providers.
 
@@ -333,7 +334,8 @@ class TTSOrchestrator:
 
     # Private helper methods
 
-    async def _get_healthy_providers(self, providers_config: List[Dict[str, Any]]) -> List[BaseTTSProvider]:
+    async def _get_healthy_providers(
+            self, providers_config: List[Dict[str, Any]]) -> List[BaseTTSProvider]:
         """Get list of healthy providers ordered by priority."""
         available_providers = await self._factory.get_available_providers(providers_config)
 
@@ -349,7 +351,10 @@ class TTSOrchestrator:
 
         return available_providers
 
-    async def _synthesize_with_retry(self, provider: BaseTTSProvider, request: TTSRequest) -> TTSResult:
+    async def _synthesize_with_retry(
+            self,
+            provider: BaseTTSProvider,
+            request: TTSRequest) -> TTSResult:
         """Synthesize speech with retry logic."""
         last_error = None
 
@@ -357,25 +362,36 @@ class TTSOrchestrator:
             try:
                 if attempt > 0:
                     delay = self.RETRY_DELAYS[min(attempt - 1, len(self.RETRY_DELAYS) - 1)]
-                    logger.debug("Retrying provider %s after %ss delay", provider.provider_name, delay)
+                    logger.debug(
+                        "Retrying provider %s after %ss delay",
+                        provider.provider_name,
+                        delay)
                     await asyncio.sleep(delay)
 
                 result = await provider.synthesize_speech(request)
 
                 if attempt > 0:
-                    logger.info("Provider %s succeeded on retry %s", provider.provider_name, attempt)
+                    logger.info(
+                        "Provider %s succeeded on retry %s",
+                        provider.provider_name,
+                        attempt)
 
                 return result
 
             except Exception as e:
                 last_error = e
-                logger.warning("Provider %s attempt %s failed: %s", provider.provider_name, attempt + 1, e)
+                logger.warning("Provider %s attempt %s failed: %s",
+                               provider.provider_name, attempt + 1, e)
 
                 # Don't retry for certain error types
                 if isinstance(e, (ProviderNotAvailableError,)):
                     break
 
-        raise last_error or AudioProcessingError(f"Provider {provider.provider_name} failed after {self.MAX_RETRIES + 1} attempts")
+        raise last_error or AudioProcessingError(
+            f"Provider {
+                provider.provider_name} failed after {
+                self.MAX_RETRIES +
+                1} attempts")
 
     async def _update_health_status(self, force: bool = False) -> None:
         """Update health status for all providers."""
@@ -432,7 +448,8 @@ class TTSOrchestrator:
             status.last_failure_time = time.time()
             status.last_check_time = time.time()
 
-            logger.warning("Provider %s marked unhealthy (failures: %s): %s", provider_name, status.consecutive_failures, error_message)
+            logger.warning("Provider %s marked unhealthy (failures: %s): %s",
+                           provider_name, status.consecutive_failures, error_message)
 
     def _is_provider_allowed(self, provider_name: str) -> bool:
         """Check if provider is allowed by circuit breaker."""
@@ -454,7 +471,9 @@ class TTSOrchestrator:
             if status.last_failure_time:
                 time_since_failure = time.time() - status.last_failure_time
                 if time_since_failure >= self.CIRCUIT_BREAKER_TIMEOUT:
-                    logger.info("Circuit breaker timeout expired for %s, allowing recovery attempt", provider_name)
+                    logger.info(
+                        "Circuit breaker timeout expired for %s, allowing recovery attempt",
+                        provider_name)
                     return True
             return False
 

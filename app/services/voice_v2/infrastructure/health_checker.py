@@ -381,7 +381,7 @@ class HealthManager:
 
         # Check cache first
         if (component_name in self._system_health_cache and
-            component_name in self._cache_timestamps):
+                component_name in self._cache_timestamps):
             cache_age = now - self._cache_timestamps[component_name]
             if cache_age.total_seconds() < self.cache_ttl_seconds:
                 return self._system_health_cache[component_name]
@@ -408,10 +408,12 @@ class HealthManager:
 
             # Determine overall status
             total_components = len(self._provider_health) + len(health_summary["system_components"])
-            health_summary["status"] = self._determine_overall_status(unhealthy_count, total_components)
+            health_summary["status"] = self._determine_overall_status(
+                unhealthy_count, total_components)
 
             # Add summary statistics
-            health_summary["summary"] = self._create_health_summary_stats(total_components, unhealthy_count)
+            health_summary["summary"] = self._create_health_summary_stats(
+                total_components, unhealthy_count)
 
             return health_summary
 
@@ -449,7 +451,8 @@ class HealthManager:
             # Force fresh check for overall status
             updated_status = await self.check_provider_health(provider_name, provider_type)
 
-            health_summary["providers"][provider_key] = self._create_provider_health_info(updated_status)
+            health_summary["providers"][provider_key] = self._create_provider_health_info(
+                updated_status)
 
             if updated_status.overall_status != HealthStatus.HEALTHY:
                 unhealthy_count += 1
@@ -462,8 +465,7 @@ class HealthManager:
             "status": updated_status.overall_status.value,
             "stt_status": updated_status.stt_health.status.value if updated_status.stt_health else "unknown",
             "tts_status": updated_status.tts_health.status.value if updated_status.tts_health else "unknown",
-            "last_check": updated_status.last_check.isoformat()
-        }
+            "last_check": updated_status.last_check.isoformat()}
 
     async def _check_system_components_health(self, health_summary: Dict[str, Any]) -> int:
         """Check health of system components"""
@@ -473,12 +475,14 @@ class HealthManager:
             if not component_name.endswith(('_stt', '_tts')):  # System components only
                 try:
                     result = await self.check_system_health(component_name)
-                    health_summary["system_components"][component_name] = self._create_component_health_info(result)
+                    health_summary["system_components"][component_name] = self._create_component_health_info(
+                        result)
 
                     if result.status != HealthStatus.HEALTHY:
                         unhealthy_count += 1
                 except Exception as e:
-                    health_summary["system_components"][component_name] = self._create_failed_component_info(e)
+                    health_summary["system_components"][component_name] = self._create_failed_component_info(
+                        e)
                     unhealthy_count += 1
 
         return unhealthy_count
@@ -510,7 +514,8 @@ class HealthManager:
         else:
             return HealthStatus.DEGRADED.value
 
-    def _create_health_summary_stats(self, total_components: int, unhealthy_count: int) -> Dict[str, int]:
+    def _create_health_summary_stats(self, total_components: int,
+                                     unhealthy_count: int) -> Dict[str, int]:
         """Create health summary statistics"""
         return {
             "total_components": total_components,
@@ -541,7 +546,7 @@ class HealthManager:
 
         for provider_status in self._provider_health.values():
             if (provider_status.provider_type == provider_type and
-                self.is_provider_healthy(provider_status.provider_name, provider_type)):
+                    self.is_provider_healthy(provider_status.provider_name, provider_type)):
                 healthy_providers.append(provider_status.provider_name)
 
         return healthy_providers

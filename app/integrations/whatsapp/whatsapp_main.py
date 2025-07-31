@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 WhatsApp Integration Main Entry Point для PlatformAI-HUB
 
@@ -12,7 +11,6 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
 
 # Добавляем корневую директорию проекта в Python path
 project_root = Path(__file__).resolve().parent.parent.parent

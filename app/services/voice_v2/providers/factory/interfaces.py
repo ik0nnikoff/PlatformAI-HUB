@@ -55,7 +55,9 @@ class IEnhancedProviderFactory(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def health_check(self, provider_name: Optional[str] = None) -> Dict[str, "ProviderHealthInfo"]:
+    async def health_check(self,
+                           provider_name: Optional[str] = None) -> Dict[str,
+                                                                        "ProviderHealthInfo"]:
         """Enhanced provider health check"""
         raise NotImplementedError
 

@@ -55,7 +55,7 @@ class PerformanceUtils:
 
     @staticmethod
     def calculate_performance_score(latency: float, success_rate: float,
-                                  target_latency: float = 3.0) -> float:
+                                    target_latency: float = 3.0) -> float:
         """
         Calculate overall performance score (0-100)
         """
@@ -79,5 +79,8 @@ class PerformanceUtils:
             if hasattr(metrics, 'is_healthy') and not metrics.is_healthy:
                 unhealthy_count += 1
 
-        unhealthy_percentage = (unhealthy_count / total_providers * 100) if total_providers > 0 else 0
+        unhealthy_percentage = (
+            unhealthy_count /
+            total_providers *
+            100) if total_providers > 0 else 0
         return unhealthy_percentage > (100 - health_threshold)

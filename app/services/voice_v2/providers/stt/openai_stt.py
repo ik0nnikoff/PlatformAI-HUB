@@ -71,12 +71,18 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
         if self._has_connection_manager():
             # Register retry configuration with ConnectionManager
             retry_config = self._get_retry_config(config)
-            logger.info("OpenAISTTProvider using ConnectionManager with retry config: %s retries", retry_config.max_retries)
+            logger.info(
+                "OpenAISTTProvider using ConnectionManager with retry config: %s retries",
+                retry_config.max_retries)
         else:
             # Fallback к legacy parameters для compatibility
-            logger.warning("OpenAISTTProvider fallback to legacy retry - ConnectionManager not available")
+            logger.warning(
+                "OpenAISTTProvider fallback to legacy retry - ConnectionManager not available")
 
-        logger.info("OpenAISTTProvider initialized: model=%s, timeout=%ss", self.model, self.timeout)
+        logger.info(
+            "OpenAISTTProvider initialized: model=%s, timeout=%ss",
+            self.model,
+            self.timeout)
 
     def get_required_config_fields(self) -> List[str]:
         """Required configuration fields for OpenAI STT."""
@@ -106,7 +112,7 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
             ],
             supports_language_detection=True,  # Whisper auto-detects language
             supports_word_timestamps=True,     # Available in verbose mode
-            supports_speaker_diarization=False # Not supported by Whisper
+            supports_speaker_diarization=False  # Not supported by Whisper
         )
 
     async def initialize(self) -> None:
@@ -192,14 +198,20 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
 
         max_size = 25 * 1024 * 1024  # 25MB OpenAI лимит
         if len(audio_data) > max_size:
-            raise AudioProcessingError(f"Аудиофайл слишком большой: {len(audio_data)} байт (лимит 25MB)")
+            raise AudioProcessingError(
+                f"Аудиофайл слишком большой: {
+                    len(audio_data)} байт (лимит 25MB)")
 
         # Create temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_file:
             temp_file.write(audio_data)
             return Path(temp_file.name)
 
-    async def _execute_transcription_workflow(self, request: STTRequest, audio_path: Path, start_time: float) -> STTResult:
+    async def _execute_transcription_workflow(
+            self,
+            request: STTRequest,
+            audio_path: Path,
+            start_time: float) -> STTResult:
         """Execute transcription workflow with error handling"""
         try:
             await self._validate_audio_file(audio_path)
@@ -306,7 +318,8 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
             }
         )
 
-    async def _perform_transcription(self, session, audio_path: Path, params: Dict[str, Any]) -> Any:
+    async def _perform_transcription(self, session, audio_path: Path,
+                                     params: Dict[str, Any]) -> Any:
         """
         Core transcription operation for ConnectionManager execution.
 
@@ -378,7 +391,11 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
                 last_exception = e
                 if attempt < max_retries:
                     delay = retry_delay * (2 ** attempt)  # Exponential backoff
-                    logger.warning("OpenAI API error (attempt %s), retrying in %ss: %s", attempt + 1, delay, e)
+                    logger.warning(
+                        "OpenAI API error (attempt %s), retrying in %ss: %s",
+                        attempt + 1,
+                        delay,
+                        e)
                     await asyncio.sleep(delay)
                 else:
                     break
@@ -387,7 +404,9 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
                 logger.error("Non-retryable OpenAI error: %s", e)
                 raise
 
-        raise AudioProcessingError(f"OpenAI transcription failed after {max_retries + 1} attempts: {last_exception}")
+        raise AudioProcessingError(
+            f"OpenAI transcription failed after {
+                max_retries + 1} attempts: {last_exception}")
 
     async def _initial_health_check(self) -> bool:
         """Non-blocking health check при инициализации."""

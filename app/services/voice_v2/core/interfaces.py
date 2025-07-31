@@ -124,6 +124,7 @@ class VoiceMetric(TypedDict):
 
 class HealthCheckable(Protocol):
     """Interface for health checking capability"""
+
     async def health_check(self) -> bool:
         """Check if service is healthy and operational"""
         raise NotImplementedError
@@ -131,6 +132,7 @@ class HealthCheckable(Protocol):
 
 class Configurable(Protocol[ConfigT]):
     """Interface for configuration management"""
+
     def get_config(self) -> ConfigT:
         """Get current configuration"""
         raise NotImplementedError
@@ -142,6 +144,7 @@ class Configurable(Protocol[ConfigT]):
 
 class MetricsCollector(Protocol):
     """Interface for metrics collection"""
+
     async def record_metric(self, metric: VoiceMetric) -> None:
         """Record a performance metric"""
         raise NotImplementedError
@@ -153,6 +156,7 @@ class MetricsCollector(Protocol):
 
 class FileValidator(Protocol):
     """Interface for file validation capability"""
+
     async def validate_file(self, file_path: str) -> bool:
         """Validate file accessibility and format"""
         raise NotImplementedError
@@ -164,6 +168,7 @@ class FileValidator(Protocol):
 
 class LanguageDetector(Protocol):
     """Interface for language detection capability"""
+
     async def detect_language(self, audio_file_path: str) -> VoiceLanguage:
         """Detect language from audio file"""
         raise NotImplementedError
@@ -182,6 +187,7 @@ class STTProvider(Protocol):
     ISP Compliance: Only STT-specific methods
     Clients can depend only on transcription capability
     """
+
     async def transcribe_audio(
         self,
         audio_file_path: str,
@@ -207,6 +213,7 @@ class STTProvider(Protocol):
 
 class BatchSTTProvider(Protocol):
     """Interface for batch STT processing"""
+
     async def transcribe_batch(
         self,
         audio_files: List[str],
@@ -218,6 +225,7 @@ class BatchSTTProvider(Protocol):
 
 class StreamingSTTProvider(Protocol):
     """Interface for streaming STT processing"""
+
     async def transcribe_stream(
         self,
         audio_stream,
@@ -236,6 +244,7 @@ class TTSProvider(Protocol):
     ISP Compliance: Only TTS-specific methods
     Clients can depend only on synthesis capability
     """
+
     async def synthesize_speech(
         self,
         text: str,
@@ -263,6 +272,7 @@ class TTSProvider(Protocol):
 
 class VoiceListProvider(Protocol):
     """Interface for voice listing capability"""
+
     async def get_available_voices(
         self,
         language: Optional[VoiceLanguage] = None
@@ -273,6 +283,7 @@ class VoiceListProvider(Protocol):
 
 class CustomVoiceProvider(Protocol):
     """Interface for custom voice creation"""
+
     async def create_custom_voice(
         self,
         voice_name: str,
@@ -291,6 +302,7 @@ class CacheInterface(Protocol):
     ISP Compliance: Only caching methods
     Supports both STT and TTS result caching
     """
+
     async def get(self, key: str) -> Optional[str]:
         """Retrieve cached value"""
         raise NotImplementedError
@@ -315,6 +327,7 @@ class RateLimiterInterface(Protocol):
     ISP Compliance: Only rate limiting methods
     Supports distributed rate limiting with Redis
     """
+
     async def is_allowed(self, user_id: str, operation: str = "default") -> bool:
         """Check if request is allowed for user"""
         raise NotImplementedError
@@ -334,6 +347,7 @@ class RateLimiterInterface(Protocol):
 
 class STTCacheInterface(Protocol):
     """STT-specific cache interface"""
+
     async def get_stt_result(
         self,
         audio_file_hash: str,
@@ -357,6 +371,7 @@ class STTCacheInterface(Protocol):
 
 class TTSCacheInterface(Protocol):
     """TTS-specific cache interface"""
+
     async def get_tts_result(
         self,
         text_hash: str,
@@ -389,6 +404,7 @@ class FileManagerInterface(Protocol):
     ISP Compliance: Only file operations
     Supports both local and cloud storage
     """
+
     async def upload_file(self, local_path: str, remote_path: str) -> str:
         """Upload file and return URL"""
         raise NotImplementedError
@@ -408,6 +424,7 @@ class FileManagerInterface(Protocol):
 
 class TemporaryFileManager(Protocol):
     """Interface for temporary file management"""
+
     async def create_temp_file(self, suffix: str = ".wav") -> str:
         """Create temporary file and return path"""
         raise NotImplementedError

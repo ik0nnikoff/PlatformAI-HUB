@@ -38,7 +38,7 @@ class PerformanceLevel(Enum):
     BASIC = "basic"               # Basic optimization only
     STANDARD = "standard"         # Standard optimization (default)
     AGGRESSIVE = "aggressive"     # Maximum optimization
-    MONITORING_ONLY = "monitoring" # Only monitoring, no optimization
+    MONITORING_ONLY = "monitoring"  # Only monitoring, no optimization
 
 
 @dataclass
@@ -135,7 +135,8 @@ class VoicePerformanceManager:
         self._monitoring_active = False
         self._components_status: Dict[str, bool] = {}
 
-        logger.info("VoicePerformanceManager created - Enabled: %s, Level: %s", self.config.enabled, self.config.level.value)
+        logger.info("VoicePerformanceManager created - Enabled: %s, Level: %s",
+                    self.config.enabled, self.config.level.value)
 
     @property
     def is_enabled(self) -> bool:
@@ -235,7 +236,9 @@ class VoicePerformanceManager:
         self._monitoring_active = True
         self._components_status['integration_monitor'] = True
 
-        logger.info("Performance monitoring started - Interval: %ss", self.config.monitoring_interval)
+        logger.info(
+            "Performance monitoring started - Interval: %ss",
+            self.config.monitoring_interval)
 
     async def _initialize_validation_suite(self) -> None:
         """Initialize validation suite"""
@@ -279,7 +282,9 @@ class VoicePerformanceManager:
             # Use settings-based configuration
             max_connections=settings.VOICE_V2_STT_MAX_CONNECTIONS,  # Reuse STT connection settings
             max_connections_per_host=settings.VOICE_V2_STT_PARALLEL_REQUESTS,
-            cache_max_size_mb=int(settings.VOICE_V2_TTS_CACHE_SIZE / 10)  # Convert to MB approximation
+            cache_max_size_mb=int(
+                settings.VOICE_V2_TTS_CACHE_SIZE /
+                10)  # Convert to MB approximation
         )
 
     def _get_connection_pool_size(self) -> int:
@@ -341,7 +346,8 @@ class VoicePerformanceManager:
             Validation report or empty dict if disabled
         """
         if not self.is_enabled or not self.validation_suite:
-            logger.warning("Performance validation not available - system disabled or not initialized")
+            logger.warning(
+                "Performance validation not available - system disabled or not initialized")
             return {}
 
         if not self.config.load_test_enabled:
@@ -365,7 +371,10 @@ class VoicePerformanceManager:
                 "critical_issues": report.critical_issues
             }
 
-            logger.info("Performance validation completed - Status: %s, Compliance: %.1f%%", report.overall_status.value, report.compliance_percentage)
+            logger.info(
+                "Performance validation completed - Status: %s, Compliance: %.1f%%",
+                report.overall_status.value,
+                report.compliance_percentage)
 
             return report_data
 
@@ -448,7 +457,8 @@ class VoicePerformanceManager:
 
 
 # Factory function for easy integration
-async def create_performance_manager(available_providers: Optional[List[ProviderType]] = None) -> VoicePerformanceManager:
+async def create_performance_manager(
+        available_providers: Optional[List[ProviderType]] = None) -> VoicePerformanceManager:
     """
     Factory function to create and initialize performance manager.
 

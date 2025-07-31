@@ -182,7 +182,7 @@ class BaseCircuitBreaker(CircuitBreakerInterface, Generic[T]):
         elif self._state == CircuitBreakerState.OPEN:
             # Check if recovery timeout has passed
             if (self._last_failure_time and
-                current_time - self._last_failure_time >= self.config.recovery_timeout):
+                    current_time - self._last_failure_time >= self.config.recovery_timeout):
                 # Transition to HALF_OPEN (with lock for safety)
                 async with self._state_lock:
                     if self._state == CircuitBreakerState.OPEN:
@@ -367,7 +367,8 @@ class CircuitBreakerManager:
     def __init__(self):
         self._circuit_breakers: Dict[str, CircuitBreakerInterface] = {}
         self._provider_breakers: Dict[ProviderType, ProviderCircuitBreaker] = {}
-        self._global_config = get_config().circuit_breaker if hasattr(get_config(), 'circuit_breaker') else CircuitBreakerConfig()
+        self._global_config = get_config().circuit_breaker if hasattr(
+            get_config(), 'circuit_breaker') else CircuitBreakerConfig()
 
     def register_provider_circuit_breaker(
         self,
@@ -380,7 +381,8 @@ class CircuitBreakerManager:
         self._circuit_breakers[f"provider_{provider_type.value}"] = circuit_breaker
         return circuit_breaker
 
-    def get_provider_circuit_breaker(self, provider_type: ProviderType) -> Optional[ProviderCircuitBreaker]:
+    def get_provider_circuit_breaker(
+            self, provider_type: ProviderType) -> Optional[ProviderCircuitBreaker]:
         """Get circuit breaker for a provider"""
         return self._provider_breakers.get(provider_type)
 
