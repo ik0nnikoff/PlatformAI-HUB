@@ -3,13 +3,11 @@ Google Vision Provider - провайдер для анализа изображ
 """
 
 import asyncio
-import logging
 import time
 from typing import List, Optional
 
 from google.cloud import vision
 from google.oauth2 import service_account
-import google.auth.exceptions
 
 from app.core.config import settings
 from app.services.media.providers.base_vision_provider import (
@@ -261,10 +259,15 @@ class GoogleVisionProvider(BaseVisionProvider):
                 self.client.annotate_image,
                 request
             )
-            
+
+            # Используем response для проверки ошибок
+            if hasattr(response, "error") and response.error.message:
+                self.logger.error(f"Google Vision test image error: {response.error.message}")
+                return False
+
             self.logger.info("Google Vision connection test successful")
             return True
-            
+
         except Exception as e:
             self.logger.error(f"Google Vision connection test failed: {e}")
             return False

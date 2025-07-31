@@ -2,10 +2,8 @@
 Claude Vision Provider - провайдер для анализа изображений через Anthropic Claude API
 """
 
-import asyncio
-import logging
 import time
-from typing import List, Optional
+from typing import List
 import base64
 import httpx
 
@@ -274,7 +272,7 @@ class ClaudeVisionProvider(BaseVisionProvider):
         """
         try:
             # Простой тест с текстовым запросом
-            response = await self.client.messages.create(
+            await self.client.messages.create(
                 model=self.model,
                 messages=[{"role": "user", "content": "Test connection"}],
                 max_tokens=5,

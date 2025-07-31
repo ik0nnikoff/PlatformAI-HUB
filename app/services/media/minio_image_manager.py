@@ -5,17 +5,14 @@
 
 import asyncio
 import logging
-import uuid
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from io import BytesIO
 
 from minio import Minio
-from minio.error import S3Error
-from urllib3.exceptions import MaxRetryError
 
 from app.core.config import settings
-from app.services.media.image_settings import image_settings, ImageValidationResult
+from app.services.media.image_settings import image_settings
 
 
 class MinIOImageManager:

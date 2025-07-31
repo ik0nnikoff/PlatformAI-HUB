@@ -7,18 +7,8 @@ Reduced from 684 to ~280 lines through extraction of specialized engines.
 
 import asyncio
 import logging
-from typing import Dict, List, Optional, Any, Callable, Union
+from typing import Dict, List, Optional, Any, Callable
 from datetime import datetime
-
-try:
-    from app.services.voice_v2.performance.stt_optimizer import STTPerformanceOptimizer
-    from app.services.voice_v2.performance.tts_optimizer import TTSPerformanceOptimizer
-    from app.services.voice_v2.performance.langgraph_optimizer import VoiceDecisionOptimizer
-except ImportError:
-    # For development when optimizers are not available
-    STTPerformanceOptimizer = type(None)
-    TTSPerformanceOptimizer = type(None)
-    VoiceDecisionOptimizer = type(None)
 
 from .models import (
     LoadTestConfig, PerformanceAlert, PerformanceBaseline,

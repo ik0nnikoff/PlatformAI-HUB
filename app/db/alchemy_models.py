@@ -1,13 +1,11 @@
 import logging
 from sqlalchemy import Column, String, Text, DateTime, JSON, Integer, ForeignKey, Enum as SQLEnum, Boolean, UniqueConstraint, func, Index
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
-import uuid
 # Импортируем Base из app.db.session, где он определен
 from app.db.session import Base
 # Импортируем Enum типы, которые будут использоваться в моделях
 # Они будут определены в app.api.schemas.common_schemas
-from app.api.schemas.common_schemas import SenderType, IntegrationType # Предполагаем, что IntegrationType тоже там будет
+from app.api.schemas.common_schemas import SenderType
 
 logger = logging.getLogger(__name__)
 

@@ -2,10 +2,8 @@
 OpenAI Vision Provider - провайдер для анализа изображений через GPT-4V
 """
 
-import asyncio
-import logging
 import time
-from typing import List, Optional
+from typing import List
 
 import httpx
 from openai import AsyncOpenAI
@@ -212,7 +210,7 @@ class OpenAIVisionProvider(BaseVisionProvider):
         """
         try:
             # Простой тест с текстовым запросом
-            response = await self.client.chat.completions.create(
+            await self.client.chat.completions.create(
                 model="gpt-3.5-turbo",  # Используем более дешёвую модель для теста
                 messages=[{"role": "user", "content": "Test connection"}],
                 max_tokens=5,

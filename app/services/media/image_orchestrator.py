@@ -3,7 +3,6 @@ ImageOrchestrator - центральный координатор для обр�
 Управляет провайдерами Vision API и MinIO storage
 """
 
-import asyncio
 import logging
 import time
 from typing import List, Optional, Dict, Any
@@ -11,11 +10,9 @@ from typing import List, Optional, Dict, Any
 from app.core.config import settings
 from app.services.media.providers.base_vision_provider import (
     BaseVisionProvider, 
-    VisionAnalysisResult,
-    VisionProviderError
+    VisionAnalysisResult
 )
 from app.services.media.minio_image_manager import MinIOImageManager
-from app.services.media.image_settings import image_settings
 
 
 class ImageOrchestrator:
