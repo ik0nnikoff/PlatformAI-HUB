@@ -62,39 +62,6 @@ def auth_tool() -> str:
     return "необходима авторизация. Допиши в ответе, в квадратных скобках не меняя содержимое: [AUTH_REQUIRED]"
 
 
-@tool
-def voice_capabilities_tool() -> str:
-    """
-    🔶 DEPRECATED: Legacy voice capabilities tool
-
-    ⚠️ WARNING: This tool provides legacy voice capability information.
-    
-    🎯 MIGRATION STATUS: Use voice_v2 LangGraph tools for voice functionality:
-    - voice_intent_analysis_tool - Intelligent voice intent detection
-    - voice_response_decision_tool - Smart voice response decisions  
-    - voice_synthesis_tool - Advanced TTS generation
-    
-    📋 CONTEXT: Phase 4.4.4 - Legacy voice system cleanup
-    
-    Returns:
-        str: Legacy voice capability description (deprecated)
-    """
-    return """🔶 LEGACY VOICE SYSTEM (DEPRECATED)
-
-⚠️ Это устаревшая информация о голосовых функциях.
-
-🎯 НОВАЯ СИСТЕМА: Агент теперь использует продвинутую систему голосовых решений:
-• Интеллектуальный анализ намерений (не только ключевые слова)
-• Контекстные голосовые решения 
-• Автоматическое определение когда отвечать голосом
-• Улучшенное качество синтеза речи
-
-✅ ТЕКУЩИЕ ВОЗМОЖНОСТИ:
-Просто спроси что угодно - агент сам решит, когда отвечать голосом на основе контекста!
-
-📋 ФАЗА МИГРАЦИИ: Переход на voice_v2 система"""
-
-
 # @tool
 # def get_bonus_points(state: Annotated[dict, InjectedState]) -> str:
 #     """

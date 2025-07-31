@@ -104,6 +104,55 @@ class Settings:
     VOICE_DEFAULT_TTS_PROVIDER: str = os.getenv("VOICE_DEFAULT_TTS_PROVIDER", "openai")
     VOICE_DEFAULT_LANGUAGE: str = os.getenv("VOICE_DEFAULT_LANGUAGE", "ru-RU")
 
+    # ================================================================
+    # Voice V2 Performance Optimization Configuration
+    # ================================================================
+    
+    # Main Performance System Toggle
+    VOICE_V2_PERFORMANCE_ENABLED: bool = os.getenv("VOICE_V2_PERFORMANCE_ENABLED", "false").lower() == "true"
+
+    # STT Optimization Settings
+    VOICE_V2_STT_OPTIMIZATION_ENABLED: bool = os.getenv("VOICE_V2_STT_OPTIMIZATION_ENABLED", "false").lower() == "true"
+    VOICE_V2_STT_CACHE_SIZE: int = int(os.getenv("VOICE_V2_STT_CACHE_SIZE", "1000"))
+    VOICE_V2_STT_CACHE_TTL: int = int(os.getenv("VOICE_V2_STT_CACHE_TTL", "3600"))
+    VOICE_V2_STT_MAX_CONNECTIONS: int = int(os.getenv("VOICE_V2_STT_MAX_CONNECTIONS", "100"))
+    VOICE_V2_STT_CONNECTION_TIMEOUT: int = int(os.getenv("VOICE_V2_STT_CONNECTION_TIMEOUT", "30"))
+    VOICE_V2_STT_PARALLEL_REQUESTS: int = int(os.getenv("VOICE_V2_STT_PARALLEL_REQUESTS", "5"))
+
+    # TTS Optimization Settings
+    VOICE_V2_TTS_OPTIMIZATION_ENABLED: bool = os.getenv("VOICE_V2_TTS_OPTIMIZATION_ENABLED", "false").lower() == "true"
+    VOICE_V2_TTS_STREAMING_ENABLED: bool = os.getenv("VOICE_V2_TTS_STREAMING_ENABLED", "false").lower() == "true"
+    VOICE_V2_TTS_CACHE_SIZE: int = int(os.getenv("VOICE_V2_TTS_CACHE_SIZE", "500"))
+    VOICE_V2_TTS_CACHE_TTL: int = int(os.getenv("VOICE_V2_TTS_CACHE_TTL", "7200"))
+    VOICE_V2_TTS_COMPRESSION_ENABLED: bool = os.getenv("VOICE_V2_TTS_COMPRESSION_ENABLED", "false").lower() == "true"
+    VOICE_V2_TTS_QUALITY_THRESHOLD: float = float(os.getenv("VOICE_V2_TTS_QUALITY_THRESHOLD", "0.8"))
+
+    # LangGraph Decision Optimization
+    VOICE_V2_LANGGRAPH_OPTIMIZATION_ENABLED: bool = os.getenv("VOICE_V2_LANGGRAPH_OPTIMIZATION_ENABLED", "false").lower() == "true"
+    VOICE_V2_LANGGRAPH_CACHE_SIZE: int = int(os.getenv("VOICE_V2_LANGGRAPH_CACHE_SIZE", "200"))
+    VOICE_V2_LANGGRAPH_CACHE_TTL: int = int(os.getenv("VOICE_V2_LANGGRAPH_CACHE_TTL", "1800"))
+    VOICE_V2_LANGGRAPH_SEMANTIC_CACHE_ENABLED: bool = os.getenv("VOICE_V2_LANGGRAPH_SEMANTIC_CACHE_ENABLED", "false").lower() == "true"
+    VOICE_V2_LANGGRAPH_HEURISTIC_DECISIONS_ENABLED: bool = os.getenv("VOICE_V2_LANGGRAPH_HEURISTIC_DECISIONS_ENABLED", "false").lower() == "true"
+
+    # Monitoring and Metrics
+    VOICE_V2_MONITORING_ENABLED: bool = os.getenv("VOICE_V2_MONITORING_ENABLED", "false").lower() == "true"
+    VOICE_V2_METRICS_COLLECTION_ENABLED: bool = os.getenv("VOICE_V2_METRICS_COLLECTION_ENABLED", "false").lower() == "true"
+    VOICE_V2_PERFORMANCE_ALERTS_ENABLED: bool = os.getenv("VOICE_V2_PERFORMANCE_ALERTS_ENABLED", "false").lower() == "true"
+
+    # Load Testing and Validation
+    VOICE_V2_LOAD_TESTING_ENABLED: bool = os.getenv("VOICE_V2_LOAD_TESTING_ENABLED", "false").lower() == "true"
+    VOICE_V2_PERFORMANCE_VALIDATION_ENABLED: bool = os.getenv("VOICE_V2_PERFORMANCE_VALIDATION_ENABLED", "false").lower() == "true"
+
+    # Thresholds and Limits
+    VOICE_V2_RESPONSE_TIME_THRESHOLD: int = int(os.getenv("VOICE_V2_RESPONSE_TIME_THRESHOLD", "2000"))  # milliseconds
+    VOICE_V2_ERROR_RATE_THRESHOLD: float = float(os.getenv("VOICE_V2_ERROR_RATE_THRESHOLD", "0.05"))  # 5%
+    VOICE_V2_MEMORY_USAGE_THRESHOLD: float = float(os.getenv("VOICE_V2_MEMORY_USAGE_THRESHOLD", "0.8"))  # 80%
+    VOICE_V2_CPU_USAGE_THRESHOLD: float = float(os.getenv("VOICE_V2_CPU_USAGE_THRESHOLD", "0.7"))  # 70%
+
+    # Logging and Debug
+    VOICE_V2_PERFORMANCE_LOG_LEVEL: str = os.getenv("VOICE_V2_PERFORMANCE_LOG_LEVEL", "INFO")
+    VOICE_V2_DEBUG_PERFORMANCE: bool = os.getenv("VOICE_V2_DEBUG_PERFORMANCE", "false").lower() == "true"
+
     # MinIO Configuration for voice files
     MINIO_ENDPOINT: str = os.getenv("MINIO_ENDPOINT", "localhost:9000")
     MINIO_ACCESS_KEY: str = os.getenv("MINIO_ACCESS_KEY", "minioadmin")

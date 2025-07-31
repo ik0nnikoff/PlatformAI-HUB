@@ -24,12 +24,10 @@ from .orchestrator.tts_manager import (
     VoiceTTSManager,
     ITTSManager
 )
-from .orchestrator_new import VoiceServiceOrchestrator
 
 # Re-export for backward compatibility
 __all__ = [
-    # Main orchestrator classes
-    "VoiceServiceOrchestrator",         # Main legacy-compatible orchestrator
+    # Main orchestrator manager
     "VoiceOrchestratorManager",         # New modular orchestrator manager
 
     # Specialized managers

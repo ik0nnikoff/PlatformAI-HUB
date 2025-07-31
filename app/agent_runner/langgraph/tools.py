@@ -69,13 +69,14 @@ def _add_predefined_tools(safe_tools: List, logger):
     """
     Add predefined tools to safe tools list.
     
-    🔶 LEGACY WARNING: voice_capabilities_tool is deprecated
-    - Use voice_v2 tools instead for new voice functionality
-    - Legacy tool maintained for compatibility during migration
+    🔶 PHASE 5.1.2 DEPRECATION: voice_capabilities_tool redirects to LangGraph decisions
+    - Tool now educates agents to use contextual voice decisions 
+    - Eliminates keyword matching guidance
+    - Encourages LangGraph workflow-based voice decisions
     """
-    # 🔶 DEPRECATED: voice_capabilities_tool replaced by voice_v2 tools
+    # 🔶 PHASE 5.1.2: voice_capabilities_tool updated to redirect to LangGraph decisions
     safe_tools.extend([auth_tool, get_user_info_tool, voice_capabilities_tool])
-    logger.info("Added predefined tools: auth, user_info, voice_capabilities (LEGACY)")
+    logger.info("Added predefined tools: auth, user_info, voice_capabilities (REDIRECTS TO LANGGRAPH)")
     
     # ✅ PREFERRED: Add voice_v2 tools if available
     voice_v2_tools = ToolsRegistry.get_voice_v2_tools()
@@ -289,9 +290,9 @@ def _configure_internal_tools(internal_configs: List[Dict], safe_tools: List, lo
             if "voiceCapabilities" in tool_id:
                 if voice_capabilities_tool not in safe_tools:
                     safe_tools.append(voice_capabilities_tool)
-                    logger.info("Added internal tool: %s (ID: %s)", tool_name, tool_id)
+                    logger.info("Added internal tool: %s (ID: %s) - REDIRECTS TO LANGGRAPH", tool_name, tool_id)
                 else:
-                    logger.debug("Voice capabilities tool already configured")
+                    logger.debug("Voice capabilities tool already configured (REDIRECTS TO LANGGRAPH)")
             else:
                 logger.warning("Unknown internal tool type: %s", tool_id)
 

@@ -1,6 +1,6 @@
 """
 Base Orchestrator Manager for Voice v2 Service
-Main coordination logic for voice operations
+Main coordination logic for voice operations with performance optimization integration
 """
 
 import logging
@@ -14,6 +14,7 @@ from ..schemas import STTRequest, TTSRequest, STTResponse, TTSResponse
 from ..config import VoiceConfig, get_config
 from ..exceptions import VoiceServiceError
 from ...providers.enhanced_factory import EnhancedVoiceProviderFactory
+from ..performance_manager import VoicePerformanceManager, create_performance_manager
 from .types import IOrchestratorManager
 from .provider_manager import VoiceProviderManager
 from .stt_manager import VoiceSTTManager
@@ -39,9 +40,10 @@ class VoiceOrchestratorManager(IOrchestratorManager):
         cache_manager: Optional[CacheInterface] = None,
         file_manager: Optional[FileManagerInterface] = None,
         config: Optional[VoiceConfig] = None,
-        enhanced_factory: Optional[EnhancedVoiceProviderFactory] = None
+        enhanced_factory: Optional[EnhancedVoiceProviderFactory] = None,
+        performance_manager: Optional[VoicePerformanceManager] = None
     ):
-        """Initialize orchestrator manager"""
+        """Initialize orchestrator manager with optional performance optimization"""
         logger.debug("Initializing VoiceOrchestratorManager")
 
         # Core dependencies
@@ -50,6 +52,9 @@ class VoiceOrchestratorManager(IOrchestratorManager):
         self._voice_config = config or get_config()
         self._initialized = False
 
+        # Performance optimization system
+        self._performance_manager = performance_manager
+        
         # Initialize provider system (Enhanced Factory or Legacy)
         self._initialize_provider_system(stt_providers, tts_providers, enhanced_factory)
 
@@ -58,6 +63,9 @@ class VoiceOrchestratorManager(IOrchestratorManager):
 
         # Initialize specialized managers
         self._initialize_managers()
+
+        # Initialize performance system if enabled
+        self._initialize_performance_system()
 
     def _initialize_provider_system(
         self,
@@ -112,6 +120,15 @@ class VoiceOrchestratorManager(IOrchestratorManager):
             metrics_collector=None,  # Will be set during initialization
             connection_manager=None   # Will be set during initialization
         )
+
+    def _initialize_performance_system(self) -> None:
+        """Initialize performance optimization system if enabled and not provided"""
+        if self._performance_manager is None:
+            self._performance_manager = create_performance_manager()
+            if self._performance_manager:
+                logger.info("Performance optimization system initialized")
+            else:
+                logger.debug("Performance optimization disabled via configuration")
 
     @classmethod
     async def create_with_enhanced_factory(
@@ -168,6 +185,11 @@ class VoiceOrchestratorManager(IOrchestratorManager):
             # Initialize TTS manager
             await self._tts_manager.initialize()
 
+            # Initialize performance system if available
+            if self._performance_manager:
+                await self._performance_manager.initialize()
+                logger.info("Performance optimization system activated")
+
             self._initialized = True
             logger.info("VoiceOrchestratorManager initialized successfully")
 
@@ -181,6 +203,10 @@ class VoiceOrchestratorManager(IOrchestratorManager):
         logger.info("Cleaning up VoiceOrchestratorManager")
 
         try:
+            # Cleanup performance system first
+            if hasattr(self, '_performance_manager') and self._performance_manager:
+                await self._performance_manager.cleanup()
+
             # Cleanup managers
             if hasattr(self, '_tts_manager'):
                 await self._tts_manager.cleanup()
@@ -241,6 +267,20 @@ class VoiceOrchestratorManager(IOrchestratorManager):
             stt_health = await self._stt_manager.get_health_status()
             tts_health = await self._tts_manager.get_health_status()
 
+            # Get performance system health if available
+            performance_health = None
+            if self._performance_manager:
+                performance_health = await self._performance_manager.get_health_status()
+
+            managers_health = {
+                "provider_manager": provider_health,
+                "stt_manager": stt_health,
+                "tts_manager": tts_health
+            }
+
+            if performance_health:
+                managers_health["performance_manager"] = performance_health
+
             return {
                 "status": "healthy",
                 "initialized": self._initialized,
@@ -249,11 +289,8 @@ class VoiceOrchestratorManager(IOrchestratorManager):
                     self._total_processing_time / self._operation_count
                     if self._operation_count > 0 else 0
                 ),
-                "managers": {
-                    "provider_manager": provider_health,
-                    "stt_manager": stt_health,
-                    "tts_manager": tts_health
-                },
+                "performance_enabled": self._performance_manager is not None,
+                "managers": managers_health,
                 "component": "orchestrator_manager"
             }
         except Exception as e:
@@ -274,3 +311,19 @@ class VoiceOrchestratorManager(IOrchestratorManager):
                 if self._operation_count > 0 else 0
             )
         }
+
+    @property
+    def performance_manager(self) -> Optional[VoicePerformanceManager]:
+        """Get performance manager instance if available"""
+        return self._performance_manager
+
+    @property
+    def is_performance_enabled(self) -> bool:
+        """Check if performance optimization is enabled"""
+        return self._performance_manager is not None
+
+    async def get_performance_metrics(self) -> Optional[Dict[str, Any]]:
+        """Get performance metrics if performance system is enabled"""
+        if self._performance_manager:
+            return await self._performance_manager.get_metrics()
+        return None
