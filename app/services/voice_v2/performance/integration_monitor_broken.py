@@ -1,13 +1,19 @@
 """
-Integration Performance Monitor - Clean Refactored Version
+Integration Performance Monitor - Refactored Version
 
 Simplified integration performance monitor with modular architecture.
 Reduced from 684 to ~280 lines through extraction of specialized engines.
+
+Architecture Compliance:
+- SOLID principles compliance
+- Reduced cyclomatic complexity (CCN ≤8)
+- Single Responsibility: coordination and monitoring orchestration
+- Open/Closed: extensible through engine composition
 """
 
 import asyncio
 import logging
-from typing import Dict, List, Optional, Any, Callable, Union
+from typing import Dict, List, Optional, Any, Callable
 from datetime import datetime
 
 try:
@@ -15,10 +21,10 @@ try:
     from app.services.voice_v2.performance.tts_optimizer import TTSPerformanceOptimizer
     from app.services.voice_v2.performance.langgraph_optimizer import VoiceDecisionOptimizer
 except ImportError:
-    # For development when optimizers are not available
-    STTPerformanceOptimizer = type(None)
-    TTSPerformanceOptimizer = type(None)
-    VoiceDecisionOptimizer = type(None)
+    # Mock classes for development
+    STTPerformanceOptimizer = None
+    TTSPerformanceOptimizer = None
+    VoiceDecisionOptimizer = None
 
 from .models import (
     LoadTestConfig, PerformanceAlert, PerformanceBaseline,
@@ -35,17 +41,21 @@ class IntegrationPerformanceMonitor:
     """
     Integration Performance Monitor - Simplified Architecture
 
-    Orchestrates performance monitoring through specialized engines.
+    Orchestrates performance monitoring through specialized engines:
+    - LoadTestEngine: Load testing operations
+    - BaselineEngine: Baseline establishment and comparison
+    - DashboardDataGenerator: Dashboard data preparation
+
     Reduced cyclomatic complexity through delegation pattern.
     """
 
     def __init__(self, load_test_config: LoadTestConfig):
         self.config = load_test_config
 
-        # Component optimizers (optional)
-        self.stt_optimizer: Optional[Any] = None
-        self.tts_optimizer: Optional[Any] = None
-        self.decision_optimizer: Optional[Any] = None
+        # Component optimizers
+        self.stt_optimizer: Optional[STTPerformanceOptimizer] = None
+        self.tts_optimizer: Optional[TTSPerformanceOptimizer] = None
+        self.decision_optimizer: Optional[VoiceDecisionOptimizer] = None
 
         # Specialized engines
         self.load_tester = LoadTestEngine(load_test_config)
@@ -62,12 +72,12 @@ class IntegrationPerformanceMonitor:
         # Alert callbacks
         self.alert_callbacks: List[Callable[[PerformanceAlert], None]] = []
 
-        logger.info("IntegrationPerformanceMonitor initialized")
+        logger.info("IntegrationPerformanceMonitor initialized with modular architecture")
 
     def set_optimizers(self,
-                      stt_optimizer: Any,
-                      tts_optimizer: Any,
-                      decision_optimizer: Any) -> None:
+                      stt_optimizer: STTPerformanceOptimizer,
+                      tts_optimizer: TTSPerformanceOptimizer,
+                      decision_optimizer: VoiceDecisionOptimizer) -> None:
         """Set component optimizers for monitoring"""
         self.stt_optimizer = stt_optimizer
         self.tts_optimizer = tts_optimizer
@@ -112,25 +122,33 @@ class IntegrationPerformanceMonitor:
                 await asyncio.sleep(30)  # Collect metrics every 30 seconds
         except asyncio.CancelledError:
             logger.info("Monitoring loop cancelled")
-        except Exception as exc:
-            logger.error("Monitoring loop error: %s", exc, exc_info=True)
+        except Exception as e:
+            logger.error(f"Monitoring loop error: {e}", exc_info=True)
 
     async def _collect_performance_metrics(self) -> None:
         """Collect current performance metrics"""
         try:
-            # Simulate metric collection
+            # Simulate metric collection from optimizers
             if self.stt_optimizer and self.tts_optimizer and self.decision_optimizer:
+                # Get recent performance data from optimizers
                 await self._update_current_metrics()
+
+                # Add to dashboard data
                 self.dashboard_generator.add_performance_data(self.current_metrics)
+
+                # Check for alerts
                 await self._check_performance_alerts()
 
-        except Exception as exc:
-            logger.error("Error collecting performance metrics: %s", exc, exc_info=True)
+        except Exception as e:
+            logger.error(f"Error collecting performance metrics: {e}", exc_info=True)
 
     async def _update_current_metrics(self) -> None:
         """Update current metrics from optimizers"""
-        # Mock implementation
+        # This would integrate with actual optimizer metrics
+        # For now, using mock data structure
         self.current_metrics = EndToEndMetrics()
+
+        # Add mock recent performance data
         self.current_metrics.stt_latencies = [2.1, 2.3, 2.0]
         self.current_metrics.tts_latencies = [2.8, 3.1, 2.9]
         self.current_metrics.decision_latencies = [0.5, 0.6, 0.4]
@@ -148,10 +166,9 @@ class IntegrationPerformanceMonitor:
 
         # Check latency alert
         if avg_total_latency > 8.0:
-            severity = AlertSeverity.WARNING if avg_total_latency < 10.0 else AlertSeverity.CRITICAL
             alert = PerformanceAlert(
                 alert_id=f"latency_alert_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                severity=severity,
+                severity=AlertSeverity.WARNING if avg_total_latency < 10.0 else AlertSeverity.CRITICAL,
                 metric_type=MetricType.TOTAL_LATENCY,
                 current_value=avg_total_latency,
                 threshold_value=8.0,
@@ -179,10 +196,10 @@ class IntegrationPerformanceMonitor:
         for callback in self.alert_callbacks:
             try:
                 callback(alert)
-            except Exception as exc:
-                logger.error("Alert callback error: %s", exc, exc_info=True)
+            except Exception as e:
+                logger.error(f"Alert callback error: {e}", exc_info=True)
 
-        logger.warning("Performance alert triggered: %s", alert.message)
+        logger.warning(f"Performance alert triggered: {alert.message}")
 
     # Delegation to specialized engines
 
@@ -218,11 +235,12 @@ class IntegrationPerformanceMonitor:
 
         if success_rate >= 0.99 and avg_latency <= 5.0:
             return PerformanceStatus.EXCELLENT
-        if success_rate >= 0.95 and avg_latency <= 7.0:
+        elif success_rate >= 0.95 and avg_latency <= 7.0:
             return PerformanceStatus.GOOD
-        if success_rate >= 0.90 and avg_latency <= 10.0:
+        elif success_rate >= 0.90 and avg_latency <= 10.0:
             return PerformanceStatus.WARNING
-        return PerformanceStatus.CRITICAL
+        else:
+            return PerformanceStatus.CRITICAL
 
     def get_performance_summary(self) -> Dict[str, Any]:
         """Get performance summary"""
@@ -231,10 +249,7 @@ class IntegrationPerformanceMonitor:
             "load_test_active": self.load_tester.is_active,
             "monitoring_active": self.monitoring_active,
             "total_baselines": len(self.baseline_engine.baselines),
-            "active_alerts": len([
-                a for a in self.dashboard_generator.active_alerts
-                if not a.resolved
-            ]),
+            "active_alerts": len([a for a in self.dashboard_generator.active_alerts if not a.resolved]),
             "last_metrics": {
                 "total_latency": self.current_metrics.average_total_latency,
                 "success_rate": self.current_metrics.overall_success_rate,
@@ -244,12 +259,8 @@ class IntegrationPerformanceMonitor:
 
     async def health_check(self) -> Dict[str, Any]:
         """Perform health check"""
-        task_status = "healthy"
-        if self.monitoring_task and self.monitoring_task.done():
-            task_status = "stopped"
-
         return {
-            "monitor_status": task_status,
+            "monitor_status": "healthy" if not self.monitoring_task or not self.monitoring_task.done() else "stopped",
             "load_tester": "ready" if not self.load_tester.is_active else "running",
             "baseline_engine": "ready",
             "dashboard_generator": "ready",

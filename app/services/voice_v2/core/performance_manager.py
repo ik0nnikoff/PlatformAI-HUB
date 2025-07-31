@@ -15,7 +15,6 @@ Architecture Compliance:
 - Lifecycle management best practices
 """
 
-import asyncio
 import logging
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
@@ -23,7 +22,7 @@ from datetime import datetime
 from enum import Enum
 
 from app.core.config import settings
-from app.services.voice_v2.performance.stt_optimizer import STTPerformanceOptimizer, OptimizationConfig
+from app.services.voice_v2.performance.stt_optimizer import STTPerformanceOptimizer, STTOptimizationConfig
 from app.services.voice_v2.performance.tts_optimizer import TTSPerformanceOptimizer, TTSOptimizationConfig
 from app.services.voice_v2.performance.langgraph_optimizer import VoiceDecisionOptimizer
 from app.services.voice_v2.performance.integration_monitor import IntegrationPerformanceMonitor, LoadTestConfig
@@ -257,9 +256,9 @@ class VoicePerformanceManager:
         self._components_status['validation_suite'] = True
         logger.info("Validation suite initialized")
     
-    def _create_stt_config(self) -> OptimizationConfig:
+    def _create_stt_config(self) -> STTOptimizationConfig:
         """Create STT optimization configuration from centralized settings"""
-        return OptimizationConfig(
+        return STTOptimizationConfig(
             target_latency=self.config.stt_target_latency,
             enable_parallel_attempts=self.config.stt_parallel_enabled,
             dynamic_ordering=True,  # Always enabled for optimization
@@ -268,7 +267,6 @@ class VoicePerformanceManager:
             # Use settings-based configuration
             max_connections=settings.VOICE_V2_STT_MAX_CONNECTIONS,
             max_connections_per_host=settings.VOICE_V2_STT_PARALLEL_REQUESTS,
-            cache_max_size=settings.VOICE_V2_STT_CACHE_SIZE
         )
     
     def _create_tts_config(self) -> TTSOptimizationConfig:

@@ -118,8 +118,8 @@ class AudioProcessor:
     ) -> AudioFormat:
         """
         Определение формата аудио по magic numbers и расширению.
-
-        Performance: Синхронная операция, < 1ms для обычных файлов.
+        
+        Разбито на подметоды для уменьшения цикломатической сложности.
 
         Args:
             audio_data: Бинарные данные аудио
@@ -136,34 +136,9 @@ class AudioProcessor:
 
         # Определение по magic numbers (более надежно)
         if len(audio_data) >= 12:
-            # MP3: ID3 tag или MPEG frame header
-            if (audio_data.startswith(b'ID3') or
-                audio_data.startswith(b'\xff\xfb') or
-                audio_data.startswith(b'\xff\xf3') or
-                audio_data.startswith(b'\xff\xf2')):
-                return AudioFormat.MP3
-
-            # FLAC: fLaC (должен быть перед WAV)
-            if audio_data.startswith(b'fLaC'):
-                return AudioFormat.FLAC
-
-            # OPUS: OpusHead в OGG контейнере (должен быть перед OGG)
-            if (audio_data.startswith(b'OggS') and b'OpusHead' in audio_data[:32]):
-                return AudioFormat.OPUS
-
-            # WAV: RIFF + WAVE
-            if (audio_data.startswith(b'RIFF') and
-                len(audio_data) >= 12 and audio_data[8:12] == b'WAVE'):
-                return AudioFormat.WAV
-
-            # OGG: OggS (общий случай)
-            if audio_data.startswith(b'OggS'):
-                return AudioFormat.OGG
-
-            # M4A/AAC: может иметь различные заголовки
-            if (audio_data.startswith(b'\xff\xf1') or
-                audio_data.startswith(b'\xff\xf9')):
-                return AudioFormat.M4A
+            detected_format = AudioProcessor._detect_by_magic_numbers(audio_data)
+            if detected_format:
+                return detected_format
 
         # Fallback по расширению файла
         if filename:
@@ -171,6 +146,62 @@ class AudioProcessor:
 
         # По умолчанию считаем WAV (наиболее универсальный)
         return AudioFormat.WAV
+
+    @staticmethod
+    def _detect_by_magic_numbers(audio_data: bytes) -> Optional[AudioFormat]:
+        """Определение формата по magic numbers."""
+        # Проверяем MP3 форматы
+        if AudioProcessor._is_mp3_format(audio_data):
+            return AudioFormat.MP3
+        
+        # Проверяем FLAC (должен быть перед WAV)
+        if audio_data.startswith(b'fLaC'):
+            return AudioFormat.FLAC
+
+        # Проверяем OPUS в OGG контейнере (должен быть перед OGG)
+        if AudioProcessor._is_opus_format(audio_data):
+            return AudioFormat.OPUS
+
+        # Проверяем WAV
+        if AudioProcessor._is_wav_format(audio_data):
+            return AudioFormat.WAV
+
+        # Проверяем OGG (общий случай)
+        if audio_data.startswith(b'OggS'):
+            return AudioFormat.OGG
+
+        # Проверяем M4A/AAC
+        if AudioProcessor._is_m4a_format(audio_data):
+            return AudioFormat.M4A
+
+        return None
+
+    @staticmethod
+    def _is_mp3_format(audio_data: bytes) -> bool:
+        """Проверка на MP3 формат."""
+        return (audio_data.startswith(b'ID3') or
+                audio_data.startswith(b'\xff\xfb') or
+                audio_data.startswith(b'\xff\xf3') or
+                audio_data.startswith(b'\xff\xf2'))
+
+    @staticmethod
+    def _is_opus_format(audio_data: bytes) -> bool:
+        """Проверка на OPUS формат."""
+        return (audio_data.startswith(b'OggS') and 
+                b'OpusHead' in audio_data[:32])
+
+    @staticmethod
+    def _is_wav_format(audio_data: bytes) -> bool:
+        """Проверка на WAV формат."""
+        return (audio_data.startswith(b'RIFF') and
+                len(audio_data) >= 12 and 
+                audio_data[8:12] == b'WAVE')
+
+    @staticmethod
+    def _is_m4a_format(audio_data: bytes) -> bool:
+        """Проверка на M4A/AAC формат."""
+        return (audio_data.startswith(b'\xff\xf1') or
+                audio_data.startswith(b'\xff\xf9'))
 
     @staticmethod
     def _detect_format_by_extension(filename: str) -> AudioFormat:

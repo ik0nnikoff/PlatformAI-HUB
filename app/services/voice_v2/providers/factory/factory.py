@@ -222,7 +222,7 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
         # Map provider type to provider name
         provider_name_map = {
             "openai": "openai_stt",
-            "google": "google_stt", 
+            "google": "google_stt",
             "yandex": "yandex_stt"
         }
 
@@ -234,17 +234,17 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
         try:
             # Get default config for provider
             config = self._get_default_config_for_provider(provider_name)
-            
+
             # Create provider using generic create_provider method
             provider = await self.create_provider(provider_name, config)
-            
+
             # Validate it's actually an STT provider
             if not isinstance(provider, BaseSTTProvider):
                 logger.error(f"Provider {provider_name} is not an STT provider")
                 return None
-                
+
             return provider
-            
+
         except Exception as e:
             logger.error(f"Failed to create STT provider {provider_type}: {e}")
             return None
@@ -274,17 +274,17 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
         try:
             # Get default config for provider
             config = self._get_default_config_for_provider(provider_name)
-            
+
             # Create provider using generic create_provider method
             provider = await self.create_provider(provider_name, config)
-            
+
             # Validate it's actually a TTS provider
             if not isinstance(provider, BaseTTSProvider):
                 logger.error(f"Provider {provider_name} is not a TTS provider")
                 return None
-                
+
             return provider
-            
+
         except Exception as e:
             logger.error(f"Failed to create TTS provider {provider_type}: {e}")
             return None
@@ -443,62 +443,69 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
             return {}
 
         provider_info = self._default_providers[provider_name]
-        
-        # Import settings to get real API keys
-        from app.core.config import settings
 
-        # Default configs by provider type with real API keys
+        # Map provider type to config generator
         if provider_info.provider_type == ProviderType.OPENAI:
-            openai_key = settings.OPENAI_API_KEY.get_secret_value() if settings.OPENAI_API_KEY else ""
-            if provider_info.category == ProviderCategory.STT:
-                return {
-                    "model": "whisper-1",
-                    "timeout": 30.0,
-                    "max_retries": 3,
-                    "api_key": openai_key
-                }
-            else:  # TTS
-                return {
-                    "model": "tts-1",
-                    "voice": "alloy",
-                    "timeout": 30.0,
-                    "api_key": openai_key
-                }
+            return self._get_openai_config(provider_info)
         elif provider_info.provider_type == ProviderType.GOOGLE:
-            if provider_info.category == ProviderCategory.STT:
-                return {
-                    "timeout": 30.0,
-                    "max_retries": 3,
-                    "language_code": "ru-RU",
-                    "credentials_path": settings.GOOGLE_APPLICATION_CREDENTIALS or "",
-                    "project_id": settings.GOOGLE_CLOUD_PROJECT_ID or ""
-                }
-            else:  # TTS
-                return {
-                    "timeout": 30.0,
-                    "language_code": "ru-RU",
-                    "credentials_path": settings.GOOGLE_APPLICATION_CREDENTIALS or "",
-                    "project_id": settings.GOOGLE_CLOUD_PROJECT_ID or ""
-                }
+            return self._get_google_config(provider_info)
         elif provider_info.provider_type == ProviderType.YANDEX:
-            yandex_key = settings.YANDEX_API_KEY.get_secret_value() if settings.YANDEX_API_KEY else ""
-            if provider_info.category == ProviderCategory.STT:
-                return {
-                    "timeout": 30.0,
-                    "max_retries": 3,
-                    "language": "ru",
-                    "api_key": yandex_key,
-                    "folder_id": settings.YANDEX_FOLDER_ID or ""
-                }
-            else:  # TTS
-                return {
-                    "timeout": 30.0,
-                    "language": "ru",
-                    "api_key": yandex_key,
-                    "folder_id": settings.YANDEX_FOLDER_ID or ""
-                }
+            return self._get_yandex_config(provider_info)
 
         return {}
+
+    def _get_openai_config(self, provider_info) -> Dict[str, Any]:
+        """Get OpenAI provider configuration"""
+        from app.core.config import settings
+        openai_key = settings.OPENAI_API_KEY.get_secret_value() if settings.OPENAI_API_KEY else ""
+
+        if provider_info.category == ProviderCategory.STT:
+            return {
+                "model": "whisper-1",
+                "timeout": 30.0,
+                "max_retries": 3,
+                "api_key": openai_key
+            }
+        else:  # TTS
+            return {
+                "model": "tts-1",
+                "voice": "alloy",
+                "timeout": 30.0,
+                "api_key": openai_key
+            }
+
+    def _get_google_config(self, provider_info) -> Dict[str, Any]:
+        """Get Google provider configuration"""
+        from app.core.config import settings
+
+        base_config = {
+            "timeout": 30.0,
+            "language_code": "ru-RU",
+            "credentials_path": settings.GOOGLE_APPLICATION_CREDENTIALS or "",
+            "project_id": settings.GOOGLE_CLOUD_PROJECT_ID or ""
+        }
+
+        if provider_info.category == ProviderCategory.STT:
+            base_config["max_retries"] = 3
+
+        return base_config
+
+    def _get_yandex_config(self, provider_info) -> Dict[str, Any]:
+        """Get Yandex provider configuration"""
+        from app.core.config import settings
+        yandex_key = settings.YANDEX_API_KEY.get_secret_value() if settings.YANDEX_API_KEY else ""
+
+        base_config = {
+            "timeout": 30.0,
+            "language": "ru",
+            "api_key": yandex_key,
+            "folder_id": settings.YANDEX_FOLDER_ID or ""
+        }
+
+        if provider_info.category == ProviderCategory.STT:
+            base_config["max_retries"] = 3
+
+        return base_config
 
     def get_connection_manager(self) -> IConnectionManager:
         """Get connection manager instance"""
@@ -530,13 +537,13 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
     def _has_required_api_keys(self, provider_type: str) -> bool:
         """Check if provider has required API keys configured"""
         from app.core.config import settings
-        
+
         provider_type = provider_type.lower()
-        
+
         if provider_type == "openai":
             return settings.OPENAI_API_KEY is not None
         elif provider_type == "google":
-            return (settings.GOOGLE_APPLICATION_CREDENTIALS is not None and 
+            return (settings.GOOGLE_APPLICATION_CREDENTIALS is not None and
                    settings.GOOGLE_CLOUD_PROJECT_ID is not None)
         elif provider_type == "yandex":
             return settings.YANDEX_API_KEY is not None

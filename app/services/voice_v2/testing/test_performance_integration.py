@@ -18,9 +18,7 @@ Test Coverage:
 """
 
 import pytest
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Dict, Any
 
 from app.services.voice_v2.core.performance_manager import (
     VoicePerformanceManager, PerformanceConfig, PerformanceLevel,

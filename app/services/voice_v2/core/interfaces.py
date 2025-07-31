@@ -54,6 +54,13 @@ class ProviderType(Enum):
     YANDEX = "yandex"
 
 
+class PerformanceTier(Enum):
+    """Performance tier classification for optimization"""
+    CRITICAL = "critical"    # Highest priority, requires fastest response
+    HIGH = "high"           # High priority, balanced performance  
+    STANDARD = "standard"   # Standard priority, default optimization
+
+
 class CacheBackend(Enum):
     """Cache backend types"""
     REDIS = "redis"
