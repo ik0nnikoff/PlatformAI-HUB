@@ -14,16 +14,23 @@
 - **Фаза 2**: ✅ **100% (18/18 задач)** - Базовые компоненты **ЗАВЕРШЕНА**  
 - **Фаза 3**: ✅ **100% (15/15 задач)** - STT/TTS провайдеры **ЗАВЕРШЕНА**
 - **Фаза 4**: ✅ **100% (25/25 задач)** - LangGraph интеграция **ЗАВЕРШЕНА**
-- **Фаза 5**: ⏳ **0% (20/20 задач)** - Production deployment **НЕ НАЧАТА**
+- **Фаза 5**: ⏳ **0% (16/16 задач)** - Production migration и legacy cleanup **НЕ НАЧАТА**
+- **Фаза 6**: ⏳ **0% (20/20 задач)** - Production deployment **НЕ НАЧАТА**
 
-> **🎯 ТЕКУЩИЙ ФОКУС**: Переход к Phase 4.2 - LangGraph tools creation на основе консолидированного анализа Phase 4.1
+> **🎯 ТЕКУЩИЙ ФОКУС**: Переход к Phase 5 - Production migration и legacy cleanup на основе Phase 4.9 анализа
 
-### **Ключевые достижения Phase 4.1**:
-- ✅ **Консолидированный анализ**: `MD/Reports/Phase_4_1_CONSOLIDATED_Analysis_Report.md` создан
-- ✅ **Архитектурные решения определены**: Centralized voice decisions в LangGraph, execution в voice_v2
-- ✅ **Migration strategy**: Primitive keyword matching → semantic voice analysis
-- ✅ **Performance targets**: +100-500ms decision overhead justified by 30-35% accuracy improvement
-- ✅ **Phase 4.2 requirements**: Detailed tasks с references к analysis reports
+### **Ключевые достижения Phase 4**:
+- ✅ **Voice V2 Architecture**: Полная модульная архитектура готова (85.4% production readiness)
+- ✅ **LangGraph Integration**: Workflow integration и tools созданы
+- ✅ **Performance baseline**: STT 4.2-4.8s, TTS 3.8-4.5s установлен
+- ✅ **Code quality**: 45 файлов, ~12,000 строк, architectural compliance достигнут
+
+### **Phase 5 критические задачи (на основе Phase 4.9)**:
+- 🎯 **Intent detection elimination**: Удаление legacy intent detection logic
+- 🎯 **voice_capabilities_tool removal**: Deprecation и replacement LangGraph решениями
+- 🎯 **Integration migration**: telegram_bot.py, whatsapp_bot.py, agent_runner.py на voice_v2
+- 🎯 **Performance optimization**: STT ≤3.5s, TTS ≤3.0s targets
+- 🎯 **Production readiness**: >95% production readiness для deployment
 
 ### **Целевые метрики прогресс**:
 - [x] **Количество файлов**: ✅ 45 файлов (vs 113 в current) - **ЦЕЛЬ ДОСТИГНУТА**
@@ -1248,6 +1255,62 @@
   - [x] **DELETE RELATED TESTS**: Remove test files for deleted anti-pattern components ✅
   - [x] **UPDATE IMPORTS**: Clean up all references to deleted tools across codebase ✅
   - [x] **VALIDATE REMOVAL**: Ensure no broken dependencies after anti-pattern removal ✅
+
+---
+
+### **4.9 Voice V2 System Comprehensive Analysis & Validation (Повторная фаза 4.7)** ✅ **ЗАВЕРШЕНО**
+
+> **📋 КРИТИЧЕСКИЙ КОНТЕКСТ**: Комплексный анализ всей системы после завершения Phase 4.8
+> - **🎯 ЦЕЛЬ**: Повторить фазу 4.7 с полным изучением проекта, агентов, интеграций и голосовой системы
+> - **📄 БАЗИРОВАТЬСЯ НА**: Изучение цепочки от пользовательского голосового сообщения до ответа агента
+> - **🔍 ФОКУС**: Message flow analysis, Voice V2 integration, LangGraph workflow, Production readiness
+
+**🎯 PHASE 4.9 OBJECTIVE: Comprehensive system analysis и final production readiness assessment**
+
+- [x] **4.9.1** Message Flow Analysis ✅ **ЗАВЕРШЕНО** (31.01.2025)
+  - [x] **E2E VOICE CHAIN**: Telegram/WhatsApp → Integration Bot → Redis → AgentRunner → LangGraph → Voice V2 ✅
+  - [x] **TELEGRAM INTEGRATION**: Complete voice message processing chain analysis ✅
+  - [x] **WHATSAPP INTEGRATION**: PTT message handling и voice response workflow ✅
+  - [x] **REDIS COMMUNICATION**: Pub/Sub message flow validation ✅
+  - [x] **LANGGRAPH WORKFLOW**: Agent decision making и voice tools integration ✅
+  - 🎯 **РЕЗУЛЬТАТ**: 95/100 score - Complete E2E flow validated, minor Voice V2 migration needed
+  - 📄 **Отчет**: `MD/Reports/Phase_4_9_comprehensive_analysis_report.md` ✅
+
+- [x] **4.9.2** Voice V2 Architecture Integration Assessment ✅ **ЗАВЕРШЕНО** (31.01.2025)
+  - [x] **VOICE V2 COMPONENTS**: Full analysis of modular orchestrator, providers, tools ✅
+  - [x] **INTEGRATION STATUS**: Current production integration state assessment ✅
+  - [x] **MIGRATION REQUIREMENTS**: Gap analysis between current и Voice V2 systems ✅
+  - [x] **SOLID COMPLIANCE**: Architecture principles validation ✅
+  - [x] **LANGGRAPH TOOLS**: voice_capabilities_tool integration verification ✅
+  - 🎯 **РЕЗУЛЬТАТ**: 85/100 score - Architecture ready, migration needed for full integration
+  - 📄 **Отчет**: Integrated in comprehensive analysis report ✅
+
+- [x] **4.9.3** Production Readiness Final Assessment ✅ **ЗАВЕРШЕНО** (31.01.2025)
+  - [x] **CODE QUALITY**: SOLID principles compliance, metrics validation ✅
+  - [x] **PERFORMANCE ANALYSIS**: E2E latency breakdown, throughput measurement ✅
+  - [x] **INTEGRATION QUALITY**: LangGraph workflow, platform integration assessment ✅
+  - [x] **DEPLOYMENT READINESS**: Go/No-Go decision с clear requirements ✅
+  - [x] **IMPROVEMENT ROADMAP**: 3-tier optimization plan с timeline ✅
+  - 🎯 **РЕЗУЛЬТАТ**: 85.4/100 Final Production Readiness Score - CONDITIONAL GO approved
+  - 📄 **Отчет**: Complete assessment in comprehensive analysis report ✅
+
+- [x] **4.9.4** Critical Blockers Identification ✅ **ЗАВЕРШЕНО** (31.01.2025)
+  - [x] **VOICE V2 MIGRATION**: Integration platforms migration to voice_v2 orchestrator ✅
+  - [x] **PERFORMANCE OPTIMIZATION**: Latency optimization requirements (4.8s → <3.5s) ✅
+  - [x] **TESTING GAPS**: Integration test coverage improvement needs ✅
+  - [x] **DEPLOYMENT STRATEGY**: Staged rollout plan с monitoring setup ✅
+  - [x] **SUCCESS CRITERIA**: Clear production deployment requirements ✅
+  - 🎯 **РЕЗУЛЬТАТ**: 3 Critical blockers identified с clear resolution path
+  - 📄 **Отчет**: Detailed improvement roadmap provided ✅
+
+- [x] **4.9.5** Final Production Recommendation ✅ **ЗАВЕРШЕНО** (31.01.2025)
+  - [x] **GO/NO-GO DECISION**: CONDITIONAL GO с Pre-Production Phase approved ✅
+  - [x] **DEPLOYMENT TIMELINE**: 3-week staged rollout plan ✅
+  - [x] **RISK MITIGATION**: Comprehensive risk assessment и mitigation strategies ✅
+  - [x] **MONITORING STRATEGY**: Production monitoring и alerting recommendations ✅
+  - [x] **SUCCESS METRICS**: Clear KPIs для production deployment validation ✅
+  - 🎯 **РЕЗУЛЬТАТ**: Production deployment APPROVED с conditional requirements
+  - 📄 **Отчет**: `MD/Reports/Phase_4_9_comprehensive_analysis_report.md` - Complete production assessment ✅
   - 🎯 **РЕЗУЛЬТАТ**: 1200+ lines of anti-pattern code eliminated (95% code reduction) ✅
   - 📋 **CRITICAL**: Follow deletion sequence from critical findings report ✅
   - 📄 **СЛЕДОВАТЬ**: `MD/Reports/Voice_v2_LangGraph_AntiPattern_Critical_Finding.md` - Deletion strategy ✅
@@ -1294,7 +1357,173 @@
 
 ---
 
-## 🔧 **ФАЗА 5: PRODUCTION DEPLOYMENT И OPTIMIZATION**
+## 🔧 **ФАЗА 5: PRODUCTION MIGRATION И LEGACY CLEANUP**
+
+**Срок**: 2-3 дня  
+**Приоритет**: Высокий  
+**Статус**: ⏳ **НЕ НАЧАТА**
+
+> **🎯 КРИТИЧЕСКОЕ ОБОСНОВАНИЕ**: На основе Phase 4.9 анализа устранить gap'ы и подготовить систему к production
+> - **📄 ИСТОЧНИК**: `MD/Reports/Phase_4_9_comprehensive_analysis_report.md` (85.4% production readiness)
+> - **🔍 FOCUS**: Устранить gap'ы разделов 1.1, 1.2, 2.1, 2.2, 3.1, 4 из Phase 4.9 отчета
+> - **⚡ ЦЕЛЬ**: Достичь >95% production readiness перед deployment
+
+### **5.1 Intent detection и workflow cleanup (5 задач)**
+
+> **📋 КРИТИЧЕСКИЙ КОНТЕКСТ**: Устранение intent detection gap'ов (Phase 4.9 section 1.1-1.2)
+> - **❌ ПРОБЛЕМА**: Legacy intent detection logic в voice_orchestrator.py, intent_utils.py
+> - **❌ ПРОБЛЕМА**: voice_capabilities_tool направляет пользователей на keyword matching
+> - **✅ РЕШЕНИЕ**: Полное удаление intent detection, передача решений LangGraph агентам
+
+- [ ] **5.1.1** Удаление intent_utils.py ⏳ **НЕ НАЧАТО**
+  - [ ] **BACKUP**: Создать backup в `backup/legacy_voice/intent_utils.py`
+  - [ ] **CODE REMOVAL**: Удалить `app/services/voice/intent_utils.py` (300+ строк)
+  - [ ] **DEPENDENCY CLEANUP**: Убрать все import'ы intent_utils из проекта
+  - [ ] **VERIFICATION**: Подтвердить отсутствие VoiceIntentDetector, AgentResponseProcessor usage
+  - [ ] **TESTS CLEANUP**: Удалить связанные тесты в tests/voice/
+  - 📋 **КРИТИЧНО**: Phase 4.9 section 1.1 - Intent detection elimination
+
+- [ ] **5.1.2** voice_capabilities_tool elimination ⏳ **НЕ НАЧАТО**
+  - [ ] **DEPRECATION**: Пометить voice_capabilities_tool как deprecated в tools_registry.py
+  - [ ] **REDIRECT LOGIC**: Изменить voice_capabilities_tool для направления на LangGraph решения
+  - [ ] **LANGGRAPH INTEGRATION**: Убрать voice_capabilities_tool из agent tools списка
+  - [ ] **DOCUMENTATION**: Обновить tool описания, убрать keyword matching references
+  - [ ] **USER GUIDANCE**: Обновить агент промты для contextual voice decisions
+  - 📋 **КРИТИЧНО**: Phase 4.9 section 1.2 - Legacy tool elimination
+
+- [ ] **5.1.3** voice_orchestrator.py intent methods cleanup ⏳ **НЕ НАЧАТО**
+  - [ ] **METHOD REMOVAL**: Удалить `synthesize_response_with_intent*` методы
+  - [ ] **METHOD REMOVAL**: Удалить `process_voice_message_with_intent*` методы  
+  - [ ] **SIMPLIFICATION**: Оставить только clean execution methods (process_voice_message, synthesize_response)
+  - [ ] **SHOULD_PROCESS_LOGIC**: Удалить voice_settings.should_process_voice_intent проверки
+  - [ ] **API CLEANUP**: Упростить VoiceOrchestrator API до pure execution layer
+  - 📋 **КРИТИЧНО**: Phase 4.9 section 2.1 - Orchestrator simplification
+
+- [ ] **5.1.4** Legacy orchestrator_new.py removal ⏳ **НЕ НАЧАТО**
+  - [ ] **BACKUP**: Создать backup в `backup/legacy_voice/orchestrator_new.py`
+  - [ ] **FILE REMOVAL**: Удалить `app/services/voice_v2/core/orchestrator_new.py`
+  - [ ] **IMPORT CLEANUP**: Убрать все import'ы orchestrator_new из проекта
+  - [ ] **MIGRATION VERIFICATION**: Подтвердить что все используют voice_v2.orchestrator
+  - [ ] **INTEGRATION TESTS**: Запустить tests для подтверждения отсутствия regressions
+  - 📋 **КРИТИЧНО**: Phase 4.9 section 2.2 - Legacy interface removal
+
+- [ ] **5.1.5** LangGraph workflow voice decision integration ⏳ **НЕ НАЧАТО**
+  - [ ] **AGENT STATE**: Добавить voice_decision_context в AgentState
+  - [ ] **CONDITIONAL ROUTING**: LangGraph conditional edges для voice decisions
+  - [ ] **USER CONTEXT**: Использовать user_data, chat_history для voice intent analysis
+  - [ ] **WORKFLOW TESTING**: Integration tests для voice decision workflow
+  - [ ] **PERFORMANCE VALIDATION**: Подтвердить <500ms decision overhead (Phase 4.9 target)
+  - 📋 **КРИТИЧНО**: Phase 4.9 section 3.1 - LangGraph decision integration
+
+### **5.2 Integration layer migration (4 задач)**
+
+> **📋 КРИТИЧЕСКИЙ КОНТЕКСТ**: Миграция integration (telegram_bot.py, whatsapp_bot.py) на voice_v2
+> - **❌ ПРОБЛЕМА**: Integrations используют legacy voice_orchestrator.py
+> - **✅ РЕШЕНИЕ**: Direct migration to voice_v2.orchestrator с simplified API
+
+- [ ] **5.2.1** telegram_bot.py voice migration ⏳ **НЕ НАЧАТО**
+  - [ ] **IMPORT REPLACEMENT**: voice_orchestrator → voice_v2.orchestrator
+  - [ ] **METHOD UPDATES**: Использовать simplified voice_v2 API (без intent methods)
+  - [ ] **ERROR HANDLING**: Adapter voice_v2 error patterns для telegram integration
+  - [ ] **TESTING**: Integration tests telegram voice message flow
+  - [ ] **PERFORMANCE VALIDATION**: STT latency ≤3.5s (Phase 4.9 target)
+  - 📋 **КРИТИЧНО**: Phase 4.9 section 4 - Integration performance
+
+- [ ] **5.2.2** whatsapp_bot.py voice migration ⏳ **НЕ НАЧАТО**
+  - [ ] **IMPORT REPLACEMENT**: voice_orchestrator → voice_v2.orchestrator
+  - [ ] **METHOD UPDATES**: Использовать simplified voice_v2 API (без intent methods)
+  - [ ] **ERROR HANDLING**: Adapter voice_v2 error patterns для WhatsApp integration
+  - [ ] **TESTING**: Integration tests WhatsApp voice message flow
+  - [ ] **PERFORMANCE VALIDATION**: TTS latency ≤4.8s (Phase 4.9 target)
+  - 📋 **КРИТИЧНО**: Phase 4.9 section 4 - Integration performance
+
+- [ ] **5.2.3** agent_runner.py voice migration ⏳ **НЕ НАЧАТО**
+  - [ ] **ORCHESTRATOR IMPORT**: voice_orchestrator → voice_v2.orchestrator
+  - [ ] **TTS PROCESSING**: Simplified _process_response_with_tts без intent checking
+  - [ ] **LANGGRAPH DELEGATION**: Voice decisions delegated to LangGraph workflow
+  - [ ] **PERFORMANCE OPTIMIZATION**: Voice decision caching for repeated patterns
+  - [ ] **INTEGRATION TESTING**: End-to-end agent voice response testing
+  - 📋 **КРИТИЧНО**: Центральная точка voice decisions
+
+- [ ] **5.2.4** Legacy voice_orchestrator.py deprecation ⏳ **НЕ НАЧАТО**
+  - [ ] **BACKUP**: Создать backup в `backup/legacy_voice/voice_orchestrator.py`
+  - [ ] **DEPRECATION NOTICE**: Добавить deprecation warnings в voice_orchestrator.py
+  - [ ] **DOCUMENTATION**: Пометить как deprecated в docstrings
+  - [ ] **MIGRATION GUIDE**: Создать guide для migration от legacy к voice_v2
+  - [ ] **REMOVAL TIMELINE**: План complete removal после production validation
+  - 📋 **КРИТИЧНО**: Controlled deprecation без breaking changes
+
+### **5.3 Performance optimization (4 задач)**
+
+> **📋 КРИТИЧЕСКИЙ КОНТЕКСТ**: Достижение production performance targets (Phase 4.9 section 4)
+> - **📊 ТЕКУЩИЙ**: STT 4.2-4.8s, TTS 3.8-4.5s  
+> - **🎯 ЦЕЛЬ**: STT ≤3.5s, TTS ≤3.0s (+10% от current baseline)
+
+- [ ] **5.3.1** STT performance optimization ⏳ **НЕ НАЧАТО**
+  - [ ] **PROVIDER ORDERING**: Оптимизировать fallback chain (OpenAI → Google → Yandex)
+  - [ ] **PARALLEL ATTEMPTS**: Experimental parallel provider calls для critical paths
+  - [ ] **CACHE OPTIMIZATION**: STT cache hit rate >85% для repeated audio patterns
+  - [ ] **CONNECTION POOLING**: Provider connection pool sizing optimization
+  - [ ] **BENCHMARKING**: Automated performance testing с target ≤3.5s average
+  - 📋 **ЦЕЛЬ**: Phase 4.9 performance improvement +10%
+
+- [ ] **5.3.2** TTS performance optimization ⏳ **НЕ НАЧАТО**
+  - [ ] **PROVIDER ORDERING**: Optimize TTS provider priority for latency
+  - [ ] **RESPONSE CACHING**: TTS response caching для common phrases/responses  
+  - [ ] **STREAMING TTS**: Implement TTS streaming для long responses (>200 chars)
+  - [ ] **COMPRESSION**: Audio compression optimization для transmission speed
+  - [ ] **BENCHMARKING**: Automated performance testing с target ≤3.0s average
+  - 📋 **ЦЕЛЬ**: Phase 4.9 performance improvement +10%
+
+- [ ] **5.3.3** LangGraph voice decision optimization ⏳ **НЕ НАЧАТО**
+  - [ ] **DECISION CACHING**: Cache voice decisions для similar contexts
+  - [ ] **PROMPT OPTIMIZATION**: Optimize voice decision prompts для speed
+  - [ ] **CONDITIONAL ROUTING**: Efficient conditional edges в LangGraph workflow
+  - [ ] **STATE MANAGEMENT**: Optimize AgentState voice context management
+  - [ ] **OVERHEAD MEASUREMENT**: Validate <500ms decision overhead target
+  - 📋 **ЦЕЛЬ**: Minimize LangGraph voice decision latency
+
+- [ ] **5.3.4** Integration performance validation ⏳ **НЕ НАЧАТО**
+  - [ ] **END-TO-END TESTING**: Complete integration performance testing
+  - [ ] **LOAD TESTING**: Voice system performance под production load
+  - [ ] **MONITORING SETUP**: Real-time performance monitoring dashboard
+  - [ ] **ALERT CONFIGURATION**: Performance degradation alerts setup
+  - [ ] **BASELINE ESTABLISHMENT**: Production performance baseline metrics
+  - 📋 **ЦЕЛЬ**: Production-ready performance validation
+
+### **5.4 Code quality и architectural compliance (3 задач)**
+
+> **📋 КРИТИЧЕСКИЙ КОНТЕКСТ**: Architectural compliance verification (Phase 4.9 quality standards)
+> - **🎯 ЦЕЛИ**: Pylint 9.5+/10, CCN<8, methods≤50 lines, files≤600 lines
+> - **📊 ТЕКУЩИЙ STATUS**: Phase 4.9 показал 85.4% compliance
+
+- [ ] **5.4.1** Code quality validation ⏳ **НЕ НАЧАТО**
+  - [ ] **PYLINT SCAN**: voice_v2/* и integration файлы Pylint 9.5+/10
+  - [ ] **COMPLEXITY ANALYSIS**: CCN<8 validation для всех voice methods
+  - [ ] **METHOD LENGTH**: Verify methods≤50 lines compliance
+  - [ ] **FILE SIZE**: Verify files≤600 lines compliance  
+  - [ ] **CLEANUP**: Исправить любые code quality violations
+  - 📋 **ЦЕЛЬ**: 100% architectural compliance
+
+- [ ] **5.4.2** SOLID principles verification ⏳ **НЕ НАЧАТО**
+  - [ ] **SRP ANALYSIS**: Single Responsibility validation для voice classes
+  - [ ] **OCP COMPLIANCE**: Open/Closed principle для provider extensions
+  - [ ] **LSP VERIFICATION**: Liskov Substitution для provider implementations
+  - [ ] **ISP COMPLIANCE**: Interface Segregation для voice interfaces
+  - [ ] **DIP VERIFICATION**: Dependency Inversion для voice dependencies
+  - 📋 **ЦЕЛЬ**: 100% SOLID compliance
+
+- [ ] **5.4.3** Security и compliance scan ⏳ **НЕ НАЧАТО**
+  - [ ] **SECURITY SCAN**: Voice data handling security analysis
+  - [ ] **DEPENDENCY AUDIT**: Voice-related dependencies security check
+  - [ ] **API KEY MANAGEMENT**: Secure voice provider credentials verification
+  - [ ] **DATA PRIVACY**: Voice data retention и privacy compliance
+  - [ ] **AUDIT LOGGING**: Voice operations audit trail implementation
+  - 📋 **ЦЕЛЬ**: Production security compliance
+
+---
+
+## 🔧 **ФАЗА 6: PRODUCTION DEPLOYMENT И OPTIMIZATION**
 
 **Срок**: 3-4 дня  
 **Приоритет**: Средний  
@@ -1306,13 +1535,13 @@
 > - **Phase_1_3_3_testing_strategy.md** → production testing procedures
 > - **Phase_1_3_2_documentation_planning.md** → production documentation standards
 
-### **5.1 Production deployment preparation (5 задач)**
+### **6.1 Production deployment preparation (5 задач)**
 
 > **📋 КРИТИЧЕСКИЙ КОНТЕКСТ**: Production-ready voice_v2 с LangGraph integration
 > - **📄 СЛЕДОВАТЬ**: `MD/Reports/Phase_4_1_5_performance_impact_assessment.md` - Production performance requirements
 > - **📄 СЛЕДОВАТЬ**: `MD/Phase_1_3_4_migration_strategy.md` - Deployment strategy
 
-- [ ] **5.1.1** Configuration management ⏳ **НЕ НАЧАТО**
+- [ ] **6.1.1** Configuration management ⏳ **НЕ НАЧАТО**
   - [ ] **ENVIRONMENT CONFIGS**: voice_v2 provider settings для dev/staging/production
   - [ ] **DYNAMIC CONFIGURATION**: Runtime voice settings updates без restart
   - [ ] **MONITORING INTEGRATION**: Voice metrics в production monitoring system
@@ -1320,7 +1549,7 @@
   - [ ] **FAILOVER SETTINGS**: Provider fallback configuration для production reliability
   - 📋 **СЛЕДОВАТЬ**: `MD/Phase_1_3_4_migration_strategy.md` - Production configuration setup
 
-- [ ] **5.1.2** Performance optimization tuning ⏳ **НЕ НАЧАТО**
+- [ ] **6.1.2** Performance optimization tuning ⏳ **НЕ НАЧАТО**
   - [ ] **CONNECTION POOLING**: Fine-tune voice provider connection pools for production load
   - [ ] **CACHE OPTIMIZATION**: Production-scale voice cache configuration (Redis tuning)
   - [ ] **MEMORY MANAGEMENT**: Optimize AgentState voice fields для high-throughput scenarios
@@ -1328,7 +1557,7 @@
   - [ ] **PROVIDER OPTIMIZATION**: Production-scale provider rate limits и batching
   - 📋 **СЛЕДОВАТЬ**: `MD/Phase_1_2_3_performance_optimization.md` - Production optimization targets
 
-- [ ] **5.1.3** Security hardening ⏳ **НЕ НАЧАТО**
+- [ ] **6.1.3** Security hardening ⏳ **НЕ НАЧАТО**
   - [ ] **API KEY SECURITY**: Secure voice provider credentials management
   - [ ] **INPUT VALIDATION**: Voice content security scanning и filtering
   - [ ] **RATE LIMITING**: Voice API abuse prevention и resource protection
@@ -1336,7 +1565,7 @@
   - [ ] **DATA PRIVACY**: Voice data handling compliance (GDPR, privacy laws)
   - 📋 **СЛЕДОВАТЬ**: Security best practices for voice data processing
 
-- [ ] **5.1.4** Deployment pipeline setup ⏳ **НЕ НАЧАТО**
+- [ ] **6.1.4** Deployment pipeline setup ⏳ **НЕ НАЧАТО**
   - [ ] **CI/CD INTEGRATION**: Voice_v2 testing в deployment pipeline
   - [ ] **STAGED DEPLOYMENT**: voice_v2 → LangGraph rollout strategy
   - [ ] **ROLLBACK PLAN**: Quick rollback to legacy voice system если needed
@@ -1344,7 +1573,7 @@
   - [ ] **DEPLOYMENT VALIDATION**: Automated voice functionality testing post-deployment
   - 📋 **СЛЕДОВАТЬ**: `MD/Phase_1_3_4_migration_strategy.md` - Zero-downtime deployment plan
 
-- [ ] **5.1.5** Documentation и training ⏳ **НЕ НАЧАТО**
+- [ ] **6.1.5** Documentation и training ⏳ **НЕ НАЧАТО**
   - [ ] **PRODUCTION RUNBOOK**: Voice service operations, troubleshooting, maintenance
   - [ ] **API DOCUMENTATION**: LangGraph voice tools API reference
   - [ ] **ARCHITECTURE DOCS**: Production voice_v2 + LangGraph architecture guide
@@ -1352,13 +1581,13 @@
   - [ ] **TEAM TRAINING**: Development team training на new voice architecture
   - 📋 **СЛЕДОВАТЬ**: `MD/Phase_1_3_2_documentation_planning.md` - Production documentation standards
 
-### **5.2 Production monitoring и optimization (5 задач)**
+### **6.2 Production monitoring и optimization (5 задач)**
 
 > **📋 КРИТИЧЕСКИЙ КОНТЕКСТ**: Production voice_v2 + LangGraph monitoring и optimization
 > - **📄 СЛЕДОВАТЬ**: `MD/Reports/Phase_4_1_5_performance_impact_assessment.md` - Production performance monitoring
 > - **📄 СЛЕДОВАТЬ**: `MD/Phase_1_2_3_performance_optimization.md` - Performance optimization strategies
 
-- [ ] **5.2.1** Voice metrics collection setup ⏳ **НЕ НАЧАТО**
+- [ ] **6.2.1** Voice metrics collection setup ⏳ **НЕ НАЧАТО**
   - [ ] **LANGGRAPH VOICE METRICS**: Voice tool execution times, decision accuracy, cache hit rates
   - [ ] **VOICE_V2 ORCHESTRATOR METRICS**: Provider performance, fallback frequency, error rates  
   - [ ] **USER EXPERIENCE METRICS**: Voice response times, user satisfaction, usage patterns
@@ -1366,7 +1595,7 @@
   - [ ] **BUSINESS METRICS**: Voice feature adoption, user engagement, cost optimization
   - 📋 **СЛЕДОВАТЬ**: `MD/Reports/Phase_4_1_5_performance_impact_assessment.md` - Production metrics requirements
 
-- [ ] **5.2.2** Real-time monitoring dashboards ⏳ **НЕ НАЧАТО**
+- [ ] **6.2.2** Real-time monitoring dashboards ⏳ **НЕ НАЧАТО**
   - [ ] **VOICE HEALTH DASHBOARD**: LangGraph voice tools status, voice_v2 provider health
   - [ ] **PERFORMANCE DASHBOARD**: Voice decision times, TTS synthesis times, cache performance
   - [ ] **ERROR TRACKING**: Voice failures, provider errors, fallback triggers
@@ -1374,7 +1603,7 @@
   - [ ] **COST MONITORING**: Provider usage costs, resource consumption, optimization opportunities
   - 📋 **СЛЕДОВАТЬ**: Production monitoring best practices for voice services
 
-- [ ] **5.2.3** Alerting и incident response ⏳ **НЕ НАЧАТО**
+- [ ] **6.2.3** Alerting и incident response ⏳ **НЕ НАЧАТО**
   - [ ] **CRITICAL ALERTS**: Voice service complete failures, all providers down
   - [ ] **PERFORMANCE ALERTS**: Voice response times exceeding thresholds, memory leaks
   - [ ] **BUSINESS ALERTS**: Voice feature usage anomalies, cost overruns
@@ -1382,7 +1611,7 @@
   - [ ] **ESCALATION PROCEDURES**: Voice-specific incident escalation и resolution
   - 📋 **СЛЕДОВАТЬ**: Production incident management for voice services
 
-- [ ] **5.2.4** Performance optimization feedback loop ⏳ **НЕ НАЧАТО**
+- [ ] **6.2.4** Performance optimization feedback loop ⏳ **НЕ НАЧАТО**
   - [ ] **PERFORMANCE ANALYSIS**: Continuous voice performance analysis и bottleneck identification
   - [ ] **CACHE OPTIMIZATION**: Dynamic cache strategy adjustment based on usage patterns
   - [ ] **PROVIDER OPTIMIZATION**: Provider selection optimization based on real performance data
@@ -1390,7 +1619,7 @@
   - [ ] **COST OPTIMIZATION**: Voice service cost optimization through smart provider usage
   - 📋 **СЛЕДОВАТЬ**: `MD/Phase_1_2_3_performance_optimization.md` - Continuous optimization strategies
 
-- [ ] **5.2.5** Production stability validation ⏳ **НЕ НАЧАТО**
+- [ ] **6.2.5** Production stability validation ⏳ **НЕ НАЧАТО**
   - [ ] **LOAD TESTING**: Production-scale voice workload testing
   - [ ] **CHAOS ENGINEERING**: Voice service resilience testing (provider failures, network issues)
   - [ ] **PERFORMANCE REGRESSION**: Continuous performance regression detection
@@ -1398,13 +1627,13 @@
   - [ ] **DISASTER RECOVERY**: Voice service disaster recovery procedures и testing
   - 📋 **СЛЕДОВАТЬ**: Production stability best practices
 
-### **5.3 Legacy system migration completion (5 задач)**
+### **6.3 Legacy system migration completion (5 задач)**
 
 > **📋 КРИТИЧЕСКИЙ КОНТЕКСТ**: Complete removal of legacy voice system
 > - **📄 СЛЕДОВАТЬ**: `MD/Reports/Phase_4_1_4_decision_logic_extraction.md` - Legacy cleanup strategy
 > - **📄 СЛЕДОВАТЬ**: `MD/Reports/Phase_4_1_CONSOLIDATED_Analysis_Report.md` - Migration completion requirements
 
-- [ ] **5.3.1** Legacy voice system removal ⏳ **НЕ НАЧАТО**
+- [ ] **6.3.1** Legacy voice system removal ⏳ **НЕ НАЧАТО**
   - [ ] **COMPLETE REMOVAL**: Delete entire app/services/voice/ directory structure
   - [ ] **VALIDATION**: Confirm no references to legacy voice system in codebase
   - [ ] **IMPORT CLEANUP**: Remove all imports от deprecated voice components
@@ -1412,7 +1641,7 @@
   - [ ] **DATABASE CLEANUP**: Remove legacy voice-related database fields/tables if any
   - 📋 **СЛЕДОВАТЬ**: `MD/Reports/Phase_4_1_4_decision_logic_extraction.md` - Complete legacy removal checklist
 
-- [ ] **5.3.2** Code quality final validation ⏳ **НЕ НАЧАТО**
+- [ ] **6.3.2** Code quality final validation ⏳ **НЕ НАЧАТО**
   - [ ] **PYLINT VALIDATION**: Achieve ≥9.5/10 code quality для all voice_v2 components
   - [ ] **COMPLEXITY VALIDATION**: All methods ≤50 lines, CCN<8 complexity
   - [ ] **DUPLICATION ELIMINATION**: Zero code duplication в voice components
@@ -1420,7 +1649,7 @@
   - [ ] **FILE SIZE LIMITS**: All voice files ≤600 lines each
   - 📋 **СЛЕДОВАТЬ**: Project code quality standards и target metrics
 
-- [ ] **5.3.3** Testing completeness validation ⏳ **НЕ НАЧАТО**
+- [ ] **6.3.3** Testing completeness validation ⏳ **НЕ НАЧАТО**
   - [ ] **UNIT TEST COVERAGE**: 100% unit test coverage для all voice_v2 components
   - [ ] **LANGGRAPH TEST COVERAGE**: 100% coverage для voice tools и workflow integration
   - [ ] **INTEGRATION TESTS**: Complete platform integration test suite
@@ -1428,7 +1657,7 @@
   - [ ] **PERFORMANCE TESTS**: All performance targets validated через automated tests
   - 📋 **СЛЕДОВАТЬ**: `MD/Phase_1_3_3_testing_strategy.md` - Complete testing strategy
 
-- [ ] **5.3.4** Documentation completeness ⏳ **НЕ НАЧАТО**
+- [ ] **6.3.4** Documentation completeness ⏳ **НЕ НАЧАТО**
   - [ ] **ARCHITECTURE DOCS**: Complete voice_v2 + LangGraph architecture documentation
   - [ ] **API DOCUMENTATION**: All voice tools и orchestrator APIs documented
   - [ ] **DEPLOYMENT DOCS**: Production deployment procedures documented
@@ -1436,7 +1665,7 @@
   - [ ] **MIGRATION DOCS**: Legacy → voice_v2 migration guide for future reference
   - 📋 **СЛЕДОВАТЬ**: `MD/Phase_1_3_2_documentation_planning.md` - Documentation standards
 
-- [ ] **5.3.5** Production deployment validation ⏳ **НЕ НАЧАТО**
+- [ ] **6.3.5** Production deployment validation ⏳ **НЕ НАЧАТО**
   - [ ] **ZERO-DOWNTIME DEPLOYMENT**: Production rollout без service interruption
   - [ ] **FEATURE VALIDATION**: All voice features working в production environment
   - [ ] **PERFORMANCE VALIDATION**: Production performance meets all target metrics
@@ -1444,13 +1673,13 @@
   - [ ] **ROLLBACK CAPABILITY**: Confirmed ability to rollback if critical issues discovered
   - 📋 **СЛЕДОВАТЬ**: `MD/Phase_1_3_4_migration_strategy.md` - Production deployment validation
 
-### **5.4 Final project validation (5 задач)**
+### **6.4 Final project validation (5 задач)**
 
 > **📋 КРИТИЧЕСКИЙ КОНТЕКСТ**: Complete project success validation
 > - **📄 СЛЕДОВАТЬ**: Project target metrics и success criteria
 > - **📄 СЛЕДОВАТЬ**: `MD/Reports/Phase_4_1_CONSOLIDATED_Analysis_Report.md` - Complete project requirements
 
-- [ ] **5.4.1** Target metrics achievement validation ⏳ **НЕ НАЧАТО**
+- [ ] **6.4.1** Target metrics achievement validation ⏳ **НЕ НАЧАТО**
   - [ ] **FILE COUNT**: ≤50 files vs 113 в current (target achieved)
   - [ ] **CODE LINES**: ≤15,000 lines vs ~50,000 в current (target achieved)
   - [ ] **STT PERFORMANCE**: Not worse than app/services/voice +10% (target achieved)
@@ -1459,7 +1688,7 @@
   - [ ] **TEST COVERAGE**: 100% unit test coverage (target achieved)
   - 📋 **СЛЕДОВАТЬ**: Original project target metrics
 
-- [ ] **5.4.2** Architecture compliance final validation ⏳ **НЕ НАЧАТО**
+- [ ] **6.4.2** Architecture compliance final validation ⏳ **НЕ НАЧАТО**
   - [ ] **SOLID PRINCIPLES**: Complete SOLID compliance validation
   - [ ] **CCN COMPLEXITY**: All methods CCN<8 (target achieved)
   - [ ] **METHOD SIZE**: All methods ≤50 lines (target achieved)
@@ -1467,7 +1696,7 @@
   - [ ] **FILE SIZE LIMITS**: All files ≤600 lines (target achieved)
   - 📋 **СЛЕДОВАТЬ**: Architecture compliance requirements
 
-- [ ] **5.4.3** LangGraph integration success validation ⏳ **НЕ НАЧАТО**
+- [ ] **6.4.3** LangGraph integration success validation ⏳ **НЕ НАЧАТО**
   - [ ] **INTELLIGENT DECISIONS**: Voice decisions are context-aware и semantic
   - [ ] **EXECUTION SEPARATION**: voice_v2 pure execution, LangGraph pure decisions
   - [ ] **USER ADAPTATION**: System learns от user voice patterns
@@ -1475,7 +1704,7 @@
   - [ ] **WORKFLOW INTEGRATION**: Seamless voice integration в LangGraph workflow
   - 📋 **СЛЕДОВАТЬ**: `MD/Reports/Phase_4_1_CONSOLIDATED_Analysis_Report.md` - LangGraph integration success criteria
 
-- [ ] **5.4.4** User experience validation ⏳ **НЕ НАЧАТО**
+- [ ] **6.4.4** User experience validation ⏳ **НЕ НАЧАТО**
   - [ ] **RESPONSE QUALITY**: Voice responses are natural и contextually appropriate
   - [ ] **RESPONSE SPEED**: Voice operations meet user experience expectations
   - [ ] **RELIABILITY**: Voice features work consistently across platforms
@@ -1483,7 +1712,7 @@
   - [ ] **ERROR HANDLING**: Graceful degradation when voice services unavailable
   - 📋 **СЛЕДОВАТЬ**: User experience requirements и expectations
 
-- [ ] **5.4.5** Project completion certification ⏳ **НЕ НАЧАТО**
+- [ ] **6.4.5** Project completion certification ⏳ **НЕ НАЧАТО**
   - [ ] **ALL DELIVERABLES**: Every planned deliverable completed successfully
   - [ ] **QUALITY GATES**: All quality gates passed (code, tests, performance)
   - [ ] **PRODUCTION READY**: System ready for production deployment
@@ -1493,14 +1722,14 @@
 
 ---
 
-## 🧪 **ФАЗА 6: QUALITY ASSURANCE И DOCUMENTATION**
+## 🧪 **ФАЗА 7: QUALITY ASSURANCE И DOCUMENTATION**
 
 **Срок**: 2-3 дня  
 **Приоритет**: Высокий  
 **Статус**: ⏳ **НЕ НАЧАТА**
 
-### **6.1 Code quality validation (2 задачи)**
-- [ ] **6.1.1** Architecture compliance check ⏳ **НЕ НАЧАТО**
+### **7.1 Code quality validation (2 задачи)**
+- [ ] **7.1.1** Architecture compliance check ⏳ **НЕ НАЧАТО**
   - [ ] SOLID principles adherence
   - [ ] CCN < 8 для всех методов (Lizard analysis)
   - [ ] Methods ≤ 50 строк validation
@@ -1508,26 +1737,26 @@
   - [ ] Pylint score ≥ 9.5/10
   - [ ] Zero Semgrep security issues
 
-- [ ] **6.1.2** Test coverage validation ⏳ **НЕ НАЧАТО**
+- [ ] **7.1.2** Test coverage validation ⏳ **НЕ НАЧАТО**
   - [ ] Unit tests: 100% coverage всех voice_v2 компонентов
   - [ ] Integration tests: End-to-end scenarios
   - [ ] LangGraph tests: 100% workflow coverage
   - [ ] Performance tests: Load testing validation
 
-### **6.2 Documentation (3 задачи)**
-- [ ] **6.2.1** Technical documentation ⏳ **НЕ НАЧАТО**
+### **7.2 Documentation (3 задачи)**
+- [ ] **7.2.1** Technical documentation ⏳ **НЕ НАЧАТО**
   - [ ] Architecture overview с диаграммами
   - [ ] API documentation для всех компонентов
   - [ ] Configuration guide
   - [ ] Troubleshooting guide
 
-- [ ] **6.2.2** Developer guide ⏳ **НЕ НАЧАТО**
+- [ ] **7.2.2** Developer guide ⏳ **НЕ НАЧАТО**
   - [ ] Adding new providers guide
   - [ ] LangGraph integration examples
   - [ ] Performance optimization guide
   - [ ] Testing guidelines
 
-- [ ] **6.2.3** Migration documentation ⏳ **НЕ НАЧАТО**
+- [ ] **7.2.3** Migration documentation ⏳ **НЕ НАЧАТО**
   - [ ] Migration guide от app/services/voice системы
   - [ ] Configuration migration examples
   - [ ] Best practices guide
