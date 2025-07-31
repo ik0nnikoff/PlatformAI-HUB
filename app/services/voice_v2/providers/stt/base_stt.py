@@ -7,8 +7,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from app.services.voice_v2.core.schemas import STTRequest
 from .models import STTResult, STTCapabilities
-from ...core.exceptions import VoiceServiceError, ProviderNotAvailableError, AudioProcessingError
-from ...utils.validators import ConfigurationValidator
+from ...core.exceptions import VoiceServiceError, ProviderNotAvailableError
 from ..retry_mixin import RetryMixin
 
 if TYPE_CHECKING:
@@ -48,7 +47,7 @@ class BaseSTTProvider(ABC, RetryMixin):
         if self._has_connection_manager():
             # Get retry config for validation only
             self._get_retry_config(config)
-            logger.debug(f"{provider_name} STT provider using ConnectionManager with retry config")
+            logger.debug("%s STT provider using ConnectionManager with retry config", provider_name)
 
         # Quick config validation
         missing = [f for f in self.get_required_config_fields() if f not in config]
@@ -89,7 +88,14 @@ class BaseSTTProvider(ABC, RetryMixin):
             await self.initialize()
             self._initialized = True
 
-        await self._validate_request(request)
+        validation_result = self._validate_request(
+            request.audio_data,
+            request.audio_format,
+            request.language
+        )
+        
+        if not validation_result.get("valid", False):
+            raise VoiceServiceError(f"Ошибка валидации аудио: {validation_result.get('error', 'Unknown error')}")
 
         try:
             start_time = asyncio.get_event_loop().time()
@@ -104,43 +110,136 @@ class BaseSTTProvider(ABC, RetryMixin):
             return result
 
         except Exception as e:
-            logger.error(f"STT failed: {e}")
+            logger.error("STT failed: %s", e)
             if isinstance(e, VoiceServiceError):
                 raise
             raise VoiceServiceError(f"STT error: {e}") from e
 
-    async def _validate_request(self, request: STTRequest) -> None:
-        """Quick request validation."""
-        # Validate audio data exists and is not empty
-        if not request.audio_data or len(request.audio_data) == 0:
-            raise AudioProcessingError("Audio data is empty")
+    def _validate_request(
+        self, 
+        audio_data: bytes, 
+        audio_format: str, 
+        language: str
+    ) -> Dict[str, Any]:
+        """
+        Валидирует параметры запроса на транскрипцию.
+        
+        Args:
+            audio_data: Байты аудио данных
+            audio_format: Формат аудио файла
+            language: Язык для распознавания
+            
+        Returns:
+            Результат валидации с информацией об ошибках
+        """
+        # Базовая валидация аудио данных
+        audio_validation = self._validate_audio_data(audio_data)
+        if not audio_validation["valid"]:
+            return audio_validation
+        
+        # Валидация формата аудио
+        format_validation = self._validate_audio_format(audio_format)
+        if not format_validation["valid"]:
+            return format_validation
+        
+        # Валидация языка
+        language_validation = self._validate_language_parameter(language)
+        if not language_validation["valid"]:
+            return language_validation
+        
+        # Валидация размера файла
+        size_validation = self._validate_file_size(audio_data)
+        if not size_validation["valid"]:
+            return size_validation
+        
+        # Валидация провайдер-специфичных ограничений
+        provider_validation = self._validate_provider_specific_constraints(
+            audio_data, audio_format, language
+        )
+        if not provider_validation["valid"]:
+            return provider_validation
+        
+        return {"valid": True, "message": "Валидация прошла успешно"}
 
-        # Validate audio data size (approximate check)
-        if len(request.audio_data) > 25 * 1024 * 1024:  # 25MB limit
-            raise AudioProcessingError("Audio data too large")
+    def _validate_audio_data(self, audio_data: bytes) -> Dict[str, Any]:
+        """Валидирует аудио данные."""
+        if not audio_data:
+            self.logger.error("Получены пустые аудио данные")
+            return {
+                "valid": False,
+                "error": "Аудио данные отсутствуют",
+                "error_code": "EMPTY_AUDIO_DATA"
+            }
+        
+        if not isinstance(audio_data, bytes):
+            self.logger.error(f"Неверный тип аудио данных: {type(audio_data)}")
+            return {
+                "valid": False,
+                "error": "Неверный тип аудио данных",
+                "error_code": "INVALID_AUDIO_TYPE"
+            }
+        
+        return {"valid": True}
 
-        if not ConfigurationValidator.validate_language_code(request.language):
-            raise AudioProcessingError(f"Bad language: {request.language}")
+    def _validate_audio_format(self, audio_format: str) -> Dict[str, Any]:
+        """Валидирует формат аудио."""
+        if not audio_format:
+            self.logger.warning("Формат аудио не указан, используем автоопределение")
+            return {"valid": True}
+        
+        supported_formats = self.get_supported_formats()
+        if audio_format.lower() not in [fmt.lower() for fmt in supported_formats]:
+            self.logger.error(f"Неподдерживаемый формат: {audio_format}")
+            return {
+                "valid": False,
+                "error": f"Формат {audio_format} не поддерживается",
+                "error_code": "UNSUPPORTED_FORMAT",
+                "supported_formats": supported_formats
+            }
+        
+        return {"valid": True}
 
-        # Check capabilities
-        caps = await self.get_capabilities()
-        # Use format from request or default
-        if request.format:
-            fmt = request.format.value
-        else:
-            fmt = "mp3"  # Default format
+    def _validate_language_parameter(self, language: str) -> Dict[str, Any]:
+        """Валидирует параметр языка."""
+        if not language:
+            self.logger.debug("Язык не указан, используем автоопределение")
+            return {"valid": True}
+        
+        supported_languages = self.get_supported_languages()
+        if language not in supported_languages:
+            self.logger.warning(f"Язык {language} может быть не поддержан")
+            # Не блокируем запрос, просто предупреждаем
+        
+        return {"valid": True}
 
-        # Convert AudioFormat enums to strings for comparison
-        supported_formats = [af.value for af in caps.supported_formats]
-        if fmt not in supported_formats:
-            raise AudioProcessingError(f"Format {fmt} unsupported")
+    def _validate_file_size(self, audio_data: bytes) -> Dict[str, Any]:
+        """Валидирует размер аудио файла."""
+        file_size_mb = len(audio_data) / (1024 * 1024)
+        max_size_mb = getattr(self, 'max_file_size_mb', 25)  # По умолчанию 25MB
+        
+        if file_size_mb > max_size_mb:
+            self.logger.error(f"Файл слишком большой: {file_size_mb:.2f}MB > {max_size_mb}MB")
+            return {
+                "valid": False,
+                "error": f"Размер файла превышает лимит ({file_size_mb:.2f}MB > {max_size_mb}MB)",
+                "error_code": "FILE_TOO_LARGE",
+                "file_size_mb": file_size_mb,
+                "max_size_mb": max_size_mb
+            }
+        
+        return {"valid": True}
 
-        # Quality validation - request.quality field not in core schemas, use default
-        # Note: Core schemas don't include quality field, so we skip quality validation
-        # Provider-specific quality handling should be done in implementation
-
-        if request.language != "auto" and request.language not in caps.supported_languages:
-            raise AudioProcessingError(f"Language {request.language} unsupported")
+    def _validate_provider_specific_constraints(
+        self, 
+        audio_data: bytes, 
+        audio_format: str, 
+        language: str
+    ) -> Dict[str, Any]:
+        """
+        Валидирует специфичные для провайдера ограничения.
+        Переопределяется в дочерних классах.
+        """
+        return {"valid": True}
 
     async def health_check(self) -> bool:
         """Health check."""

@@ -68,8 +68,16 @@ class AgentSTTConfig:
 
 
 class ConfigurationError(Exception):
-    """Configuration error"""
-    pass
+    """Configuration error exception for STT configuration issues"""
+
+    def __init__(self, message: str, config_path: Optional[str] = None):
+        super().__init__(message)
+        self.config_path = config_path
+
+    def __str__(self) -> str:
+        if self.config_path:
+            return f"Configuration error in {self.config_path}: {super().__str__()}"
+        return super().__str__()
 
 
 class STTConfigManager:
@@ -126,7 +134,7 @@ class STTConfigManager:
             if config_path.exists():
                 config_data = self._load_config_file(config_path, config_format)
             else:
-                self.logger.warning(f"System config file not found: {config_path}")
+                self.logger.warning("System config file not found: %s", config_path)
                 config_data = {}
 
             # Apply environment overrides
@@ -148,7 +156,7 @@ class STTConfigManager:
             return system_config
 
         except Exception as e:
-            self.logger.error(f"Failed to load system configuration: {e}")
+            self.logger.error("Failed to load system configuration: %s", e)
             # Return default configuration on error
             return STTSystemConfig()
 
@@ -169,7 +177,7 @@ class STTConfigManager:
         Returns:
             Agent configuration
         """
-        self.logger.debug(f"Loading STT configuration for agent {agent_id}")
+        self.logger.debug("Loading STT configuration for agent %s", agent_id)
 
         try:
             if config_source == ConfigSource.FILE:
@@ -182,7 +190,7 @@ class STTConfigManager:
                 raise ConfigurationError(f"Unsupported config source: {config_source}")
 
         except Exception as e:
-            self.logger.error(f"Failed to load agent configuration for {agent_id}: {e}")
+            self.logger.error("Failed to load agent configuration for %s: %s", agent_id, e)
             # Return default configuration on error
             return self._create_default_agent_config(agent_id)
 
@@ -276,7 +284,7 @@ class STTConfigManager:
                 validated_config = self._validate_provider_config(provider_config)
                 validated_providers.append(validated_config)
             except Exception as e:
-                self.logger.warning(f"Invalid provider config: {e}")
+                self.logger.warning("Invalid provider config: %s", e)
 
         agent_config = AgentSTTConfig(
             agent_id=agent_id,
@@ -345,30 +353,56 @@ class STTConfigManager:
 
     def _validate_provider_config(self, provider_config: Dict[str, Any]) -> Dict[str, Any]:
         """Validate provider configuration"""
-        required_fields = ["provider"]
+        self._validate_required_fields(provider_config)
+        provider_type = self._validate_provider_type(provider_config)
+        self._validate_provider_specific_settings(provider_type, provider_config)
+        return provider_config
 
+    def _validate_required_fields(self, provider_config: Dict[str, Any]):
+        """Validate required configuration fields"""
+        required_fields = ["provider"]
         for field in required_fields:
             if field not in provider_config:
                 raise ConfigurationError(f"Missing required field: {field}")
 
+    def _validate_provider_type(self, provider_config: Dict[str, Any]) -> str:
+        """Validate and return provider type"""
         provider_type = provider_config["provider"].lower()
-        if provider_type not in ["openai", "google", "yandex"]:
+        supported_providers = ["openai", "google", "yandex"]
+
+        if provider_type not in supported_providers:
             raise ConfigurationError(f"Unsupported provider type: {provider_type}")
 
-        # Provider-specific validation
+        return provider_type
+
+    def _validate_provider_specific_settings(self, provider_type: str, provider_config: Dict[str, Any]):
+        """Validate provider-specific settings"""
         settings = provider_config.get("settings", {})
 
-        if provider_type == "openai":
-            if not settings.get("api_key"):
-                raise ConfigurationError("OpenAI provider requires api_key")
-        elif provider_type == "google":
-            if not settings.get("credentials_path") and not settings.get("project_id"):
-                raise ConfigurationError("Google provider requires credentials_path or project_id")
-        elif provider_type == "yandex":
-            if not settings.get("api_key") or not settings.get("folder_id"):
-                raise ConfigurationError("Yandex provider requires api_key and folder_id")
+        validation_map = {
+            "openai": self._validate_openai_settings,
+            "google": self._validate_google_settings,
+            "yandex": self._validate_yandex_settings
+        }
 
-        return provider_config
+        validator = validation_map.get(provider_type)
+        if validator:
+            validator(settings)
+
+    def _validate_openai_settings(self, settings: Dict[str, Any]):
+        """Validate OpenAI-specific settings"""
+        if not settings.get("api_key"):
+            raise ConfigurationError("OpenAI provider requires api_key")
+
+    def _validate_google_settings(self, settings: Dict[str, Any]):
+        """Validate Google-specific settings"""
+        if not settings.get("credentials_path") and not settings.get("project_id"):
+            raise ConfigurationError("Google provider requires credentials_path or project_id")
+
+    def _validate_yandex_settings(self, settings: Dict[str, Any]):
+        """Validate Yandex-specific settings"""
+        if not settings.get("api_key") or not settings.get("folder_id"):
+            raise ConfigurationError("Yandex provider requires api_key and folder_id")
 
     def _load_config_file(self, config_path: Path, config_format: ConfigFormat) -> Dict[str, Any]:
         """Load configuration from file"""
@@ -432,11 +466,11 @@ class STTConfigManager:
                 elif config_format == ConfigFormat.YAML:
                     yaml.dump(config_dict, f, default_flow_style=False, allow_unicode=True)
 
-            self.logger.info(f"Saved agent configuration: {config_path}")
+            self.logger.info("Saved agent configuration: %s", config_path)
             return True
 
         except Exception as e:
-            self.logger.error(f"Failed to save agent configuration: {e}")
+            self.logger.error("Failed to save agent configuration: %s", e)
             return False
 
     def reload_agent_config(self, agent_id: str) -> AgentSTTConfig:
@@ -507,11 +541,11 @@ class STTConfigManager:
                 elif config_format == ConfigFormat.YAML:
                     yaml.dump(template_config, f, default_flow_style=False, allow_unicode=True)
 
-            self.logger.info(f"Created configuration template: {template_path}")
+            self.logger.info("Created configuration template: %s", template_path)
             return True
 
         except Exception as e:
-            self.logger.error(f"Failed to create configuration template: {e}")
+            self.logger.error("Failed to create configuration template: %s", e)
             return False
 
 

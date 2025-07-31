@@ -222,11 +222,11 @@ class ValidationEngine:
             "TTS Optimizer": self._check_tts_component,
             "Decision Optimizer": self._check_decision_component
         }
-        
+
         for name, check_method in component_checks.items():
             if name in component_name:
                 return await check_method()
-        
+
         return 0.0  # Component not found or not configured
 
     async def _check_integration_component(self) -> float:

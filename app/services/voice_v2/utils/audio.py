@@ -118,7 +118,7 @@ class AudioProcessor:
     ) -> AudioFormat:
         """
         Определение формата аудио по magic numbers и расширению.
-        
+
         Разбито на подметоды для уменьшения цикломатической сложности.
 
         Args:
@@ -153,7 +153,7 @@ class AudioProcessor:
         # Проверяем MP3 форматы
         if AudioProcessor._is_mp3_format(audio_data):
             return AudioFormat.MP3
-        
+
         # Проверяем FLAC (должен быть перед WAV)
         if audio_data.startswith(b'fLaC'):
             return AudioFormat.FLAC
@@ -187,14 +187,14 @@ class AudioProcessor:
     @staticmethod
     def _is_opus_format(audio_data: bytes) -> bool:
         """Проверка на OPUS формат."""
-        return (audio_data.startswith(b'OggS') and 
+        return (audio_data.startswith(b'OggS') and
                 b'OpusHead' in audio_data[:32])
 
     @staticmethod
     def _is_wav_format(audio_data: bytes) -> bool:
         """Проверка на WAV формат."""
         return (audio_data.startswith(b'RIFF') and
-                len(audio_data) >= 12 and 
+                len(audio_data) >= 12 and
                 audio_data[8:12] == b'WAVE')
 
     @staticmethod
@@ -256,7 +256,7 @@ class AudioProcessor:
             return self._extract_detailed_metadata(audio_data, max_duration_seconds)
 
         except Exception as e:
-            self.logger.error(f"Ошибка валидации аудио: {e}")
+            self.logger.error("Ошибка валидации аудио: %s", e)
             return AudioMetadata(
                 format=AudioFormat.WAV,
                 is_valid=False,
@@ -333,7 +333,7 @@ class AudioProcessor:
                     metadata.error_message = duration_validation
 
             except Exception as e:
-                self.logger.warning(f"Не удалось извлечь метаданные с pydub: {e}")
+                self.logger.warning("Не удалось извлечь метаданные с pydub: %s", e)
 
         return metadata
 
@@ -422,7 +422,7 @@ class AudioProcessor:
             )
 
         except Exception as e:
-            self.logger.error(f"Ошибка конвертации аудио: {e}")
+            self.logger.error("Ошибка конвертации аудио: %s", e)
             end_time = asyncio.get_event_loop().time()
             conversion_time_ms = (end_time - start_time) * 1000
 

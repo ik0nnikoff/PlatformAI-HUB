@@ -148,15 +148,15 @@ class TTSPerformanceOptimizer(BasePerformanceOptimizer[TTSProviderMetrics]):
         """Initialize TTS optimizer with configuration"""
         if config is None:
             config = TTSOptimizationConfig()
-        
+
         super().__init__(config)
-        
+
         # TTS-specific cache
         self._phrase_cache: Dict[str, Tuple[bytes, datetime, float]] = {}  # text_hash -> (audio, timestamp, quality)
         self._cache_access_times: Dict[str, List[datetime]] = {}
 
         logger.info("TTSPerformanceOptimizer initialized with target latency: %ss", config.target_latency)
-    
+
     def _create_provider_metrics(self, provider: ProviderType) -> TTSProviderMetrics:
         """Create TTS-specific provider metrics instance"""
         return TTSProviderMetrics(provider_type=provider)
@@ -185,7 +185,7 @@ class TTSPerformanceOptimizer(BasePerformanceOptimizer[TTSProviderMetrics]):
         """Get optimized provider order based on strategy and current metrics."""
         if strategy is None:
             strategy = TTSOptimizationStrategy.BALANCED
-            
+
         viable_providers = self._get_viable_providers()
 
         if not viable_providers:
@@ -303,9 +303,9 @@ class TTSPerformanceOptimizer(BasePerformanceOptimizer[TTSProviderMetrics]):
                 if cache_key in self._cache_access_times:
                     del self._cache_access_times[cache_key]
 
-        logger.debug(f"Evicted {freed_space_mb:.2f} MB from TTS cache")
+        logger.debug("Evicted %.2f MB from TTS cache", freed_space_mb)
 
-    async def record_performance(self, provider: ProviderType, latency: float, 
+    async def record_performance(self, provider: ProviderType, latency: float,
                                success: bool, text: Optional[str] = None,
                                audio_quality_score: Optional[float] = None, **kwargs) -> None:
         """Record TTS performance metrics for provider"""

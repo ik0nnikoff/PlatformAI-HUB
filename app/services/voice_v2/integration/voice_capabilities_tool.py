@@ -13,15 +13,12 @@ Architecture:
 Migration from: app/agent_runner/common/tools_registry.py:49-68 (static implementation)
 """
 
-import json
 import logging
-from typing import Annotated, Dict, Any, List, Optional
+from typing import Annotated, Dict, Any, List
 
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from app.services.voice_v2.core.orchestrator import VoiceTTSManager, VoiceSTTManager
-from app.services.voice_v2.core.config import VoiceConfig
 from app.services.voice_v2.core.exceptions import VoiceServiceError
 
 logger = logging.getLogger(__name__)
@@ -33,20 +30,20 @@ async def voice_capabilities_query_tool(
 ) -> str:
     """
     Query dynamic voice capabilities based on agent configuration and provider availability
-    
+
     Replaces static voice_capabilities_tool with real voice_v2 integration.
     Returns actual capabilities based on:
     - Agent voice_settings configuration
     - Provider availability and health
     - Platform-specific limitations (Telegram/WhatsApp)
     - Real-time configuration validation
-    
+
     Args:
         state: LangGraph agent state containing agent config and context
-        
+
     Returns:
         str: Detailed JSON string with voice capabilities and usage instructions
-        
+
     Features:
     - Dynamic provider discovery
     - Agent-aware configuration
@@ -58,31 +55,30 @@ async def voice_capabilities_query_tool(
         'agent_id': state.get('config', {}).get('configurable', {}).get('agent_id', 'unknown'),
         'chat_id': state.get('chat_id', 'unknown')
     })
-    
+
     log_adapter.debug("Starting voice capabilities query")
-    
+
     try:
         # Extract agent configuration
         agent_config = state.get("config", {})
         agent_id = agent_config.get("configurable", {}).get("agent_id", "unknown")
-        chat_id = state.get("chat_id", "unknown")
         channel = state.get("channel", "unknown")
-        
+
         log_adapter.info(f"Querying voice capabilities for agent {agent_id}, channel {channel}")
-        
+
         # Get voice capabilities from voice_v2 orchestrator
         capabilities = await _get_voice_v2_capabilities(agent_id, channel, log_adapter)
-        
+
         # Generate user-friendly response with capabilities
         response = _generate_capabilities_response(capabilities, channel, log_adapter)
-        
+
         log_adapter.info("Voice capabilities query completed successfully")
         return response
-        
+
     except VoiceServiceError as e:
         log_adapter.error(f"Voice service error during capabilities query: {e}")
         return _generate_error_response("voice_service_error", str(e))
-        
+
     except Exception as e:
         log_adapter.error(f"Unexpected error during capabilities query: {e}", exc_info=True)
         return _generate_error_response("unexpected_error", str(e))
@@ -95,17 +91,17 @@ async def _get_voice_v2_capabilities(
 ) -> Dict[str, Any]:
     """
     Query actual voice_v2 orchestrator for capabilities
-    
+
     Args:
         agent_id: Agent identifier
         channel: Platform channel (telegram, whatsapp, etc.)
         log_adapter: Logging adapter
-        
+
     Returns:
         Dict with voice capabilities information
     """
     log_adapter.debug("Initializing voice_v2 orchestrator for capabilities query")
-    
+
     capabilities = {
         "voice_enabled": False,
         "tts_available": False,
@@ -118,37 +114,26 @@ async def _get_voice_v2_capabilities(
         "configuration": {},
         "limitations": []
     }
-    
+
     try:
-        # Initialize voice config (simplified for capabilities query)
-        voice_config = VoiceConfig()
-        
-        # Create TTS manager for capabilities query
-        tts_manager = VoiceTTSManager(
-            provider_manager=None,  # Will be mocked for capabilities
-            cache_manager=None,
-            metrics_collector=None,
-            connection_manager=None
-        )
-        
         # Query TTS providers availability
         tts_providers = await _query_tts_providers()
         if tts_providers:
             capabilities["tts_available"] = True
             capabilities["providers"]["tts"] = tts_providers
-        
-        # Query STT providers availability  
+
+        # Query STT providers availability
         stt_providers = await _query_stt_providers()
         if stt_providers:
             capabilities["stt_available"] = True
             capabilities["providers"]["stt"] = stt_providers
-            
+
         # Overall voice status
         capabilities["voice_enabled"] = capabilities["tts_available"] or capabilities["stt_available"]
-        
+
         # Platform-specific capabilities
         capabilities["platform_capabilities"] = _get_platform_capabilities(channel)
-        
+
         # Configuration information
         capabilities["configuration"] = {
             "max_audio_duration": 120,  # seconds
@@ -157,17 +142,17 @@ async def _get_voice_v2_capabilities(
             "cache_enabled": True,
             "fallback_enabled": True
         }
-        
+
         # Platform limitations
         capabilities["limitations"] = _get_platform_limitations(channel)
-        
+
         log_adapter.debug(f"Voice capabilities retrieved: {len(tts_providers)} TTS, {len(stt_providers)} STT providers")
-        
+
     except Exception as e:
         log_adapter.warning(f"Error querying voice_v2 capabilities: {e}")
         # Return basic capabilities on error
         capabilities["limitations"].append("Capabilities query failed - using basic info")
-    
+
     return capabilities
 
 
@@ -184,7 +169,7 @@ async def _query_tts_providers() -> List[Dict[str, Any]]:
             "speed": "fast"
         },
         {
-            "name": "google", 
+            "name": "google",
             "enabled": True,
             "priority": 2,
             "languages": ["ru", "en", "es", "fr", "de", "ja", "ko"],
@@ -194,7 +179,7 @@ async def _query_tts_providers() -> List[Dict[str, Any]]:
         },
         {
             "name": "yandex",
-            "enabled": True, 
+            "enabled": True,
             "priority": 3,
             "languages": ["ru", "en"],
             "voices": ["jane", "oksana", "alyss", "omazh"],
@@ -202,13 +187,13 @@ async def _query_tts_providers() -> List[Dict[str, Any]]:
             "speed": "medium"
         }
     ]
-    
+
     # TODO: Real provider health check
     # filtered_providers = []
     # for provider in providers:
     #     if await _check_provider_health(provider["name"]):
     #         filtered_providers.append(provider)
-    
+
     return providers
 
 
@@ -227,7 +212,7 @@ async def _query_stt_providers() -> List[Dict[str, Any]]:
         {
             "name": "google",
             "enabled": True,
-            "priority": 2, 
+            "priority": 2,
             "languages": ["ru", "en", "auto"],
             "model": "latest_long",
             "quality": "high",
@@ -243,7 +228,7 @@ async def _query_stt_providers() -> List[Dict[str, Any]]:
             "speed": "fast"
         }
     ]
-    
+
     return providers
 
 
@@ -275,7 +260,7 @@ def _get_platform_capabilities(channel: str) -> Dict[str, Any]:
             "voice_recording": False
         }
     }
-    
+
     return capabilities.get(channel, capabilities["api"])
 
 
@@ -296,7 +281,7 @@ def _get_platform_limitations(channel: str) -> List[str]:
             "Client responsible for audio rendering"
         ]
     }
-    
+
     return limitations.get(channel, limitations["api"])
 
 
@@ -306,25 +291,69 @@ def _generate_capabilities_response(
     log_adapter
 ) -> str:
     """Generate user-friendly capabilities response"""
-    
+
+    # Проверяем основную доступность голосовых функций
     if not capabilities["voice_enabled"]:
-        return """❌ Голосовые функции временно недоступны.
-        
-Попробуйте позже или обратитесь к администратору."""
+        return _create_voice_disabled_response()
+
+    # Создаем компоненты ответа
+    response_sections = []
     
-    # Generate TTS info
-    tts_info = ""
-    if capabilities["tts_available"]:
-        tts_providers = capabilities["providers"]["tts"]
-        primary_provider = tts_providers[0] if tts_providers else None
-        
-        if primary_provider:
-            voices = ", ".join(primary_provider["voices"][:3])
-            if len(primary_provider["voices"]) > 3:
-                voices += f" и {len(primary_provider['voices'])-3} других"
-                
-            tts_info = f"""
-🎤 **Голосовые ответы доступны!**
+    # Добавляем информацию о TTS
+    tts_section = _create_tts_section(capabilities)
+    if tts_section:
+        response_sections.append(tts_section)
+    
+    # Добавляем информацию о STT
+    stt_section = _create_stt_section(capabilities)
+    if stt_section:
+        response_sections.append(stt_section)
+    
+    # Добавляем информацию о платформе
+    platform_section = _create_platform_section(capabilities, channel)
+    response_sections.append(platform_section)
+    
+    # Добавляем ограничения
+    limitations_section = _create_limitations_section(capabilities)
+    if limitations_section:
+        response_sections.append(limitations_section)
+    
+    # Добавляем информацию о fallback провайдерах
+    fallback_section = _create_fallback_section(capabilities)
+    if fallback_section:
+        response_sections.append(fallback_section)
+    
+    # Финальное сообщение
+    response_sections.append("✅ **Система готова к работе с голосом!**")
+    
+    log_adapter.debug("Generated user-friendly capabilities response")
+    return "\n\n".join(response_sections)
+
+
+def _create_voice_disabled_response() -> str:
+    """Создает ответ для случая отключенных голосовых функций."""
+    return """❌ Голосовые функции временно недоступны.
+
+Попробуйте позже или обратитесь к администратору."""
+
+
+def _create_tts_section(capabilities: Dict[str, Any]) -> str:
+    """Создает секцию с информацией о TTS."""
+    if not capabilities["tts_available"]:
+        return ""
+    
+    tts_providers = capabilities["providers"]["tts"]
+    primary_provider = tts_providers[0] if tts_providers else None
+    
+    if not primary_provider:
+        return ""
+    
+    # Формируем список голосов
+    voices = ", ".join(primary_provider["voices"][:3])
+    if len(primary_provider["voices"]) > 3:
+        voices += f" и {len(primary_provider['voices'])-3} других"
+    
+    return f"""🎤 **Голосовые ответы доступны!**
 
 **Основной провайдер**: {primary_provider["name"].upper()}
 **Доступные голоса**: {voices}
@@ -333,70 +362,68 @@ def _generate_capabilities_response(
 
 **Как использовать:**
 • "отвечай голосом"
-• "ответь голосом" 
+• "ответь голосом"
 • "скажи голосом"
 • "произнеси"
 • "озвучь"
 
-**Пример**: "Расскажи про страйкбол, ответь голосом"
-"""
+**Пример**: "Расскажи про страйкбол, ответь голосом\""""
+
+
+def _create_stt_section(capabilities: Dict[str, Any]) -> str:
+    """Создает секцию с информацией о STT."""
+    if not capabilities["stt_available"]:
+        return ""
     
-    # Generate STT info
-    stt_info = ""
-    if capabilities["stt_available"]:
-        stt_info = f"""
-🎧 **Распознавание речи доступно!**
+    return """🎧 **Распознавание речи доступно!**
 
 Отправьте голосовое сообщение, и я его обработаю.
-**Поддерживаемые языки**: Русский, English, Автоопределение
-"""
-    
-    # Platform-specific info
-    platform_caps = capabilities["platform_capabilities"]
-    platform_info = f"""
-📱 **Возможности платформы ({channel.upper()})**:
-• Максимальная длительность: {platform_caps.get("max_duration", 60)} сек
-• Поддерживаемые форматы: {", ".join(platform_caps.get("supported_formats", []))}
-"""
-    
-    # Limitations
-    limitations = capabilities["limitations"]
-    limitations_info = ""
-    if limitations:
-        limitations_info = f"""
-⚠️ **Ограничения**:
-{chr(10).join([f"• {limit}" for limit in limitations])}
-"""
-    
-    # Provider fallback info
-    fallback_info = ""
-    if len(capabilities["providers"]["tts"]) > 1:
-        fallback_count = len(capabilities["providers"]["tts"]) - 1
-        fallback_info = f"""
-🔄 **Резервные провайдеры**: {fallback_count} доступно
-"""
-    
-    response = f"""{tts_info}{stt_info}{platform_info}{limitations_info}{fallback_info}
+**Поддерживаемые языки**: Русский, English, Автоопределение"""
 
-✅ **Система готова к работе с голосом!**"""
+
+def _create_platform_section(capabilities: Dict[str, Any], channel: str) -> str:
+    """Создает секцию с информацией о платформе."""
+    platform_caps = capabilities["platform_capabilities"]
     
-    log_adapter.debug("Generated user-friendly capabilities response")
-    return response.strip()
+    return f"""📱 **Возможности платформы ({channel.upper()})**:
+• Максимальная длительность: {platform_caps.get("max_duration", 60)} сек
+• Поддерживаемые форматы: {", ".join(platform_caps.get("supported_formats", []))}"""
+
+
+def _create_limitations_section(capabilities: Dict[str, Any]) -> str:
+    """Создает секцию с ограничениями."""
+    limitations = capabilities["limitations"]
+    if not limitations:
+        return ""
+    
+    limitations_list = "\n".join([f"• {limit}" for limit in limitations])
+    return f"""⚠️ **Ограничения**:
+{limitations_list}"""
+
+
+def _create_fallback_section(capabilities: Dict[str, Any]) -> str:
+    """Создает секцию с информацией о fallback провайдерах."""
+    tts_providers_count = len(capabilities["providers"]["tts"])
+    if tts_providers_count <= 1:
+        return ""
+    
+    fallback_count = tts_providers_count - 1
+    return f"🔄 **Резервные провайдеры**: {fallback_count} доступно"
 
 
 def _generate_error_response(error_type: str, error_message: str) -> str:
     """Generate error response for capabilities query"""
-    
+
     error_responses = {
         "voice_service_error": f"""❌ Ошибка голосового сервиса: {error_message}
-        
+
 Попробуйте позже или используйте текстовый режим.""",
-        
+
         "unexpected_error": f"""❌ Произошла неожиданная ошибка: {error_message}
-        
+
 Базовые голосовые функции могут быть доступны. Попробуйте отправить голосовое сообщение."""
     }
-    
+
     return error_responses.get(error_type, f"❌ Ошибка: {error_message}")
 
 

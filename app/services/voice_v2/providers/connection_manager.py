@@ -99,12 +99,12 @@ class ConnectionPool:
         self._last_used: Optional[datetime] = None
         self._request_count: int = 0
 
-        logger.debug(f"ConnectionPool created for {provider_name}")
+        logger.debug("ConnectionPool created for %s", provider_name)
 
     async def initialize(self) -> None:
         """Initialize connection pool"""
         if self._connector is not None:
-            logger.warning(f"ConnectionPool for {self.provider_name} already initialized")
+            logger.warning("ConnectionPool for %s already initialized", self.provider_name)
             return
 
         try:
@@ -139,10 +139,10 @@ class ConnectionPool:
             self._created_at = datetime.utcnow()
             self._last_used = datetime.utcnow()
 
-            logger.info(f"ConnectionPool initialized for {self.provider_name}")
+            logger.info("ConnectionPool initialized for %s", self.provider_name)
 
         except Exception as e:
-            logger.error(f"Failed to initialize ConnectionPool for {self.provider_name}: {e}")
+            logger.error("Failed to initialize ConnectionPool for %s: %s", self.provider_name, e)
             await self._cleanup_partial()
             raise ConnectionPoolError(f"Connection pool initialization failed: {e}")
 
@@ -154,7 +154,7 @@ class ConnectionPool:
         self._last_used = datetime.utcnow()
         self._request_count += 1
 
-        logger.debug(f"Session retrieved for {self.provider_name} (requests: {self._request_count})")
+        logger.debug("Session retrieved for %s (requests: %s)", self.provider_name, self._request_count)
         return self._session
 
     async def health_check(self) -> bool:
@@ -165,23 +165,23 @@ class ConnectionPool:
 
             # Check if connector is closed
             if self._connector.closed:
-                logger.warning(f"Connector closed for {self.provider_name}")
+                logger.warning("Connector closed for %s", self.provider_name)
                 return False
 
             # Check if session is closed
             if self._session.closed:
-                logger.warning(f"Session closed for {self.provider_name}")
+                logger.warning("Session closed for %s", self.provider_name)
                 return False
 
             return True
 
         except Exception as e:
-            logger.error(f"Health check failed for {self.provider_name}: {e}")
+            logger.error("Health check failed for %s: %s", self.provider_name, e)
             return False
 
     async def cleanup(self) -> None:
         """Cleanup connection pool resources"""
-        logger.info(f"Cleaning up ConnectionPool for {self.provider_name}")
+        logger.info("Cleaning up ConnectionPool for %s", self.provider_name)
 
         try:
             if self._session and not self._session.closed:
@@ -191,12 +191,12 @@ class ConnectionPool:
                 await self._connector.close()
 
         except Exception as e:
-            logger.error(f"Error during ConnectionPool cleanup for {self.provider_name}: {e}")
+            logger.error("Error during ConnectionPool cleanup for %s: %s", self.provider_name, e)
         finally:
             self._session = None
             self._connector = None
 
-        logger.debug(f"ConnectionPool cleanup completed for {self.provider_name}")
+        logger.debug("ConnectionPool cleanup completed for %s", self.provider_name)
 
     async def _cleanup_partial(self) -> None:
         """Cleanup partially initialized resources"""
@@ -293,11 +293,11 @@ class VoiceConnectionManager(IConnectionManager):
 
         try:
             session = await pool.get_session()
-            logger.debug(f"Session provided for {provider_name}")
+            logger.debug("Session provided for %s", provider_name)
             return session
 
         except Exception as e:
-            logger.error(f"Failed to get session for {provider_name}: {e}")
+            logger.error("Failed to get session for %s: %s", provider_name, e)
             # Record error metric
             if self.metrics_collector:
                 await self.metrics_collector.record_connection_error(provider_name, str(e))
@@ -312,7 +312,7 @@ class VoiceConnectionManager(IConnectionManager):
         """
         # Currently, sessions are managed by connection pools
         # This method can be extended for session-specific cleanup if needed
-        logger.debug(f"Session release requested for {provider_name}")
+        logger.debug("Session release requested for %s", provider_name)
 
     async def health_check_connections(self) -> Dict[str, bool]:
         """
@@ -331,13 +331,13 @@ class VoiceConnectionManager(IConnectionManager):
                     health_status[provider_name] = is_healthy
 
                     if not is_healthy:
-                        logger.warning(f"Connection pool unhealthy for {provider_name}")
+                        logger.warning("Connection pool unhealthy for %s", provider_name)
 
                 except Exception as e:
-                    logger.error(f"Health check error for {provider_name}: {e}")
+                    logger.error("Health check error for %s: %s", provider_name, e)
                     health_status[provider_name] = False
 
-        logger.debug(f"Health check completed: {health_status}")
+        logger.debug("Health check completed: %s", health_status)
         return health_status
 
     async def cleanup(self) -> None:
@@ -368,7 +368,7 @@ class VoiceConnectionManager(IConnectionManager):
 
     async def _create_pool(self, provider_name: str) -> None:
         """Create connection pool for provider"""
-        logger.info(f"Creating connection pool for {provider_name}")
+        logger.info("Creating connection pool for %s", provider_name)
 
         # Get provider-specific settings from configuration
         pool_config = self._get_pool_config(provider_name)
@@ -381,7 +381,7 @@ class VoiceConnectionManager(IConnectionManager):
         await pool.initialize()
         self._pools[provider_name] = pool
 
-        logger.info(f"Connection pool created for {provider_name}")
+        logger.info("Connection pool created for %s", provider_name)
 
     def _get_pool_config(self, provider_name: str) -> Dict[str, Any]:
         """Get connection pool configuration for provider"""
@@ -432,7 +432,7 @@ class VoiceConnectionManager(IConnectionManager):
                 ]
 
                 if unhealthy_providers:
-                    logger.warning(f"Recreating unhealthy pools: {unhealthy_providers}")
+                    logger.warning("Recreating unhealthy pools: %s", unhealthy_providers)
 
                     async with self._pool_lock:
                         for provider_name in unhealthy_providers:
@@ -448,7 +448,7 @@ class VoiceConnectionManager(IConnectionManager):
                 logger.info("Periodic cleanup task cancelled")
                 break
             except Exception as e:
-                logger.error(f"Error in periodic cleanup: {e}")
+                logger.error("Error in periodic cleanup: %s", e)
                 # Continue running despite errors
 
     def get_pool_stats(self) -> Dict[str, Any]:

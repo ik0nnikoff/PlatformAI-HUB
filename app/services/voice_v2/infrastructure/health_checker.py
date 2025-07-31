@@ -401,74 +401,122 @@ class HealthManager:
     async def get_overall_health(self) -> Dict[str, Any]:
         """Get overall system health status"""
         async with self._manager_lock:
-            health_summary = {
-                "status": HealthStatus.HEALTHY.value,
-                "timestamp": datetime.now().isoformat(),
-                "providers": {},
-                "system_components": {}
-            }
+            health_summary = self._initialize_health_summary()
 
-            # Check all provider health
-            unhealthy_count = 0
-            total_providers = len(self._provider_health)
-
-            for provider_key in self._provider_health:
-                # Force fresh check for overall status
-                parts = provider_key.split('_')
-                provider_name = '_'.join(parts[:-1])
-                provider_type = ProviderType(parts[-1])
-
-                updated_status = await self.check_provider_health(provider_name, provider_type)
-
-                health_summary["providers"][provider_key] = {
-                    "status": updated_status.overall_status.value,
-                    "stt_status": updated_status.stt_health.status.value if updated_status.stt_health else "unknown",
-                    "tts_status": updated_status.tts_health.status.value if updated_status.tts_health else "unknown",
-                    "last_check": updated_status.last_check.isoformat()
-                }
-
-                if updated_status.overall_status != HealthStatus.HEALTHY:
-                    unhealthy_count += 1
-
-            # Check system components
-            for component_name in self._health_checkers:
-                if not component_name.endswith(('_stt', '_tts')):  # System components only
-                    try:
-                        result = await self.check_system_health(component_name)
-                        health_summary["system_components"][component_name] = {
-                            "status": result.status.value,
-                            "message": result.message,
-                            "response_time_ms": result.response_time_ms,
-                            "timestamp": result.timestamp.isoformat()
-                        }
-
-                        if result.status != HealthStatus.HEALTHY:
-                            unhealthy_count += 1
-                    except Exception as e:
-                        health_summary["system_components"][component_name] = {
-                            "status": HealthStatus.UNHEALTHY.value,
-                            "message": f"Health check failed: {str(e)}",
-                            "response_time_ms": 0.0,
-                            "timestamp": datetime.now().isoformat()
-                        }
-                        unhealthy_count += 1
+            # Check all provider and system component health
+            unhealthy_count = await self._check_all_components_health(health_summary)
 
             # Determine overall status
-            total_components = total_providers + len(health_summary["system_components"])
-            if unhealthy_count == 0:
-                health_summary["status"] = HealthStatus.HEALTHY.value
-            elif unhealthy_count >= total_components / 2:
-                health_summary["status"] = HealthStatus.UNHEALTHY.value
-            else:
-                health_summary["status"] = HealthStatus.DEGRADED.value
+            total_components = len(self._provider_health) + len(health_summary["system_components"])
+            health_summary["status"] = self._determine_overall_status(unhealthy_count, total_components)
 
-            health_summary["summary"] = {
-                "total_components": total_components,
-                "healthy_components": total_components - unhealthy_count,
-                "unhealthy_components": unhealthy_count
-            }
+            # Add summary statistics
+            health_summary["summary"] = self._create_health_summary_stats(total_components, unhealthy_count)
 
             return health_summary
+
+    def _initialize_health_summary(self) -> Dict[str, Any]:
+        """Initialize health summary structure"""
+        return {
+            "status": HealthStatus.HEALTHY.value,
+            "timestamp": datetime.now().isoformat(),
+            "providers": {},
+            "system_components": {}
+        }
+
+    async def _check_all_components_health(self, health_summary: Dict[str, Any]) -> int:
+        """Check health of all providers and system components"""
+        unhealthy_count = 0
+
+        # Check provider health
+        unhealthy_count += await self._check_all_providers_health(health_summary)
+
+        # Check system components health
+        unhealthy_count += await self._check_system_components_health(health_summary)
+
+        return unhealthy_count
+
+    async def _check_all_providers_health(self, health_summary: Dict[str, Any]) -> int:
+        """Check health of all providers"""
+        unhealthy_count = 0
+
+        for provider_key in self._provider_health:
+            # Parse provider info
+            parts = provider_key.split('_')
+            provider_name = '_'.join(parts[:-1])
+            provider_type = ProviderType(parts[-1])
+
+            # Force fresh check for overall status
+            updated_status = await self.check_provider_health(provider_name, provider_type)
+
+            health_summary["providers"][provider_key] = self._create_provider_health_info(updated_status)
+
+            if updated_status.overall_status != HealthStatus.HEALTHY:
+                unhealthy_count += 1
+
+        return unhealthy_count
+
+    def _create_provider_health_info(self, updated_status) -> Dict[str, Any]:
+        """Create provider health information dictionary"""
+        return {
+            "status": updated_status.overall_status.value,
+            "stt_status": updated_status.stt_health.status.value if updated_status.stt_health else "unknown",
+            "tts_status": updated_status.tts_health.status.value if updated_status.tts_health else "unknown",
+            "last_check": updated_status.last_check.isoformat()
+        }
+
+    async def _check_system_components_health(self, health_summary: Dict[str, Any]) -> int:
+        """Check health of system components"""
+        unhealthy_count = 0
+
+        for component_name in self._health_checkers:
+            if not component_name.endswith(('_stt', '_tts')):  # System components only
+                try:
+                    result = await self.check_system_health(component_name)
+                    health_summary["system_components"][component_name] = self._create_component_health_info(result)
+
+                    if result.status != HealthStatus.HEALTHY:
+                        unhealthy_count += 1
+                except Exception as e:
+                    health_summary["system_components"][component_name] = self._create_failed_component_info(e)
+                    unhealthy_count += 1
+
+        return unhealthy_count
+
+    def _create_component_health_info(self, result) -> Dict[str, Any]:
+        """Create component health information dictionary"""
+        return {
+            "status": result.status.value,
+            "message": result.message,
+            "response_time_ms": result.response_time_ms,
+            "timestamp": result.timestamp.isoformat()
+        }
+
+    def _create_failed_component_info(self, error: Exception) -> Dict[str, Any]:
+        """Create health info for failed component"""
+        return {
+            "status": HealthStatus.UNHEALTHY.value,
+            "message": f"Health check failed: {str(error)}",
+            "response_time_ms": 0.0,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    def _determine_overall_status(self, unhealthy_count: int, total_components: int) -> str:
+        """Determine overall system health status"""
+        if unhealthy_count == 0:
+            return HealthStatus.HEALTHY.value
+        elif unhealthy_count >= total_components / 2:
+            return HealthStatus.UNHEALTHY.value
+        else:
+            return HealthStatus.DEGRADED.value
+
+    def _create_health_summary_stats(self, total_components: int, unhealthy_count: int) -> Dict[str, int]:
+        """Create health summary statistics"""
+        return {
+            "total_components": total_components,
+            "healthy_components": total_components - unhealthy_count,
+            "unhealthy_components": unhealthy_count
+        }
 
     def is_provider_healthy(self, provider_name: str, provider_type: ProviderType) -> bool:
         """Quick check if provider is healthy (cached result)"""

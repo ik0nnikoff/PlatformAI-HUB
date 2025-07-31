@@ -84,7 +84,7 @@ class GoogleTTSProvider(BaseTTSProvider):
         # Internal state - lazy initialization pattern
         self._client: Optional[texttospeech_v1.TextToSpeechAsyncClient] = None
 
-        logger.debug(f"GoogleTTSProvider initialized: voice={self._voice_name}, language={self._language_code}")
+        logger.debug("GoogleTTSProvider initialized: voice=%s, language=%s", self._voice_name, self._language_code)
 
     async def get_capabilities(self) -> TTSCapabilities:
         """
@@ -119,7 +119,7 @@ class GoogleTTSProvider(BaseTTSProvider):
                 quality_levels=[TTSQuality.STANDARD, TTSQuality.HIGH, TTSQuality.PREMIUM]
             )
         except Exception as e:
-            logger.warning(f"Failed to get Google Cloud TTS capabilities: {e}")
+            logger.warning("Failed to get Google Cloud TTS capabilities: %s", e)
             # Return basic capabilities on error
             return TTSCapabilities(
                 provider_type=ProviderType.GOOGLE,
@@ -154,10 +154,10 @@ class GoogleTTSProvider(BaseTTSProvider):
             # Test connectivity with a simple list voices call
             await self._test_connectivity()
 
-            logger.debug(f"Google Cloud TTS client initialized: project={self._project_id}")
+            logger.debug("Google Cloud TTS client initialized: project=%s", self._project_id)
 
         except Exception as e:
-            logger.error(f"Failed to initialize Google Cloud TTS client: {e}")
+            logger.error("Failed to initialize Google Cloud TTS client: %s", e)
             raise AudioProcessingError(f"Google Cloud TTS initialization failed: {e}")
 
     async def cleanup(self) -> None:
@@ -177,7 +177,7 @@ class GoogleTTSProvider(BaseTTSProvider):
             await self._client.list_voices()
             logger.debug("Google Cloud TTS connectivity test successful")
         except Exception as e:
-            logger.error(f"Google Cloud TTS connectivity test failed: {e}")
+            logger.error("Google Cloud TTS connectivity test failed: %s", e)
             raise AudioProcessingError(f"Google Cloud TTS connectivity failed: {e}")
 
     @provider_operation("Google TTS Synthesis")
@@ -314,7 +314,7 @@ class GoogleTTSProvider(BaseTTSProvider):
                 last_exception = e
                 if attempt < self._max_retries:
                     delay = 2 ** attempt  # Exponential backoff
-                    logger.warning(f"Google Cloud retry error, retrying in {delay}s (attempt {attempt + 1})")
+                    logger.warning("Google Cloud retry error, retrying in %ss (attempt %s)", delay, attempt + 1)
                     await asyncio.sleep(delay)
                     continue
                 raise AudioProcessingError(f"Google Cloud retry limit exceeded: {e}")
@@ -327,7 +327,7 @@ class GoogleTTSProvider(BaseTTSProvider):
                 last_exception = e
                 if attempt < self._max_retries and e.code in [429, 503]:  # Rate limit or service unavailable
                     delay = 2 ** attempt
-                    logger.warning(f"Google Cloud API error, retrying in {delay}s (attempt {attempt + 1})")
+                    logger.warning("Google Cloud API error, retrying in %ss (attempt %s)", delay, attempt + 1)
                     await asyncio.sleep(delay)
                     continue
                 raise AudioProcessingError(f"Google Cloud API error: {e}")
@@ -336,7 +336,7 @@ class GoogleTTSProvider(BaseTTSProvider):
                 last_exception = e
                 if attempt < self._max_retries:
                     delay = 2 ** attempt
-                    logger.warning(f"Unexpected error, retrying in {delay}s (attempt {attempt + 1})")
+                    logger.warning("Unexpected error, retrying in %ss (attempt %s)", delay, attempt + 1)
                     await asyncio.sleep(delay)
                     continue
                 raise AudioProcessingError(f"Google Cloud TTS synthesis failed: {e}")
@@ -370,7 +370,7 @@ class GoogleTTSProvider(BaseTTSProvider):
             return voices
 
         except Exception as e:
-            logger.error(f"Failed to get Google Cloud voices: {e}")
+            logger.error("Failed to get Google Cloud voices: %s", e)
             raise AudioProcessingError(f"Failed to retrieve Google Cloud voices: {e}")
 
     async def _upload_audio_to_storage(
@@ -391,7 +391,7 @@ class GoogleTTSProvider(BaseTTSProvider):
             return f"https://storage.example.com/tts/{filename}"
 
         except Exception as e:
-            logger.error(f"Failed to upload audio to storage: {e}")
+            logger.error("Failed to upload audio to storage: %s", e)
             raise AudioProcessingError(f"Audio storage upload failed: {e}")
 
     def _estimate_audio_duration(self, text: str, speaking_rate: float = 1.0) -> float:
@@ -433,7 +433,7 @@ class GoogleTTSProvider(BaseTTSProvider):
             return True
 
         except Exception as e:
-            logger.warning(f"Google Cloud TTS health check failed: {e}")
+            logger.warning("Google Cloud TTS health check failed: %s", e)
             return False
 
     @property

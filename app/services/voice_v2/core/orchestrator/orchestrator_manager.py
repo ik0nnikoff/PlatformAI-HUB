@@ -54,7 +54,7 @@ class VoiceOrchestratorManager(IOrchestratorManager):
 
         # Performance optimization system
         self._performance_manager = performance_manager
-        
+
         # Initialize provider system (Enhanced Factory or Legacy)
         self._initialize_provider_system(stt_providers, tts_providers, enhanced_factory)
 
@@ -194,7 +194,7 @@ class VoiceOrchestratorManager(IOrchestratorManager):
             logger.info("VoiceOrchestratorManager initialized successfully")
 
         except Exception as e:
-            logger.error(f"Failed to initialize VoiceOrchestratorManager: {e}")
+            logger.error("Failed to initialize VoiceOrchestratorManager: %s", e)
             await self.cleanup()
             raise VoiceServiceError(f"Orchestrator initialization failed: {e}")
 
@@ -221,7 +221,7 @@ class VoiceOrchestratorManager(IOrchestratorManager):
             logger.info("VoiceOrchestratorManager cleanup completed")
 
         except Exception as e:
-            logger.error(f"Error during VoiceOrchestratorManager cleanup: {e}")
+            logger.error("Error during VoiceOrchestratorManager cleanup: %s", e)
 
     async def transcribe_audio(self, request: STTRequest) -> STTResponse:
         """
@@ -294,7 +294,7 @@ class VoiceOrchestratorManager(IOrchestratorManager):
                 "component": "orchestrator_manager"
             }
         except Exception as e:
-            logger.error(f"Error getting health status: {e}")
+            logger.error("Error getting health status: %s", e)
             return {
                 "status": "error",
                 "error": str(e),

@@ -61,7 +61,7 @@ class VoiceServiceOrchestrator:
 
         # Log initialization mode
         mode = "Enhanced Factory" if enhanced_factory else "Legacy"
-        logger.info(f"Orchestrator initialized with {mode} mode")
+        logger.info("Orchestrator initialized with %s mode", mode)
 
     def _initialize_core_dependencies(
         self,
@@ -129,7 +129,7 @@ class VoiceServiceOrchestrator:
             logger.info("Voice service orchestrator initialized successfully")
 
         except Exception as e:
-            logger.error(f"Failed to initialize orchestrator: {e}", exc_info=True)
+            logger.error("Failed to initialize orchestrator: %s", e, exc_info=True)
             raise VoiceServiceError(f"Orchestrator initialization failed: {e}") from e
 
     async def cleanup(self) -> None:
@@ -150,7 +150,7 @@ class VoiceServiceOrchestrator:
             if stt_count == 0 and tts_count == 0:
                 logger.warning("No providers configured - operations may fail")
             else:
-                logger.info(f"Validated {stt_count} STT and {tts_count} TTS providers")
+                logger.info("Validated %s STT and %s TTS providers", stt_count, tts_count)
 
     async def _perform_health_checks(self) -> None:
         """Perform health checks on all configured providers"""
@@ -160,9 +160,9 @@ class VoiceServiceOrchestrator:
                 try:
                     is_healthy = await provider.health_check()
                     if not is_healthy:
-                        logger.warning(f"STT provider {provider_type} failed health check")
+                        logger.warning("STT provider %s failed health check", provider_type)
                 except Exception as e:
-                    logger.warning(f"STT provider {provider_type} health check error: {e}")
+                    logger.warning("STT provider %s health check error: %s", provider_type, e)
 
         # Check TTS providers
         for provider_type, provider in self._tts_providers.items():
@@ -170,9 +170,9 @@ class VoiceServiceOrchestrator:
                 try:
                     is_healthy = await provider.health_check()
                     if not is_healthy:
-                        logger.warning(f"TTS provider {provider_type} failed health check")
+                        logger.warning("TTS provider %s failed health check", provider_type)
                 except Exception as e:
-                    logger.warning(f"TTS provider {provider_type} health check error: {e}")
+                    logger.warning("TTS provider %s health check error: %s", provider_type, e)
 
     @classmethod
     async def create_with_enhanced_factory(
@@ -214,16 +214,16 @@ class VoiceServiceOrchestrator:
     async def transcribe_audio(self, request: STTRequest) -> STTResponse:
         """
         Core STT transcription method - Phase 4.6.1 Implementation
-        
+
         Converts audio to text using available STT providers with fallback chain.
         This is the main entry point for all STT operations in voice_v2.
-        
+
         Args:
             request: STT request with audio data and settings
-            
+
         Returns:
             STTResponse with transcribed text and metadata
-            
+
         Raises:
             VoiceServiceError: If orchestrator not initialized or all providers fail
         """
@@ -233,23 +233,23 @@ class VoiceServiceOrchestrator:
         # Use modular managers if available, otherwise fallback to legacy
         if hasattr(self, '_stt_manager') and self._stt_manager:
             return await self._stt_manager.transcribe_audio(request)
-        
+
         # Fallback to Enhanced Factory approach
         return await self._transcribe_with_enhanced_factory(request)
 
     async def synthesize_speech(self, request: TTSRequest) -> TTSResponse:
         """
         Core TTS synthesis method - Phase 4.6.1 Implementation
-        
+
         Converts text to speech using available TTS providers with fallback chain.
         This is the main entry point for all TTS operations in voice_v2.
-        
+
         Args:
             request: TTS request with text and voice settings
-            
+
         Returns:
             TTSResponse with audio data and metadata
-            
+
         Raises:
             VoiceServiceError: If orchestrator not initialized or all providers fail
         """
@@ -259,7 +259,7 @@ class VoiceServiceOrchestrator:
         # Use modular managers if available, otherwise fallback to legacy
         if hasattr(self, '_tts_manager') and self._tts_manager:
             return await self._tts_manager.synthesize_speech(request)
-        
+
         # Fallback to Enhanced Factory approach
         return await self._synthesize_with_enhanced_factory(request)
 
@@ -281,7 +281,7 @@ class VoiceServiceOrchestrator:
 
                 # Attempt transcription
                 result = await provider.transcribe_audio(request)
-                logger.info(f"STT successful with provider {provider_type}")
+                logger.info("STT successful with provider %s", provider_type)
                 return STTResponse(
                     text=result.text,
                     provider=provider_type,
@@ -292,7 +292,7 @@ class VoiceServiceOrchestrator:
 
             except Exception as e:
                 last_error = e
-                logger.warning(f"STT provider {provider_type} failed: {e}")
+                logger.warning("STT provider %s failed: %s", provider_type, e)
                 continue
 
         # All providers failed
@@ -318,41 +318,14 @@ class VoiceServiceOrchestrator:
 
                 # Attempt synthesis
                 result = await provider.synthesize_speech(request)
-                logger.info(f"TTS successful with provider {provider_type}")
-                
+                logger.info("TTS successful with provider %s", provider_type)
+
                 # Convert TTSResult to TTSResponse
-                # TTSResult contains audio_url, need to download actual audio data
-                audio_data = b""
-                if hasattr(result, 'audio_data') and result.audio_data:
-                    # Direct audio data available
-                    audio_data = result.audio_data
-                elif hasattr(result, 'audio_url') and result.audio_url:
-                    # Download audio from URL
-                    try:
-                        import aiohttp
-                        async with aiohttp.ClientSession() as session:
-                            async with session.get(result.audio_url) as response:
-                                if response.status == 200:
-                                    audio_data = await response.read()
-                                    logger.debug(f"Downloaded {len(audio_data)} bytes from {result.audio_url}")
-                                else:
-                                    logger.warning(f"Failed to download audio: HTTP {response.status}")
-                    except Exception as download_error:
-                        logger.warning(f"Failed to download audio from {result.audio_url}: {download_error}")
-                        # Continue with empty audio_data as fallback
-                
-                return TTSResponse(
-                    audio_data=audio_data,
-                    format=AudioFormat.MP3,  # Default format
-                    provider=provider_type,
-                    processing_time=result.processing_time or 0.0,
-                    duration=result.audio_duration,
-                    sample_rate=22050  # Default sample rate
-                )
+                return await self._convert_tts_result_to_response(result, provider_type)
 
             except Exception as e:
                 last_error = e
-                logger.warning(f"TTS provider {provider_type} failed: {e}")
+                logger.warning("TTS provider %s failed: %s", provider_type, e)
                 continue
 
         # All providers failed
@@ -360,38 +333,85 @@ class VoiceServiceOrchestrator:
         logger.error(error_msg)
         raise VoiceServiceError(error_msg)
 
+    async def _convert_tts_result_to_response(self, result, provider_type: str) -> TTSResponse:
+        """Convert TTSResult to TTSResponse with audio data handling"""
+        audio_data = await self._extract_audio_data(result)
+
+        return TTSResponse(
+            audio_data=audio_data,
+            format=AudioFormat.MP3,  # Default format
+            provider=provider_type,
+            processing_time=result.processing_time or 0.0,
+            duration=result.audio_duration,
+            sample_rate=22050  # Default sample rate
+        )
+
+    async def _extract_audio_data(self, result) -> bytes:
+        """Extract audio data from TTS result"""
+        # Direct audio data available
+        if hasattr(result, 'audio_data') and result.audio_data:
+            return result.audio_data
+
+        # Download audio from URL
+        if hasattr(result, 'audio_url') and result.audio_url:
+            return await self._download_audio_from_url(result.audio_url)
+
+        return b""
+
+    async def _download_audio_from_url(self, audio_url: str) -> bytes:
+        """Download audio data from URL"""
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(audio_url) as response:
+                    if response.status == 200:
+                        audio_data = await response.read()
+                        logger.debug("Downloaded %d bytes from %s", len(audio_data), audio_url)
+                        return audio_data
+                    else:
+                        logger.warning("Failed to download audio: HTTP %d", response.status)
+        except Exception as download_error:
+            logger.warning("Failed to download audio from %s: %s", audio_url, download_error)
+
+        return b""
+
     async def _get_or_create_stt_provider(self, provider_type: str):
         """Get or create STT provider using Enhanced Factory"""
-        if provider_type in self._factory_stt_cache:
-            return self._factory_stt_cache[provider_type]
-
-        try:
-            provider = await self._enhanced_factory.create_stt_provider(provider_type)
-            if provider:
-                # Initialize provider if needed
-                if hasattr(provider, 'initialize'):
-                    await provider.initialize()
-                self._factory_stt_cache[provider_type] = provider
-                logger.debug(f"Created STT provider {provider_type}")
-            return provider
-        except Exception as e:
-            logger.error(f"Failed to create STT provider {provider_type}: {e}")
-            return None
+        return await self._get_or_create_provider(
+            provider_type,
+            self._factory_stt_cache,
+            self._enhanced_factory.create_stt_provider
+        )
 
     async def _get_or_create_tts_provider(self, provider_type: str):
         """Get or create TTS provider using Enhanced Factory"""
-        if provider_type in self._factory_tts_cache:
-            return self._factory_tts_cache[provider_type]
+        return await self._get_or_create_provider(
+            provider_type,
+            self._factory_tts_cache,
+            self._enhanced_factory.create_tts_provider
+        )
 
+    async def _get_or_create_provider(self, provider_type: str, cache: dict, factory_method):
+        """Generic method to get or create provider with caching"""
+        if provider_type in cache:
+            return cache[provider_type]
+
+        return await self._create_and_cache_provider(provider_type, cache, factory_method)
+
+    async def _create_and_cache_provider(self, provider_type: str, cache: dict, factory_method):
+        """Create, initialize, and cache a provider"""
         try:
-            provider = await self._enhanced_factory.create_tts_provider(provider_type)
+            provider = await factory_method(provider_type)
             if provider:
-                # Initialize provider if needed
-                if hasattr(provider, 'initialize'):
-                    await provider.initialize()
-                self._factory_tts_cache[provider_type] = provider
-                logger.debug(f"Created TTS provider {provider_type}")
+                await self._initialize_provider_if_needed(provider)
+                cache[provider_type] = provider
+                logger.debug("Created provider %s", provider_type)
             return provider
         except Exception as e:
-            logger.error(f"Failed to create TTS provider {provider_type}: {e}")
+            logger.error("Failed to create provider %s: %s", provider_type, e)
             return None
+
+    async def _initialize_provider_if_needed(self, provider):
+        """Initialize provider if it has an initialize method"""
+        if hasattr(provider, 'initialize'):
+            await provider.initialize()

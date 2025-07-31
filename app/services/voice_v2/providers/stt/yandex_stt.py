@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 class YandexSTTProvider(BaseSTTProvider):
     """
     Simplified Yandex SpeechKit STT Provider.
-    
+
     Delegated audio processing to YandexAudioProcessor for modularity.
     Single Responsibility: Yandex API integration and coordination.
     """
@@ -99,17 +99,17 @@ class YandexSTTProvider(BaseSTTProvider):
         """Initialize provider and connections."""
         if not self.api_key:
             raise ProviderNotAvailableError("Yandex API key not configured")
-        
+
         if not self.folder_id:
             raise ProviderNotAvailableError("Yandex folder ID not configured")
 
         await self._setup_connection_pool()
-        
+
         # Test connection
         if not await self.health_check():
             raise ProviderNotAvailableError("Yandex STT service not available")
 
-        logger.info(f"Yandex STT provider '{self.provider_name}' initialized successfully")
+        logger.info("Yandex STT provider '%s' initialized successfully", self.provider_name)
 
     async def _setup_connection_pool(self) -> None:
         """Setup HTTP connection pool."""
@@ -155,7 +155,7 @@ class YandexSTTProvider(BaseSTTProvider):
 
             # Simple health check with minimal audio data
             test_audio = b"dummy_audio_data_for_health_check"
-            
+
             async with self._session.post(
                 self.STT_API_URL,
                 data=test_audio,
@@ -170,7 +170,7 @@ class YandexSTTProvider(BaseSTTProvider):
                 return response.status in [200, 400]
 
         except Exception as e:
-            logger.warning(f"Yandex STT health check failed: {e}")
+            logger.warning("Yandex STT health check failed: %s", e)
             return False
 
     async def _validate_request(self, request: STTRequest) -> None:
@@ -187,17 +187,17 @@ class YandexSTTProvider(BaseSTTProvider):
     async def _transcribe_implementation(self, request: STTRequest) -> STTResult:
         """Main transcription implementation."""
         timer = PerformanceTimer()
-        
+
         try:
             # Validate request
             await self._validate_request(request)
-            
+
             # Process audio data
             processed_audio, final_format = await self.audio_processor.process_audio_data(
-                request.audio_data, 
+                request.audio_data,
                 request.audio_format
             )
-            
+
             # Perform transcription with retry
             result = await self._transcribe_with_retry(
                 audio_data=processed_audio,
@@ -205,15 +205,15 @@ class YandexSTTProvider(BaseSTTProvider):
                 language=request.language or "ru-RU",
                 enable_profanity_filter=request.enable_profanity_filter
             )
-            
+
             # Update performance stats
             processing_time = timer.get_elapsed_seconds()
             self._update_performance_stats(processing_time)
-            
+
             return result
 
         except Exception as e:
-            logger.error(f"Yandex STT transcription failed: {e}")
+            logger.error("Yandex STT transcription failed: %s", e)
             raise
 
     async def _transcribe_with_retry(self,
@@ -224,7 +224,7 @@ class YandexSTTProvider(BaseSTTProvider):
                                    max_retries: int = 3) -> STTResult:
         """Perform transcription with retry logic."""
         normalized_language = self.audio_processor.normalize_language(language)
-        
+
         for attempt in range(max_retries):
             try:
                 if not self._session:
@@ -252,7 +252,7 @@ class YandexSTTProvider(BaseSTTProvider):
                             # Rate limiting - wait and retry
                             await asyncio.sleep(2 ** attempt)
                             continue
-                        
+
                         raise VoiceServiceError(
                             f"Yandex STT API error {response.status}: {error_text}"
                         )
@@ -262,7 +262,7 @@ class YandexSTTProvider(BaseSTTProvider):
                     await asyncio.sleep(1)
                     continue
                 raise VoiceServiceTimeout("Yandex STT request timeout")
-            
+
             except Exception:
                 if attempt < max_retries - 1:
                     await asyncio.sleep(1)
@@ -274,7 +274,7 @@ class YandexSTTProvider(BaseSTTProvider):
     def _parse_transcription_result(self, result: Dict[str, Any]) -> STTResult:
         """Parse Yandex API response."""
         result_text = result.get('result', '').strip()
-        
+
         return STTResult(
             text=result_text,
             confidence=0.95,  # Yandex doesn't provide confidence scores
@@ -294,10 +294,10 @@ class YandexSTTProvider(BaseSTTProvider):
     def get_status_info(self) -> Dict[str, Any]:
         """Get provider status information."""
         avg_processing_time = (
-            self._total_processing_time / self._request_count 
+            self._total_processing_time / self._request_count
             if self._request_count > 0 else 0.0
         )
-        
+
         return {
             "provider_name": self.provider_name,
             "provider_type": "yandex_stt",

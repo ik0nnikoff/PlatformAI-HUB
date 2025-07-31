@@ -98,7 +98,7 @@ class GoogleSTTProvider(BaseSTTProvider):
         self._client: Optional[speech.SpeechClient] = None
         self._credentials: Optional[service_account.Credentials] = None
 
-        logger.debug(f"GoogleSTTProvider initialized: model={self._model}, lang={self._language_code}")
+        logger.debug("GoogleSTTProvider initialized: model=%s, lang=%s", self._model, self._language_code)
 
     def get_required_config_fields(self) -> List[str]:
         """
@@ -178,7 +178,7 @@ class GoogleSTTProvider(BaseSTTProvider):
             logger.info("Google STT Provider initialized successfully")
 
         except Exception as e:
-            logger.error(f"Google STT initialization failed: {e}", exc_info=True)
+            logger.error("Google STT initialization failed: %s", e, exc_info=True)
             raise VoiceConfigurationError(f"Google STT init error: {e}")
 
     async def cleanup(self) -> None:
@@ -194,7 +194,7 @@ class GoogleSTTProvider(BaseSTTProvider):
             logger.debug("Google STT Provider cleaned up")
 
         except Exception as e:
-            logger.error(f"Google STT cleanup error: {e}", exc_info=True)
+            logger.error("Google STT cleanup error: %s", e, exc_info=True)
 
     @provider_operation("Google STT Transcription")
     async def _transcribe_implementation(self, request: STTRequest) -> STTResult:
@@ -269,7 +269,8 @@ class GoogleSTTProvider(BaseSTTProvider):
                     raise VoiceConfigurationError(f"Credentials file not found: {self._credentials_path}")
 
                 self._credentials = service_account.Credentials.from_service_account_file(str(creds_file))
-                logger.debug(f"Loaded credentials from file: {self._credentials_path}")
+                # Avoid logging any file information to prevent potential credential exposure
+                logger.debug("Loaded credentials from service account file")
 
             else:
                 # Use Application Default Credentials
@@ -324,7 +325,7 @@ class GoogleSTTProvider(BaseSTTProvider):
                 operation="google_stt_connection_validation"
             )
         except Exception as e:
-            logger.warning(f"Connection validation failed (may be normal): {e}")
+            logger.warning("Connection validation failed (may be normal): %s", e)
 
     async def _read_audio_file(self, file_path: str) -> bytes:
         """Read audio file asynchronously"""
@@ -380,41 +381,17 @@ class GoogleSTTProvider(BaseSTTProvider):
 
         for attempt in range(self._max_retries + 1):
             try:
+                # Apply delay for retry attempts
                 if attempt > 0:
-                    # Exponential backoff with jitter
-                    delay = min(self._base_delay * (2 ** (attempt - 1)), self._max_delay)
-                    logger.debug(f"Retrying Google STT (attempt {attempt + 1}) after {delay}s")
-                    await asyncio.sleep(delay)
+                    await self._apply_retry_delay(attempt)
 
                 # Execute transcription via direct API call
                 return await self._execute_google_transcription(config, audio)
 
-            except google_exceptions.TooManyRequests as e:
+            except (google_exceptions.TooManyRequests, google_exceptions.ServiceUnavailable, google_exceptions.DeadlineExceeded) as e:
                 last_exception = e
-                logger.warning(f"Google STT rate limit (attempt {attempt + 1})")
-                if attempt == self._max_retries:
-                    raise VoiceServiceTimeout(
-                        f"Google STT rate limit after {attempt + 1} attempts",
-                        timeout_seconds=self._max_delay
-                    )
-
-            except google_exceptions.ServiceUnavailable as e:
-                last_exception = e
-                logger.warning(f"Google STT service unavailable (attempt {attempt + 1})")
-                if attempt == self._max_retries:
-                    raise VoiceServiceTimeout(
-                        f"Google STT unavailable after {attempt + 1} attempts",
-                        timeout_seconds=self._max_delay
-                    )
-
-            except google_exceptions.DeadlineExceeded as e:
-                last_exception = e
-                logger.warning(f"Google STT timeout (attempt {attempt + 1})")
-                if attempt == self._max_retries:
-                    raise VoiceServiceTimeout(
-                        f"Google STT timeout after {attempt + 1} attempts",
-                        timeout_seconds=self._max_delay
-                    )
+                if not self._should_retry_transient_error(e, attempt):
+                    raise self._create_timeout_error(e, attempt)
 
             except (google_exceptions.Unauthenticated, google_exceptions.PermissionDenied) as e:
                 # Don't retry auth errors
@@ -425,7 +402,7 @@ class GoogleSTTProvider(BaseSTTProvider):
 
             except Exception as e:
                 last_exception = e
-                logger.warning(f"Google STT error (attempt {attempt + 1}): {e}")
+                logger.warning("Google STT error (attempt %s): %s", attempt + 1, e)
                 if attempt == self._max_retries:
                     break
 
@@ -433,6 +410,37 @@ class GoogleSTTProvider(BaseSTTProvider):
         raise VoiceProviderError(
             f"Google STT failed after {self._max_retries + 1} attempts: {last_exception}",
             operation="google_stt_retry_exhausted"
+        )
+
+    async def _apply_retry_delay(self, attempt: int):
+        """Apply exponential backoff delay for retry attempts"""
+        delay = min(self._base_delay * (2 ** (attempt - 1)), self._max_delay)
+        logger.debug("Retrying Google STT (attempt %s) after %ss", attempt + 1, delay)
+        await asyncio.sleep(delay)
+
+    def _should_retry_transient_error(self, error: Exception, attempt: int) -> bool:
+        """Check if transient error should be retried"""
+        if attempt == self._max_retries:
+            return False
+
+        error_type = type(error).__name__
+        logger.warning("Google STT %s (attempt %s)", error_type.lower().replace('_', ' '), attempt + 1)
+        return True
+
+    def _create_timeout_error(self, error: Exception, attempt: int) -> VoiceServiceTimeout:
+        """Create timeout error based on exception type"""
+        error_messages = {
+            'TooManyRequests': 'rate limit',
+            'ServiceUnavailable': 'unavailable',
+            'DeadlineExceeded': 'timeout'
+        }
+
+        error_type = type(error).__name__
+        message = error_messages.get(error_type, 'error')
+
+        return VoiceServiceTimeout(
+            f"Google STT {message} after {attempt + 1} attempts",
+            timeout_seconds=self._max_delay
         )
 
     def _process_response(

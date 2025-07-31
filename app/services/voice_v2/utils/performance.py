@@ -93,28 +93,56 @@ class MetricsHelpers:
         if not metrics_list:
             return {}
 
+        # Calculate overall metrics
+        overall_metrics = MetricsHelpers._calculate_overall_metrics(metrics_list)
+
+        # Calculate provider-specific metrics
+        provider_metrics = MetricsHelpers._calculate_provider_metrics(metrics_list)
+
+        return {
+            'total_operations': overall_metrics['total_operations'],
+            'success_rate': overall_metrics['success_rate'],
+            'average_duration_ms': overall_metrics['average_duration_ms'],
+            'providers': provider_metrics
+        }
+
+    @staticmethod
+    def _calculate_overall_metrics(metrics_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Calculate overall performance metrics"""
         total_operations = len(metrics_list)
         successful_operations = sum(1 for m in metrics_list if m.get('success', False))
         total_duration = sum(m.get('duration_ms', 0) for m in metrics_list)
 
-        providers = {}
-        for metric in metrics_list:
-            provider = metric.get('provider')
-            if provider:
-                if provider not in providers:
-                    providers[provider] = {'count': 0, 'success': 0, 'total_duration': 0}
-
-                providers[provider]['count'] += 1
-                if metric.get('success', False):
-                    providers[provider]['success'] += 1
-                providers[provider]['total_duration'] += metric.get('duration_ms', 0)
-
         return {
             'total_operations': total_operations,
             'success_rate': successful_operations / total_operations if total_operations > 0 else 0,
-            'average_duration_ms': total_duration / total_operations if total_operations > 0 else 0,
-            'providers': providers
+            'average_duration_ms': total_duration / total_operations if total_operations > 0 else 0
         }
+
+    @staticmethod
+    def _calculate_provider_metrics(metrics_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Calculate provider-specific metrics"""
+        providers = {}
+
+        for metric in metrics_list:
+            provider = metric.get('provider')
+            if provider:
+                providers = MetricsHelpers._update_provider_stats(providers, provider, metric)
+
+        return providers
+
+    @staticmethod
+    def _update_provider_stats(providers: Dict, provider: str, metric: Dict[str, Any]) -> Dict:
+        """Update statistics for a specific provider"""
+        if provider not in providers:
+            providers[provider] = {'count': 0, 'success': 0, 'total_duration': 0}
+
+        providers[provider]['count'] += 1
+        if metric.get('success', False):
+            providers[provider]['success'] += 1
+        providers[provider]['total_duration'] += metric.get('duration_ms', 0)
+
+        return providers
 
 
 async def time_async_operation(
@@ -142,7 +170,7 @@ async def time_async_operation(
             success
         )
     except Exception as e:
-        logger.error(f"Operation {operation_name} failed: {e}", exc_info=True)
+        logger.error("Operation %s failed: %s", operation_name, e, exc_info=True)
         return None, MetricsHelpers.create_operation_metrics(
             operation_name,
             (time.perf_counter() - start_time) * 1000,

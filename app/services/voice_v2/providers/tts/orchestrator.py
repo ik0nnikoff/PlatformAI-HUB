@@ -90,7 +90,7 @@ class TTSOrchestrator:
             providers_config: List of provider configurations
         """
         try:
-            logger.debug(f"Initializing TTSOrchestrator with {len(providers_config)} providers")
+            logger.debug("Initializing TTSOrchestrator with %s providers", len(providers_config))
 
             # Initialize factory
             await self._factory.initialize(providers_config)
@@ -106,10 +106,10 @@ class TTSOrchestrator:
                         consecutive_failures=0
                     )
 
-            logger.info(f"TTSOrchestrator initialized with {len(self._provider_health)} providers")
+            logger.info("TTSOrchestrator initialized with %s providers", len(self._provider_health))
 
         except Exception as e:
-            logger.error(f"Failed to initialize TTSOrchestrator: {e}", exc_info=True)
+            logger.error("Failed to initialize TTSOrchestrator: %s", e, exc_info=True)
             raise VoiceServiceError(f"TTS Orchestrator initialization failed: {e}")
 
     async def synthesize_speech(
@@ -133,7 +133,7 @@ class TTSOrchestrator:
         start_time = time.time()
 
         try:
-            logger.debug(f"Starting TTS synthesis with {len(providers_config)} providers")
+            logger.debug("Starting TTS synthesis with %s providers", len(providers_config))
 
             # Prepare providers for synthesis
             available_providers = await self._prepare_providers_for_synthesis(providers_config)
@@ -146,7 +146,7 @@ class TTSOrchestrator:
             return result
 
         except Exception as e:
-            logger.error(f"TTS synthesis failed: {e}", exc_info=True)
+            logger.error("TTS synthesis failed: %s", e, exc_info=True)
             if isinstance(e, (AudioProcessingError, ProviderNotAvailableError)):
                 raise
             raise AudioProcessingError(f"TTS synthesis failed: {e}")
@@ -178,12 +178,12 @@ class TTSOrchestrator:
 
         for provider in available_providers:
             try:
-                logger.debug(f"Attempting TTS synthesis with provider: {provider.provider_name}")
+                logger.debug("Attempting TTS synthesis with provider: %s", provider.provider_name)
                 attempted_providers.append(provider.provider_name)
 
                 # Check circuit breaker
                 if not self._is_provider_allowed(provider.provider_name):
-                    logger.warning(f"Provider {provider.provider_name} blocked by circuit breaker")
+                    logger.warning("Provider %s blocked by circuit breaker", provider.provider_name)
                     continue
 
                 # Attempt synthesis with retry logic
@@ -197,13 +197,13 @@ class TTSOrchestrator:
                     result, attempted_providers, provider.provider_name, start_time
                 )
 
-                logger.info(f"TTS synthesis successful with provider: {provider.provider_name}")
+                logger.info("TTS synthesis successful with provider: %s", provider.provider_name)
                 return result
 
             except Exception as e:
                 last_error = e
                 await self._mark_provider_unhealthy(provider.provider_name, str(e))
-                logger.warning(f"Provider {provider.provider_name} failed: {e}")
+                logger.warning("Provider %s failed: %s", provider.provider_name, e)
 
                 # Continue to next provider if fallback is enabled
                 if not self._fallback_enabled:
@@ -246,7 +246,7 @@ class TTSOrchestrator:
             return await self._get_healthy_providers(providers_config)
 
         except Exception as e:
-            logger.error(f"Failed to get available providers: {e}", exc_info=True)
+            logger.error("Failed to get available providers: %s", e, exc_info=True)
             return []
 
     async def get_provider_capabilities(self, provider_name: str) -> Optional[TTSCapabilities]:
@@ -266,7 +266,7 @@ class TTSOrchestrator:
             return None
 
         except Exception as e:
-            logger.error(f"Failed to get capabilities for {provider_name}: {e}")
+            logger.error("Failed to get capabilities for %s: %s", provider_name, e)
             return None
 
     async def health_check_all_providers(self) -> Dict[str, bool]:
@@ -286,7 +286,7 @@ class TTSOrchestrator:
             }
 
         except Exception as e:
-            logger.error(f"Failed to perform health check: {e}", exc_info=True)
+            logger.error("Failed to perform health check: %s", e, exc_info=True)
             return {}
 
     def get_provider_health_status(self) -> Dict[str, Dict[str, Any]]:
@@ -311,12 +311,12 @@ class TTSOrchestrator:
     def configure_fallback(self, enabled: bool) -> None:
         """Enable or disable fallback mechanism."""
         self._fallback_enabled = enabled
-        logger.info(f"Fallback mechanism {'enabled' if enabled else 'disabled'}")
+        logger.info("Fallback mechanism %s", 'enabled' if enabled else 'disabled')
 
     def configure_circuit_breaker(self, enabled: bool) -> None:
         """Enable or disable circuit breaker pattern."""
         self._circuit_breaker_enabled = enabled
-        logger.info(f"Circuit breaker {'enabled' if enabled else 'disabled'}")
+        logger.info("Circuit breaker %s", 'enabled' if enabled else 'disabled')
 
     async def cleanup(self) -> None:
         """Clean up orchestrator resources."""
@@ -329,7 +329,7 @@ class TTSOrchestrator:
             logger.info("TTSOrchestrator cleanup completed")
 
         except Exception as e:
-            logger.error(f"Failed to cleanup TTSOrchestrator: {e}", exc_info=True)
+            logger.error("Failed to cleanup TTSOrchestrator: %s", e, exc_info=True)
 
     # Private helper methods
 
@@ -344,7 +344,7 @@ class TTSOrchestrator:
                 if self._is_provider_allowed(provider.provider_name):
                     healthy_providers.append(provider)
                 else:
-                    logger.debug(f"Provider {provider.provider_name} blocked by circuit breaker")
+                    logger.debug("Provider %s blocked by circuit breaker", provider.provider_name)
             return healthy_providers
 
         return available_providers
@@ -357,19 +357,19 @@ class TTSOrchestrator:
             try:
                 if attempt > 0:
                     delay = self.RETRY_DELAYS[min(attempt - 1, len(self.RETRY_DELAYS) - 1)]
-                    logger.debug(f"Retrying provider {provider.provider_name} after {delay}s delay")
+                    logger.debug("Retrying provider %s after %ss delay", provider.provider_name, delay)
                     await asyncio.sleep(delay)
 
                 result = await provider.synthesize_speech(request)
 
                 if attempt > 0:
-                    logger.info(f"Provider {provider.provider_name} succeeded on retry {attempt}")
+                    logger.info("Provider %s succeeded on retry %s", provider.provider_name, attempt)
 
                 return result
 
             except Exception as e:
                 last_error = e
-                logger.warning(f"Provider {provider.provider_name} attempt {attempt + 1} failed: {e}")
+                logger.warning("Provider %s attempt %s failed: %s", provider.provider_name, attempt + 1, e)
 
                 # Don't retry for certain error types
                 if isinstance(e, (ProviderNotAvailableError,)):
@@ -397,13 +397,13 @@ class TTSOrchestrator:
 
                 if is_healthy:
                     if not status.is_healthy:
-                        logger.info(f"Provider {provider_name} recovered")
+                        logger.info("Provider %s recovered", provider_name)
                         status.recovery_time = current_time
                     status.is_healthy = True
                     status.consecutive_failures = 0
                 else:
                     if status.is_healthy:
-                        logger.warning(f"Provider {provider_name} became unhealthy")
+                        logger.warning("Provider %s became unhealthy", provider_name)
                     status.is_healthy = False
                     status.consecutive_failures += 1
                     status.last_failure_time = current_time
@@ -416,7 +416,7 @@ class TTSOrchestrator:
             status = self._provider_health[provider_name]
 
             if not status.is_healthy:
-                logger.info(f"Provider {provider_name} marked as healthy")
+                logger.info("Provider %s marked as healthy", provider_name)
                 status.recovery_time = time.time()
 
             status.is_healthy = True
@@ -432,7 +432,7 @@ class TTSOrchestrator:
             status.last_failure_time = time.time()
             status.last_check_time = time.time()
 
-            logger.warning(f"Provider {provider_name} marked unhealthy (failures: {status.consecutive_failures}): {error_message}")
+            logger.warning("Provider %s marked unhealthy (failures: %s): %s", provider_name, status.consecutive_failures, error_message)
 
     def _is_provider_allowed(self, provider_name: str) -> bool:
         """Check if provider is allowed by circuit breaker."""
@@ -454,7 +454,7 @@ class TTSOrchestrator:
             if status.last_failure_time:
                 time_since_failure = time.time() - status.last_failure_time
                 if time_since_failure >= self.CIRCUIT_BREAKER_TIMEOUT:
-                    logger.info(f"Circuit breaker timeout expired for {provider_name}, allowing recovery attempt")
+                    logger.info("Circuit breaker timeout expired for %s, allowing recovery attempt", provider_name)
                     return True
             return False
 

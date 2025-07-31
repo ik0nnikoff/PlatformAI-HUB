@@ -110,7 +110,7 @@ class OpenAITTSProvider(BaseTTSProvider):
         # Internal state - lazy initialization pattern
         self._client: Optional[AsyncOpenAI] = None
 
-        logger.debug(f"OpenAITTSProvider initialized: model={self._model}, voice={self._voice}")
+        logger.debug("OpenAITTSProvider initialized: model=%s, voice=%s", self._model, self._voice)
 
     def get_required_config_fields(self) -> List[str]:
         """Required configuration fields for OpenAI TTS."""
@@ -163,10 +163,10 @@ class OpenAITTSProvider(BaseTTSProvider):
                 max_retries=self._max_retries
             )
 
-            logger.debug(f"OpenAI TTS client initialized: model={self._model}")
+            logger.debug("OpenAI TTS client initialized: model=%s", self._model)
 
         except Exception as e:
-            logger.error(f"Failed to initialize OpenAI TTS client: {e}")
+            logger.error("Failed to initialize OpenAI TTS client: %s", e)
             raise AudioProcessingError(f"OpenAI TTS initialization failed: {e}")
 
     async def cleanup(self) -> None:
@@ -297,7 +297,7 @@ class OpenAITTSProvider(BaseTTSProvider):
                 last_exception = e
                 if attempt < self._max_retries:
                     delay = min(self._base_delay * (2 ** attempt), self._max_delay)
-                    logger.warning(f"Rate limit hit, retrying in {delay}s (attempt {attempt + 1})")
+                    logger.warning("Rate limit hit, retrying in %ss (attempt %s)", delay, attempt + 1)
                     await asyncio.sleep(delay)
                     continue
                 raise AudioProcessingError(f"Rate limit exceeded after {self._max_retries} retries: {e}")
@@ -306,7 +306,7 @@ class OpenAITTSProvider(BaseTTSProvider):
                 last_exception = e
                 if attempt < self._max_retries:
                     delay = min(self._base_delay * (2 ** attempt), self._max_delay)
-                    logger.warning(f"Connection error, retrying in {delay}s (attempt {attempt + 1})")
+                    logger.warning("Connection error, retrying in %ss (attempt %s)", delay, attempt + 1)
                     await asyncio.sleep(delay)
                     continue
                 raise AudioProcessingError(f"Connection failed after {self._max_retries} retries: {e}")
@@ -323,7 +323,7 @@ class OpenAITTSProvider(BaseTTSProvider):
                 last_exception = e
                 if attempt < self._max_retries:
                     delay = min(self._base_delay * (2 ** attempt), self._max_delay)
-                    logger.warning(f"Timeout, retrying in {delay}s (attempt {attempt + 1})")
+                    logger.warning("Timeout, retrying in %ss (attempt %s)", delay, attempt + 1)
                     await asyncio.sleep(delay)
                     continue
                 raise VoiceServiceTimeout("synthesis", self._timeout)
@@ -346,11 +346,11 @@ class OpenAITTSProvider(BaseTTSProvider):
         # For now, return a placeholder URL
         # In production, this would upload to MinIO and return presigned URL
         from app.core.config import settings
-        
+
         # Use real MinIO configuration
         protocol = "https" if getattr(settings, "MINIO_SECURE", False) else "http"
         endpoint = getattr(settings, "MINIO_ENDPOINT", "127.0.0.1:9000")
-        
+
         return f"{protocol}://{endpoint}/voice-files/{filename}"
 
     async def synthesize_long_text(self, text: str, **kwargs) -> List[TTSResult]:
@@ -385,7 +385,7 @@ class OpenAITTSProvider(BaseTTSProvider):
 
             for result in batch_results:
                 if isinstance(result, Exception):
-                    logger.error(f"Chunk synthesis failed: {result}")
+                    logger.error("Chunk synthesis failed: %s", result)
                     # Create error result
                     error_result = TTSResult(
                         audio_url="",

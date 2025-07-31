@@ -355,93 +355,155 @@ class EnhancedConnectionManager(IConnectionManager):
 
         Implements sophisticated retry patterns from Phase_1_2_3_performance_optimization.md
         """
-        if not self._initialized:
-            await self.initialize()
-
-        # Ensure provider is registered
-        if provider_name not in self._metrics:
-            await self.register_provider(provider_name)
+        await self._ensure_provider_ready(provider_name)
 
         config = self._provider_configs.get(provider_name, self._default_config)
         circuit_breaker = self._circuit_breakers[provider_name]
-        metrics = self._metrics[provider_name]
 
-        # Check circuit breaker
+        # Check circuit breaker before starting
+        self._check_circuit_breaker(circuit_breaker, provider_name)
+
+        # Execute with retry logic
+        return await self._execute_with_retries(
+            provider_name, request_func, config, circuit_breaker, *args, **kwargs
+        )
+
+    async def _ensure_provider_ready(self, provider_name: str):
+        """Ensure provider is initialized and registered"""
+        if not self._initialized:
+            await self.initialize()
+
+        if provider_name not in self._metrics:
+            await self.register_provider(provider_name)
+
+    def _check_circuit_breaker(self, circuit_breaker, provider_name: str):
+        """Check if circuit breaker allows request"""
         if circuit_breaker.is_open and not circuit_breaker.can_attempt():
             raise VoiceServiceError(
                 f"Circuit breaker is open for provider {provider_name}. "
                 f"Next attempt allowed at: {circuit_breaker.next_attempt_time}"
             )
 
-        # Execute with retry logic
+    async def _execute_with_retries(
+        self,
+        provider_name: str,
+        request_func: Callable,
+        config: ConnectionConfig,
+        circuit_breaker,
+        *args,
+        **kwargs
+    ) -> Any:
+        """Execute request with retry logic"""
         last_exception = None
+        metrics = self._metrics[provider_name]
 
         for attempt in range(config.max_retries + 1):
             try:
-                start_time = time.time()
-
-                # Get appropriate session
-                session = self._sessions.get(provider_name, self._sessions["default"])
-
-                # Execute request
-                if asyncio.iscoroutinefunction(request_func):
-                    result = await request_func(session, *args, **kwargs)
-                else:
-                    result = request_func(session, *args, **kwargs)
-
-                # Record success
-                response_time = time.time() - start_time
-                metrics.record_request(response_time, success=True)
-                circuit_breaker.record_success()
-
-                logger.debug(
-                    "Request successful for %s (attempt %d, response_time: %.3fs)",
-                    provider_name, attempt + 1, response_time
+                result = await self._execute_single_attempt(
+                    provider_name, request_func, metrics, circuit_breaker, attempt, *args, **kwargs
                 )
-
                 return result
 
-            except asyncio.TimeoutError as e:
-                response_time = time.time() - start_time
-                metrics.record_request(response_time, success=False, timeout=True)
-                last_exception = e
-
-                logger.warning(
-                    "Request timeout for %s (attempt %d/%d)",
-                    provider_name, attempt + 1, config.max_retries + 1
-                )
-
             except Exception as e:
-                response_time = time.time() - start_time
-                metrics.record_request(response_time, success=False)
                 last_exception = e
-
-                logger.warning(
-                    "Request failed for %s: %s (attempt %d/%d)",
-                    provider_name, e, attempt + 1, config.max_retries + 1
+                await self._handle_request_failure(
+                    provider_name, e, attempt, config, circuit_breaker, metrics
                 )
-
-            # Check if should retry
-            if attempt < config.max_retries:
-                delay = self._calculate_retry_delay(attempt, config)
-                logger.debug("Retrying in %.3fs...", delay)
-                await asyncio.sleep(delay)
-            else:
-                # All attempts failed, record circuit breaker failure
-                circuit_breaker.record_failure(config.circuit_breaker_timeout_minutes)
-
-                if circuit_breaker.should_open(config.circuit_breaker_threshold):
-                    circuit_breaker.is_open = True
-                    logger.error(
-                        "Circuit breaker opened for provider %s (%d consecutive failures)",
-                        provider_name, circuit_breaker.failure_count
-                    )
 
         # All retries exhausted
+        self._raise_final_error(provider_name, config, last_exception)
+
+    async def _execute_single_attempt(
+        self,
+        provider_name: str,
+        request_func: Callable,
+        metrics,
+        circuit_breaker,
+        attempt: int,
+        *args,
+        **kwargs
+    ) -> Any:
+        """Execute a single request attempt"""
+        start_time = time.time()
+
+        try:
+            session = self._sessions.get(provider_name, self._sessions["default"])
+
+            # Execute request
+            if asyncio.iscoroutinefunction(request_func):
+                result = await request_func(session, *args, **kwargs)
+            else:
+                result = request_func(session, *args, **kwargs)
+
+            # Record success
+            response_time = time.time() - start_time
+            metrics.record_request(response_time, success=True)
+            circuit_breaker.record_success()
+
+            logger.debug(
+                "Request successful for %s (attempt %d, response_time: %.3fs)",
+                provider_name, attempt + 1, response_time
+            )
+
+            return result
+
+        except Exception as e:
+            response_time = time.time() - start_time
+            self._record_failure_metrics(metrics, e, response_time)
+            raise
+
+    def _record_failure_metrics(self, metrics, exception, response_time: float):
+        """Record metrics for failed request"""
+        if isinstance(exception, asyncio.TimeoutError):
+            metrics.record_request(response_time, success=False, timeout=True)
+        else:
+            metrics.record_request(response_time, success=False)
+
+    async def _handle_request_failure(
+        self,
+        provider_name: str,
+        exception: Exception,
+        attempt: int,
+        config: ConnectionConfig,
+        circuit_breaker,
+        metrics
+    ):
+        """Handle request failure and determine retry strategy"""
+        if isinstance(exception, asyncio.TimeoutError):
+            logger.warning(
+                "Request timeout for %s (attempt %d/%d)",
+                provider_name, attempt + 1, config.max_retries + 1
+            )
+        else:
+            logger.warning(
+                "Request failed for %s: %s (attempt %d/%d)",
+                provider_name, exception, attempt + 1, config.max_retries + 1
+            )
+
+        # Check if should retry
+        if attempt < config.max_retries:
+            delay = self._calculate_retry_delay(attempt, config)
+            logger.debug("Retrying in %.3fs...", delay)
+            await asyncio.sleep(delay)
+        else:
+            self._handle_final_failure(provider_name, config, circuit_breaker)
+
+    def _handle_final_failure(self, provider_name: str, config: ConnectionConfig, circuit_breaker):
+        """Handle final failure after all retries exhausted"""
+        circuit_breaker.record_failure(config.circuit_breaker_timeout_minutes)
+
+        if circuit_breaker.should_open(config.circuit_breaker_threshold):
+            circuit_breaker.is_open = True
+            logger.error(
+                "Circuit breaker opened for provider %s (%d consecutive failures)",
+                provider_name, circuit_breaker.failure_count
+            )
+
+    def _raise_final_error(self, provider_name: str, config: ConnectionConfig, last_exception: Exception):
+        """Raise final error after all retries failed"""
         error_msg = f"All {config.max_retries + 1} attempts failed for provider {provider_name}"
         if last_exception:
             error_msg += f". Last error: {last_exception}"
-
         raise VoiceServiceError(error_msg)
 
     def _calculate_retry_delay(self, attempt: int, config: ConnectionConfig) -> float:

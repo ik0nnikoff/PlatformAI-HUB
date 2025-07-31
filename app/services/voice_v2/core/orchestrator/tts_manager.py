@@ -86,11 +86,11 @@ class VoiceTTSManager(ITTSManager):
             # Get provider
             provider = await self._get_tts_provider(provider_type)
             if not provider:
-                logger.warning(f"TTS provider {provider_type} not available")
+                logger.warning("TTS provider %s not available", provider_type)
                 continue
 
             try:
-                logger.info(f"Attempting TTS with provider {provider_type}")
+                logger.info("Attempting TTS with provider %s", provider_type)
 
                 # Execute with performance tracking
                 response = await self._execute_with_performance_tracking(
@@ -104,12 +104,12 @@ class VoiceTTSManager(ITTSManager):
                 self._record_provider_success(provider_type)
                 await self._cache_tts_result(request, response.audio_data)
 
-                logger.info(f"TTS successful with provider {provider_type}")
+                logger.info("TTS successful with provider %s", provider_type)
                 return response
 
             except Exception as e:
                 last_error = e
-                logger.warning(f"TTS provider {provider_type} failed: {e}")
+                logger.warning("TTS provider %s failed: %s", provider_type, e)
                 await self._handle_provider_error(provider_type)
                 continue
 
@@ -128,7 +128,7 @@ class VoiceTTSManager(ITTSManager):
             cache_key = f"tts:{request.text}:{request.voice}:{request.format}"
             return await self._cache_manager.get_cached_result(cache_key)
         except Exception as e:
-            logger.warning(f"Failed to get cached TTS result: {e}")
+            logger.warning("Failed to get cached TTS result: %s", e)
             return None
 
     async def _cache_tts_result(self, request: TTSRequest, result: bytes) -> None:
@@ -140,7 +140,7 @@ class VoiceTTSManager(ITTSManager):
             cache_key = f"tts:{request.text}:{request.voice}:{request.format}"
             await self._cache_manager.cache_result(cache_key, result, ttl=86400)  # 24 hours
         except Exception as e:
-            logger.warning(f"Failed to cache TTS result: {e}")
+            logger.warning("Failed to cache TTS result: %s", e)
 
     def _get_tts_provider_chain(self, preferred_provider: Optional[str]) -> List[ProviderType]:
         """Get TTS provider chain with fallback order"""

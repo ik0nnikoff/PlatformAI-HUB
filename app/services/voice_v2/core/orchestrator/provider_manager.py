@@ -62,10 +62,10 @@ class VoiceProviderManager(IProviderManager):
                     provider = await self._enhanced_factory.create_provider(stt_provider_name, {})
                     if provider:
                         self._factory_stt_cache[provider_name] = provider
-                        logger.debug(f"Created STT provider {provider_name} via Enhanced Factory")
+                        logger.debug("Created STT provider %s via Enhanced Factory", provider_name)
                     return provider
                 except Exception as e:
-                    logger.error(f"Failed to create STT provider {provider_name}: {e}")
+                    logger.error("Failed to create STT provider %s: %s", provider_name, e)
                     return None
             else:
                 return self._factory_stt_cache[provider_name]
@@ -93,10 +93,10 @@ class VoiceProviderManager(IProviderManager):
                     provider = await self._enhanced_factory.create_provider(tts_provider_name, {})
                     if provider:
                         self._factory_tts_cache[provider_name] = provider
-                        logger.debug(f"Created TTS provider {provider_name} via Enhanced Factory")
+                        logger.debug("Created TTS provider %s via Enhanced Factory", provider_name)
                     return provider
                 except Exception as e:
-                    logger.error(f"Failed to create TTS provider {provider_name}: {e}")
+                    logger.error("Failed to create TTS provider %s: %s", provider_name, e)
                     return None
             else:
                 return self._factory_tts_cache[provider_name]

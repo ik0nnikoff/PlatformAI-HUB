@@ -337,7 +337,7 @@ class AudioFileProcessor:
                 try:
                     await aiofiles.os.remove(temp_file)
                 except Exception as e:
-                    self._logger.warning(f"Failed to cleanup temp file {temp_file}: {e}")
+                    self._logger.warning("Failed to cleanup temp file %s: %s", temp_file, e)
 
 
 class PerformanceMixin:

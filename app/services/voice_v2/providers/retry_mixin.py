@@ -82,7 +82,7 @@ class RetryMixin:
 
         # Remove provider_name from kwargs if present to avoid duplication
         kwargs.pop('provider_name', None)
-        
+
         return await self._connection_manager.execute_request(
             provider_name=self.provider_name,
             request_func=request_func,
@@ -105,13 +105,13 @@ def provider_operation(operation_name: str):
         @wraps(func)
         async def wrapper(self, *args, **kwargs):
             provider_name = getattr(self, 'provider_name', 'unknown')
-            logger.debug(f"Starting {operation_name} for {provider_name}")
+            logger.debug("Starting %s for %s", operation_name, provider_name)
             try:
                 result = await func(self, *args, **kwargs)
-                logger.debug(f"{operation_name} successful for {provider_name}")
+                logger.debug("%s successful for %s", operation_name, provider_name)
                 return result
             except Exception as e:
-                logger.error(f"{operation_name} failed for {provider_name}: {e}", exc_info=True)
+                logger.error("%s failed for %s: %s", operation_name, provider_name, e, exc_info=True)
                 raise
         return wrapper
     return decorator

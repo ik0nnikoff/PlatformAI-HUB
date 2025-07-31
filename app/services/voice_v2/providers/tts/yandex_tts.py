@@ -113,7 +113,7 @@ class YandexTTSProvider(BaseTTSProvider):
         self._client: Optional[ClientSession] = None
         self._client_timeout = ClientTimeout(total=60, connect=10)
 
-        logger.debug(f"YandexTTSProvider initialized with voice: {self._voice_name}")
+        logger.debug("YandexTTSProvider initialized with voice: %s", self._voice_name)
 
     def get_required_config_fields(self) -> List[str]:
         """Required configuration fields for Yandex SpeechKit TTS."""
@@ -168,7 +168,7 @@ class YandexTTSProvider(BaseTTSProvider):
 
             # Validate voice configuration
             if self._voice_name not in self.VOICE_MAPPING:
-                logger.warning(f"Unknown voice '{self._voice_name}', using default 'jane'")
+                logger.warning("Unknown voice '%s', using default 'jane'", self._voice_name)
                 self._voice_name = "jane"
 
             # Initialize HTTP client (connection reuse pattern)
@@ -178,10 +178,10 @@ class YandexTTSProvider(BaseTTSProvider):
             await self._health_check()
 
             self._is_initialized = True
-            logger.info(f"Yandex TTS Provider initialized successfully with voice: {self._voice_name}")
+            logger.info("Yandex TTS Provider initialized successfully with voice: %s", self._voice_name)
 
         except Exception as e:
-            logger.error(f"Failed to initialize Yandex TTS Provider: {e}", exc_info=True)
+            logger.error("Failed to initialize Yandex TTS Provider: %s", e, exc_info=True)
             raise AudioProcessingError(f"Yandex TTS initialization failed: {str(e)}")
 
     async def cleanup(self) -> None:
@@ -197,7 +197,7 @@ class YandexTTSProvider(BaseTTSProvider):
             logger.info("Yandex TTS Provider cleaned up successfully")
 
         except Exception as e:
-            logger.error(f"Error during Yandex TTS cleanup: {e}", exc_info=True)
+            logger.error("Error during Yandex TTS cleanup: %s", e, exc_info=True)
 
     async def _synthesize_implementation(self, request: TTSRequest) -> TTSResult:
         """
@@ -216,7 +216,7 @@ class YandexTTSProvider(BaseTTSProvider):
         start_time = time.time()
 
         try:
-            logger.debug(f"Synthesizing speech for text length: {len(request.text)}")
+            logger.debug("Synthesizing speech for text length: %s", len(request.text))
 
             # Validate request
             if len(request.text) > self.MAX_TEXT_LENGTH:
@@ -263,7 +263,7 @@ class YandexTTSProvider(BaseTTSProvider):
             raise
         except Exception as e:
             processing_time = time.time() - start_time
-            logger.error(f"Yandex TTS synthesis failed: {e}", exc_info=True)
+            logger.error("Yandex TTS synthesis failed: %s", e, exc_info=True)
 
             # Return TTSResult with minimal required fields and metadata in provider_metadata
             return TTSResult(
@@ -286,7 +286,7 @@ class YandexTTSProvider(BaseTTSProvider):
         Enhanced synthesis with ConnectionManager integration
 
         Phase 3.5.2.3: Uses centralized retry logic from ConnectionManager
-        """        
+        """
         return await self._execute_with_connection_manager(
             operation_name="yandex_tts_synthesis",
             request_func=self._execute_yandex_synthesis,
@@ -296,7 +296,7 @@ class YandexTTSProvider(BaseTTSProvider):
     async def _execute_yandex_synthesis(self, session, synthesis_params: Dict[str, Any], **kwargs) -> bytes:
         """
         Direct Yandex API call - used by ConnectionManager
-        
+
         Args:
             session: aiohttp session (provided by ConnectionManager)
             synthesis_params: Synthesis parameters
@@ -411,7 +411,7 @@ class YandexTTSProvider(BaseTTSProvider):
             "emotion": self._emotion
         }
 
-        logger.debug(f"Prepared synthesis params: {params}")
+        logger.debug("Prepared synthesis params: %s", params)
         return params
 
     async def _synthesize_with_retry(self, params: Dict[str, Any]) -> bytes:
@@ -433,7 +433,7 @@ class YandexTTSProvider(BaseTTSProvider):
                 # Check for rate limit specifically
                 if "429" in str(e) and attempt < self.MAX_RETRIES - 1:
                     delay = self.RETRY_DELAYS[attempt]
-                    logger.warning(f"Rate limited, retrying in {delay}s (attempt {attempt + 1})")
+                    logger.warning("Rate limited, retrying in %ss (attempt %s)", delay, attempt + 1)
                     await asyncio.sleep(delay)
                     continue
                 # Re-raise other VoiceServiceErrors
@@ -444,7 +444,7 @@ class YandexTTSProvider(BaseTTSProvider):
                 last_exception = e
                 if attempt < self.MAX_RETRIES - 1:
                     delay = self.RETRY_DELAYS[attempt]
-                    logger.warning(f"Unexpected error, retrying in {delay}s (attempt {attempt + 1}): {e}")
+                    logger.warning("Unexpected error, retrying in %ss (attempt %s): %s", delay, attempt + 1, e)
                     await asyncio.sleep(delay)
                     continue
                 break
@@ -476,7 +476,7 @@ class YandexTTSProvider(BaseTTSProvider):
             return f"https://storage.example.com/tts/{filename}"
 
         except Exception as e:
-            logger.error(f"Failed to upload audio to storage: {e}")
+            logger.error("Failed to upload audio to storage: %s", e)
             raise AudioProcessingError(f"Audio storage upload failed: {e}")
 
     def _generate_metadata(

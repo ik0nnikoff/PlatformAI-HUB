@@ -27,36 +27,36 @@ logger = logging.getLogger(__name__)
 class VoiceMetricsCollector(MetricsCollector):
     """
     Simplified Voice Metrics Collector
-    
+
     Основная ответственность: координация сбора метрик
     Делегирует storage в backends, buffering в MetricsBuffer
     """
 
-    def __init__(self, 
+    def __init__(self,
                  backend: MetricsBackendInterface = None,
                  buffer_size: int = 100,
                  flush_interval: float = 5.0):
         super().__init__()
-        
+
         # Backend and buffering
         self._backend = backend or MemoryMetricsBackend()
         self._buffer = MetricsBuffer(buffer_size, flush_interval)
         self._buffer.set_backend(self._backend)
-        
+
         # State tracking
         self._active = False
         self._background_tasks: List[asyncio.Task] = []
-        
+
         # Performance optimization
         self._thread_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="metrics")
-        
+
         logger.info("VoiceMetricsCollector initialized with simplified architecture")
 
     async def start(self) -> None:
         """Start metrics collection"""
         if self._active:
             return
-        
+
         self._active = True
         await self._buffer.start_auto_flush()
         logger.info("Metrics collection started")
@@ -65,23 +65,23 @@ class VoiceMetricsCollector(MetricsCollector):
         """Stop metrics collection"""
         if not self._active:
             return
-        
+
         self._active = False
-        
+
         # Stop buffer flushing
         await self._buffer.stop_auto_flush()
-        
+
         # Cancel background tasks
         for task in self._background_tasks:
             task.cancel()
-        
+
         # Wait for tasks completion
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
-        
+
         # Shutdown thread pool
         self._thread_pool.shutdown(wait=True)
-        
+
         logger.info("Metrics collection stopped")
 
     # Core metric collection methods
@@ -126,9 +126,9 @@ class VoiceMetricsCollector(MetricsCollector):
             tags=tags
         )
 
-    async def _record_metric(self, 
-                           name: str, 
-                           value: float, 
+    async def _record_metric(self,
+                           name: str,
+                           value: float,
                            metric_type: MetricType,
                            priority: MetricPriority,
                            tags: Dict[str, str]) -> None:
@@ -144,15 +144,15 @@ class VoiceMetricsCollector(MetricsCollector):
                 tags=tags,
                 priority=priority
             )
-            
+
             await self._buffer.add(record)
-            
+
         except Exception as e:
-            logger.error(f"Failed to record metric {name}: {e}")
+            logger.error("Failed to record metric %s: %s", name, e)
 
     # Voice-specific convenience methods
 
-    async def record_stt_duration(self, provider: str, duration_ms: float, 
+    async def record_stt_duration(self, provider: str, duration_ms: float,
                                  success: bool = True, **extra_tags) -> None:
         """Record STT processing duration"""
         tags = {
@@ -162,7 +162,7 @@ class VoiceMetricsCollector(MetricsCollector):
         }
         await self.record_timer("voice.stt.duration_ms", duration_ms, **tags)
 
-    async def record_tts_duration(self, provider: str, duration_ms: float, 
+    async def record_tts_duration(self, provider: str, duration_ms: float,
                                  success: bool = True, **extra_tags) -> None:
         """Record TTS processing duration"""
         tags = {
@@ -172,7 +172,7 @@ class VoiceMetricsCollector(MetricsCollector):
         }
         await self.record_timer("voice.tts.duration_ms", duration_ms, **tags)
 
-    async def record_voice_request(self, request_type: str, success: bool = True, 
+    async def record_voice_request(self, request_type: str, success: bool = True,
                                   **extra_tags) -> None:
         """Record voice request"""
         tags = {
@@ -221,13 +221,13 @@ class VoiceMetricsCollector(MetricsCollector):
 
         # Initialize summary structure
         summary = self._init_summary_structure()
-        
+
         # Collect raw data from metrics
         raw_data = self._collect_raw_metrics_data(metrics)
-        
+
         # Calculate aggregated values
         summary = self._calculate_aggregated_summary(summary, raw_data)
-        
+
         return summary
 
     def _init_summary_structure(self) -> Dict[str, Any]:
@@ -347,7 +347,7 @@ class VoiceMetricsCollector(MetricsCollector):
         """Change storage backend"""
         self._backend = backend
         self._buffer.set_backend(backend)
-        logger.info(f"Metrics backend changed to {type(backend).__name__}")
+        logger.info("Metrics backend changed to %s", type(backend).__name__)
 
 
 # Factory function for easy instantiation
@@ -358,7 +358,7 @@ def create_voice_metrics_collector(
 ) -> VoiceMetricsCollector:
     """
     Factory function для создания metrics collector
-    
+
     Args:
         backend_type: "memory" или "redis"
         redis_client: Redis client instance для redis backend
@@ -370,5 +370,5 @@ def create_voice_metrics_collector(
         backend = RedisMetricsBackend(redis_client)
     else:
         backend = MemoryMetricsBackend()
-    
+
     return VoiceMetricsCollector(backend=backend, **kwargs)

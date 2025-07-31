@@ -64,7 +64,7 @@ class BaseTTSProvider(ABC, RetryMixin):
         # Initialize retry configuration через RetryMixin
         if self._has_connection_manager():
             self._get_retry_config(config)  # Initialize retry config for ConnectionManager
-            logger.debug(f"{provider_name} TTS provider using ConnectionManager with retry config")
+            logger.debug("%s TTS provider using ConnectionManager with retry config", provider_name)
 
         # Quick config validation - SRP principle
         missing = [f for f in self.get_required_config_fields() if f not in config]
@@ -130,11 +130,11 @@ class BaseTTSProvider(ABC, RetryMixin):
             if result.text_length is None:
                 result.text_length = len(request.text)
 
-            logger.debug(f"TTS synthesis completed: {result.text_length} chars, {result.processing_time:.2f}s")
+            logger.debug("TTS synthesis completed: %s chars, %.2fs", result.text_length, result.processing_time)
             return result
 
         except Exception as e:
-            logger.error(f"TTS synthesis failed: {e}")
+            logger.error("TTS synthesis failed: %s", e)
             if isinstance(e, VoiceServiceError):
                 raise
             raise VoiceServiceError(f"TTS synthesis error: {e}") from e
@@ -182,7 +182,7 @@ class BaseTTSProvider(ABC, RetryMixin):
                 self._initialized = True
             return True
         except Exception as e:
-            logger.warning(f"Health check failed for {self.provider_name}: {e}")
+            logger.warning("Health check failed for %s: %s", self.provider_name, e)
             return False
 
     async def estimate_audio_duration(self, text: str) -> float:

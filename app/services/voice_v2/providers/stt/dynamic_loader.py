@@ -113,7 +113,7 @@ class STTProviderManager:
             List of loaded providers
         """
         strategy = strategy or self.loading_config.strategy
-        self.logger.debug(f"Loading providers for agent {agent_id} with strategy {strategy}")
+        self.logger.debug("Loading providers for agent %s with strategy %s", agent_id, strategy)
 
         try:
             # Store configuration for potential reloads
@@ -129,7 +129,7 @@ class STTProviderManager:
                 raise ValueError(f"Unknown loading strategy: {strategy}")
 
         except Exception as e:
-            self.logger.error(f"Failed to load providers for agent {agent_id}: {e}", exc_info=True)
+            self.logger.error("Failed to load providers for agent %s: %s", agent_id, e, exc_info=True)
             return []
 
     async def _load_providers_eager(
@@ -138,7 +138,7 @@ class STTProviderManager:
         voice_config: Dict[str, Any]
     ) -> List[BaseSTTProvider]:
         """Eager loading: load all providers immediately"""
-        self.logger.debug(f"Eager loading providers for agent {agent_id}")
+        self.logger.debug("Eager loading providers for agent %s", agent_id)
 
         async with self._loading_semaphore:
             start_time = time.time()
@@ -159,11 +159,11 @@ class STTProviderManager:
                 # Record metrics
                 self._record_load_metrics(agent_id, "eager", time.time() - start_time, len(providers))
 
-                self.logger.info(f"Eager loaded {len(providers)} providers for agent {agent_id}")
+                self.logger.info("Eager loaded %s providers for agent %s", len(providers), agent_id)
                 return providers
 
             except Exception as e:
-                self.logger.error(f"Eager loading failed for agent {agent_id}: {e}")
+                self.logger.error("Eager loading failed for agent %s: %s", agent_id, e)
                 return []
 
     async def _load_providers_lazy(
@@ -172,7 +172,7 @@ class STTProviderManager:
         voice_config: Dict[str, Any]
     ) -> List[BaseSTTProvider]:
         """Lazy loading: load providers on first use"""
-        self.logger.debug(f"Setting up lazy loading for agent {agent_id}")
+        self.logger.debug("Setting up lazy loading for agent %s", agent_id)
 
         # Return lazy proxies that will load providers on first use
         provider_configs = voice_config.get("providers", [])
@@ -189,7 +189,7 @@ class STTProviderManager:
                 )
                 lazy_providers.append(proxy)
 
-        self.logger.info(f"Set up lazy loading for {len(lazy_providers)} providers for agent {agent_id}")
+        self.logger.info("Set up lazy loading for %s providers for agent %s", len(lazy_providers), agent_id)
         return lazy_providers
 
     async def _setup_on_demand_loading(
@@ -198,7 +198,7 @@ class STTProviderManager:
         voice_config: Dict[str, Any]
     ) -> List[BaseSTTProvider]:
         """On-demand loading: load only when explicitly requested"""
-        self.logger.debug(f"Setting up on-demand loading for agent {agent_id}")
+        self.logger.debug("Setting up on-demand loading for agent %s", agent_id)
 
         # Store configuration for on-demand loading
         self._provider_configs[agent_id] = voice_config
@@ -212,7 +212,7 @@ class STTProviderManager:
         provider_type: str
     ) -> Optional[BaseSTTProvider]:
         """Load specific provider on demand"""
-        self.logger.debug(f"Loading provider {provider_type} on demand for agent {agent_id}")
+        self.logger.debug("Loading provider %s on demand for agent %s", provider_type, agent_id)
 
         try:
             provider_key = f"{agent_id}:{provider_type}"
@@ -226,7 +226,7 @@ class STTProviderManager:
             # Get configuration
             voice_config = self._provider_configs.get(agent_id)
             if not voice_config:
-                self.logger.error(f"No configuration found for agent {agent_id}")
+                self.logger.error("No configuration found for agent %s", agent_id)
                 return None
 
             # Find provider config
@@ -237,7 +237,7 @@ class STTProviderManager:
                     break
 
             if not provider_config:
-                self.logger.error(f"No configuration found for provider {provider_type}")
+                self.logger.error("No configuration found for provider %s", provider_type)
                 return None
 
             # Load provider
@@ -258,13 +258,13 @@ class STTProviderManager:
                     )
                     self._loaded_providers[provider_key] = loaded_provider
 
-                    self.logger.info(f"Successfully loaded provider {provider_type} on demand")
+                    self.logger.info("Successfully loaded provider %s on demand", provider_type)
                     return provider
 
                 return None
 
         except Exception as e:
-            self.logger.error(f"Failed to load provider {provider_type} on demand: {e}")
+            self.logger.error("Failed to load provider %s on demand: %s", provider_type, e)
             return None
 
     async def reload_provider(
@@ -274,7 +274,7 @@ class STTProviderManager:
         new_config: Optional[Dict[str, Any]] = None
     ) -> bool:
         """Reload specific provider with new configuration"""
-        self.logger.debug(f"Reloading provider {provider_type} for agent {agent_id}")
+        self.logger.debug("Reloading provider %s for agent %s", provider_type, agent_id)
 
         try:
             provider_key = f"{agent_id}:{provider_type}"
@@ -285,7 +285,7 @@ class STTProviderManager:
                 try:
                     await old_provider.provider.cleanup()
                 except Exception as e:
-                    self.logger.warning(f"Error cleaning up old provider: {e}")
+                    self.logger.warning("Error cleaning up old provider: %s", e)
 
                 del self._loaded_providers[provider_key]
 
@@ -303,14 +303,14 @@ class STTProviderManager:
             provider = await self.load_provider_on_demand(agent_id, provider_type)
 
             if provider:
-                self.logger.info(f"Successfully reloaded provider {provider_type}")
+                self.logger.info("Successfully reloaded provider %s", provider_type)
                 return True
             else:
-                self.logger.error(f"Failed to reload provider {provider_type}")
+                self.logger.error("Failed to reload provider %s", provider_type)
                 return False
 
         except Exception as e:
-            self.logger.error(f"Error reloading provider {provider_type}: {e}")
+            self.logger.error("Error reloading provider %s: %s", provider_type, e)
             return False
 
     async def _health_monitor_loop(self) -> None:
@@ -324,7 +324,7 @@ class STTProviderManager:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                self.logger.error(f"Error in health monitor loop: {e}")
+                self.logger.error("Error in health monitor loop: %s", e)
                 await asyncio.sleep(5)  # Short sleep before retry
 
     async def _check_all_providers_health(self) -> None:
@@ -348,17 +348,17 @@ class STTProviderManager:
                     loaded_provider.is_healthy = False
                     loaded_provider.error_count += 1
 
-                    self.logger.warning(f"Provider {provider_key} health check failed")
+                    self.logger.warning("Provider %s health check failed", provider_key)
 
                     # Auto-reload if configured
                     if (self.loading_config.auto_reload_on_failure and
                         loaded_provider.error_count >= 3):
-                        self.logger.info(f"Auto-reloading unhealthy provider {provider_key}")
+                        self.logger.info("Auto-reloading unhealthy provider %s", provider_key)
                         agent_id, provider_type = provider_key.split(":", 1)
                         asyncio.create_task(self.reload_provider(agent_id, provider_type))
 
             except Exception as e:
-                self.logger.error(f"Error checking health of provider {provider_key}: {e}")
+                self.logger.error("Error checking health of provider %s: %s", provider_key, e)
                 loaded_provider.error_count += 1
 
     def _get_config_hash(self, config: Dict[str, Any]) -> str:
@@ -424,7 +424,7 @@ class STTProviderManager:
             try:
                 await loaded_provider.provider.cleanup()
             except Exception as e:
-                self.logger.error(f"Error cleaning up provider: {e}")
+                self.logger.error("Error cleaning up provider: %s", e)
 
         # Cleanup factory
         await self.factory.cleanup_cached_providers()

@@ -77,7 +77,7 @@ class RedisRateLimiter(RateLimiterInterface):
             )
 
         except Exception as e:
-            logger.error(f"Failed to initialize RedisRateLimiter: {e}", exc_info=True)
+            logger.error("Failed to initialize RedisRateLimiter: %s", e, exc_info=True)
             if not self.fail_open:
                 raise VoiceServiceError(f"Rate limiter initialization failed: {e}")
 
@@ -102,7 +102,7 @@ class RedisRateLimiter(RateLimiterInterface):
             return info.allowed
 
         except Exception as e:
-            logger.error(f"Error checking rate limit for {user_id}: {e}", exc_info=True)
+            logger.error("Error checking rate limit for %s: %s", user_id, e, exc_info=True)
             return self.fail_open
 
     async def check_rate_limit(
@@ -230,7 +230,7 @@ class RedisRateLimiter(RateLimiterInterface):
             return info.remaining_requests
 
         except Exception as e:
-            logger.error(f"Error getting remaining requests for {user_id}: {e}")
+            logger.error("Error getting remaining requests for %s: %s", user_id, e)
             return self.max_requests if self.fail_open else 0
 
     async def get_reset_time(
@@ -254,7 +254,7 @@ class RedisRateLimiter(RateLimiterInterface):
             return await self._get_reset_time(key, now)
 
         except Exception as e:
-            logger.error(f"Error getting reset time for {user_id}: {e}")
+            logger.error("Error getting reset time for %s: %s", user_id, e)
             return 0.0
 
     async def clear_user_limit(
@@ -276,11 +276,11 @@ class RedisRateLimiter(RateLimiterInterface):
             key = self._get_key(user_id, operation)
             result = await self.redis_service.delete(key)
 
-            logger.info(f"Rate limit cleared for user {user_id}, operation {operation}")
+            logger.info("Rate limit cleared for user %s, operation %s", user_id, operation)
             return bool(result)
 
         except Exception as e:
-            logger.error(f"Error clearing rate limit for {user_id}: {e}")
+            logger.error("Error clearing rate limit for %s: %s", user_id, e)
             return False
 
     async def get_rate_limit_stats(
@@ -341,7 +341,7 @@ class RedisRateLimiter(RateLimiterInterface):
             }
 
         except Exception as e:
-            logger.error(f"Error getting rate limit stats for {user_id}: {e}")
+            logger.error("Error getting rate limit stats for %s: %s", user_id, e)
             return {
                 "user_id": user_id,
                 "operation": operation,
@@ -389,7 +389,7 @@ class RedisRateLimiter(RateLimiterInterface):
             )
 
         except Exception as e:
-            logger.error(f"Error checking rate limit info for {user_id}: {e}")
+            logger.error("Error checking rate limit info for %s: %s", user_id, e)
 
             if self.fail_open:
                 return RateLimitInfo(
@@ -425,5 +425,5 @@ class RedisRateLimiter(RateLimiterInterface):
             return max(0.0, reset_time)
 
         except Exception as e:
-            logger.error(f"Error calculating reset time: {e}")
+            logger.error("Error calculating reset time: %s", e)
             return 0.0

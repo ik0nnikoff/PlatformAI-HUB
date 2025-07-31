@@ -84,45 +84,45 @@ class EndToEndMetrics:
     total_requests: int = 0
     successful_requests: int = 0
     failed_requests: int = 0
-    
+
     # Latency measurements
     stt_latencies: List[float] = field(default_factory=list)
     tts_latencies: List[float] = field(default_factory=list)
     decision_latencies: List[float] = field(default_factory=list)
     total_latencies: List[float] = field(default_factory=list)
-    
+
     # Resource usage
     memory_usage_mb: List[float] = field(default_factory=list)
     cpu_usage_percent: List[float] = field(default_factory=list)
-    
+
     @property
     def overall_success_rate(self) -> float:
         """Calculate overall success rate"""
         if self.total_requests == 0:
             return 0.0
         return self.successful_requests / self.total_requests
-    
+
     @property
     def stt_success_rate(self) -> float:
         """Calculate STT success rate"""
         return len(self.stt_latencies) / max(self.total_requests, 1)
-    
+
     @property
     def tts_success_rate(self) -> float:
         """Calculate TTS success rate"""
         return len(self.tts_latencies) / max(self.total_requests, 1)
-    
+
     @property
     def decision_success_rate(self) -> float:
         """Calculate decision success rate"""
         return len(self.decision_latencies) / max(self.total_requests, 1)
-    
+
     @property
     def average_total_latency(self) -> float:
         """Calculate average total latency"""
         import statistics
         return statistics.mean(self.total_latencies) if self.total_latencies else 0.0
-    
+
     @property
     def p95_total_latency(self) -> float:
         """Calculate 95th percentile total latency"""

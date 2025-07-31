@@ -59,7 +59,7 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
         config_api_key = config.get("api_key")
         settings_api_key = settings.OPENAI_API_KEY.get_secret_value() if settings.OPENAI_API_KEY else None
         self.api_key = config_api_key or settings_api_key
-        
+
         self.model = config.get("model", "whisper-1")
         self.timeout = config.get("timeout", 30)
 
@@ -67,16 +67,16 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
         # Always set max_retries for compatibility
         self.max_retries = config.get("max_retries", 3)
         self.retry_delay = config.get("retry_delay", 1.0)
-        
+
         if self._has_connection_manager():
             # Register retry configuration with ConnectionManager
             retry_config = self._get_retry_config(config)
-            logger.info(f"OpenAISTTProvider using ConnectionManager with retry config: {retry_config.max_retries} retries")
+            logger.info("OpenAISTTProvider using ConnectionManager with retry config: %s retries", retry_config.max_retries)
         else:
             # Fallback к legacy parameters для compatibility
             logger.warning("OpenAISTTProvider fallback to legacy retry - ConnectionManager not available")
 
-        logger.info(f"OpenAISTTProvider initialized: model={self.model}, timeout={self.timeout}s")
+        logger.info("OpenAISTTProvider initialized: model=%s, timeout=%ss", self.model, self.timeout)
 
     def get_required_config_fields(self) -> List[str]:
         """Required configuration fields for OpenAI STT."""
@@ -144,7 +144,7 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
             logger.info("OpenAI STT provider initialized successfully")
 
         except Exception as e:
-            logger.error(f"Failed to initialize OpenAI STT provider: {e}", exc_info=True)
+            logger.error("Failed to initialize OpenAI STT provider: %s", e, exc_info=True)
             raise ProviderNotAvailableError(
                 self.provider_name,
                 f"Ошибка инициализации: {str(e)}"
@@ -159,7 +159,7 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
                 await self._session.close()
             logger.info("OpenAI STT provider cleaned up")
         except Exception as e:
-            logger.warning(f"Cleanup warning: {e}")
+            logger.warning("Cleanup warning: %s", e)
         finally:
             self.client = None
             self._session = None
@@ -172,27 +172,40 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
             raise AudioProcessingError("OpenAI client не инициализирован")
 
         start_time = time.time()
-        
-        # Convert audio_data to temporary file for OpenAI API       
-        # Проверяем тип и размер данных перед записью во временный файл
-        audio_data = request.audio_data
+
+        # Validate audio data and create temporary file
+        audio_path = await self._create_temp_audio_file(request.audio_data)
+
+        try:
+            # Perform transcription with proper error handling
+            return await self._execute_transcription_workflow(request, audio_path, start_time)
+
+        finally:
+            # Clean up temporary file
+            await self._cleanup_temp_file(audio_path)
+
+    async def _create_temp_audio_file(self, audio_data) -> Path:
+        """Create temporary audio file with validation"""
+        # Validate audio data
         if not isinstance(audio_data, (bytes, bytearray)):
             raise AudioProcessingError("Некорректный формат аудиоданных (ожидается bytes)")
+
         max_size = 25 * 1024 * 1024  # 25MB OpenAI лимит
         if len(audio_data) > max_size:
             raise AudioProcessingError(f"Аудиофайл слишком большой: {len(audio_data)} байт (лимит 25MB)")
 
-        # Create temporary file from sanitized audio_data
+        # Create temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_file:
             temp_file.write(audio_data)
-            audio_path = Path(temp_file.name)
+            return Path(temp_file.name)
 
+    async def _execute_transcription_workflow(self, request: STTRequest, audio_path: Path, start_time: float) -> STTResult:
+        """Execute transcription workflow with error handling"""
         try:
             await self._validate_audio_file(audio_path)
             transcription_params = self._prepare_transcription_params(request)
 
-            # Fallback to direct execution for now (avoid ConnectionManager conflicts in tests)
-            # TODO: Fix ConnectionManager args conflicts in future iteration
+            # Perform transcription
             session = await self._get_session()
             result = await self._perform_transcription(session, audio_path, transcription_params)
 
@@ -205,23 +218,24 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
         except VoiceServiceTimeout:
             raise
         except AuthenticationError as e:
-            logger.error(f"OpenAI authentication error: {e}")
+            logger.error("OpenAI authentication error: %s", e)
             raise ProviderNotAvailableError(self.provider_name, f"Ошибка аутентификации: {e}")
         except RateLimitError as e:
-            logger.warning(f"OpenAI rate limit exceeded: {e}")
+            logger.warning("OpenAI rate limit exceeded: %s", e)
             raise AudioProcessingError(f"Превышен лимит запросов: {e}")
         except APIConnectionError as e:
-            logger.error(f"OpenAI connection error: {e}")
+            logger.error("OpenAI connection error: %s", e)
             raise AudioProcessingError(f"Ошибка соединения с OpenAI: {e}")
         except Exception as e:
-            logger.error(f"Unexpected OpenAI STT error: {e}", exc_info=True)
+            logger.error("Unexpected OpenAI STT error: %s", e, exc_info=True)
             raise AudioProcessingError(f"Неожиданная ошибка OpenAI: {e}")
-        finally:
-            # Clean up temporary file
-            try:
-                os.unlink(audio_path)
-            except Exception as e:
-                logger.warning(f"Failed to cleanup temp file {audio_path}: {e}")
+
+    async def _cleanup_temp_file(self, audio_path: Path):
+        """Clean up temporary audio file"""
+        try:
+            os.unlink(audio_path)
+        except Exception as e:
+            logger.warning("Failed to cleanup temp file %s: %s", audio_path, e)
 
     async def _validate_audio_file(self, audio_path: Path) -> None:
         """Validate audio file existence and size."""
@@ -358,19 +372,19 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
                 )
             except (AuthenticationError, RateLimitError) as e:
                 # Non-retryable errors - reraise immediately
-                logger.error(f"Non-retryable OpenAI error: {e}")
+                logger.error("Non-retryable OpenAI error: %s", e)
                 raise
             except (APIConnectionError, APIError) as e:
                 last_exception = e
                 if attempt < max_retries:
                     delay = retry_delay * (2 ** attempt)  # Exponential backoff
-                    logger.warning(f"OpenAI API error (attempt {attempt + 1}), retrying in {delay}s: {e}")
+                    logger.warning("OpenAI API error (attempt %s), retrying in %ss: %s", attempt + 1, delay, e)
                     await asyncio.sleep(delay)
                 else:
                     break
             except Exception as e:
                 # Non-retryable errors
-                logger.error(f"Non-retryable OpenAI error: {e}")
+                logger.error("Non-retryable OpenAI error: %s", e)
                 raise
 
         raise AudioProcessingError(f"OpenAI transcription failed after {max_retries + 1} attempts: {last_exception}")
@@ -382,7 +396,7 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
             if self.client:
                 return True
         except Exception as e:
-            logger.warning(f"Initial health check failed: {e}")
+            logger.warning("Initial health check failed: %s", e)
         return False
 
     def _extract_safe_settings(self, custom_settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -411,7 +425,7 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
 
                 return sum(confidences) / len(confidences) if confidences else 0.95
         except Exception as e:
-            logger.debug(f"Could not extract confidence from segments: {e}")
+            logger.debug("Could not extract confidence from segments: %s", e)
 
         return 0.95  # Default high confidence for Whisper
 
@@ -465,7 +479,7 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
         try:
             return await self._initial_health_check()
         except Exception as e:
-            logger.warning(f"OpenAI STT health check failed: {e}")
+            logger.warning("OpenAI STT health check failed: %s", e)
             return False
 
     def _normalize_language(self, language: str) -> str:
@@ -476,7 +490,7 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
         # Map complex codes to simple ISO codes for Whisper
         language_mapping = {
             "ru-RU": "ru",
-            "en-US": "en", 
+            "en-US": "en",
             "en-GB": "en",
             "es-ES": "es",
             "fr-FR": "fr",
@@ -491,5 +505,5 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
         }
 
         normalized = language_mapping.get(language, language)
-        logger.debug(f"Language normalized: {language} -> {normalized}")
+        logger.debug("Language normalized: %s -> %s", language, normalized)
         return normalized

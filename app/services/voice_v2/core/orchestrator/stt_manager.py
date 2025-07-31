@@ -88,11 +88,11 @@ class VoiceSTTManager(ISTTManager):
             # Get provider
             provider = await self._get_stt_provider(provider_type)
             if not provider:
-                logger.warning(f"STT provider {provider_type} not available")
+                logger.warning("STT provider %s not available", provider_type)
                 continue
 
             try:
-                logger.info(f"Attempting STT with provider {provider_type}")
+                logger.info("Attempting STT with provider %s", provider_type)
 
                 # Execute with performance tracking
                 response = await self._execute_with_performance_tracking(
@@ -106,12 +106,12 @@ class VoiceSTTManager(ISTTManager):
                 self._record_provider_success(provider_type)
                 await self._cache_stt_result(request, response.text)
 
-                logger.info(f"STT successful with provider {provider_type}")
+                logger.info("STT successful with provider %s", provider_type)
                 return response
 
             except Exception as e:
                 last_error = e
-                logger.warning(f"STT provider {provider_type} failed: {e}")
+                logger.warning("STT provider %s failed: %s", provider_type, e)
                 await self._handle_provider_error(provider_type)
                 continue
 
@@ -130,7 +130,7 @@ class VoiceSTTManager(ISTTManager):
             cache_key = f"stt:{request.audio_file}:{request.language or 'auto'}"
             return await self._cache_manager.get_cached_result(cache_key)
         except Exception as e:
-            logger.warning(f"Failed to get cached STT result: {e}")
+            logger.warning("Failed to get cached STT result: %s", e)
             return None
 
     async def _cache_stt_result(self, request: STTRequest, result: str) -> None:
@@ -142,7 +142,7 @@ class VoiceSTTManager(ISTTManager):
             cache_key = f"stt:{request.audio_file}:{request.language or 'auto'}"
             await self._cache_manager.cache_result(cache_key, result, ttl=86400)  # 24 hours
         except Exception as e:
-            logger.warning(f"Failed to cache STT result: {e}")
+            logger.warning("Failed to cache STT result: %s", e)
 
     def _get_stt_provider_chain(self, preferred_provider: Optional[str]) -> List[ProviderType]:
         """Get STT provider chain with fallback order"""

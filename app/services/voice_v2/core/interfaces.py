@@ -57,7 +57,7 @@ class ProviderType(Enum):
 class PerformanceTier(Enum):
     """Performance tier classification for optimization"""
     CRITICAL = "critical"    # Highest priority, requires fastest response
-    HIGH = "high"           # High priority, balanced performance  
+    HIGH = "high"           # High priority, balanced performance
     STANDARD = "standard"   # Standard priority, default optimization
 
 

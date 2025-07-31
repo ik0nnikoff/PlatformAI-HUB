@@ -89,10 +89,10 @@ class MinioFileManager(FileManagerInterface):
             await self._ensure_bucket_exists()
 
             self._initialized = True
-            logger.info(f"MinioFileManager initialized - bucket: {self.bucket_name}")
+            logger.info("MinioFileManager initialized - bucket: %s", self.bucket_name)
 
         except Exception as e:
-            logger.error(f"Failed to initialize MinioFileManager: {e}", exc_info=True)
+            logger.error("Failed to initialize MinioFileManager: %s", e, exc_info=True)
             raise VoiceServiceError(f"MinIO initialization failed: {e}")
 
     async def cleanup(self) -> None:
@@ -147,7 +147,7 @@ class MinioFileManager(FileManagerInterface):
                 upload_metadata
             )
 
-            logger.debug(f"File uploaded: {object_key} ({len(file_data)} bytes)")
+            logger.debug("File uploaded: %s (%s bytes)", object_key, len(file_data))
 
             return VoiceFileInfo(
                 object_key=object_key,
@@ -159,7 +159,7 @@ class MinioFileManager(FileManagerInterface):
             )
 
         except Exception as e:
-            logger.error(f"File upload failed for {object_key}: {e}", exc_info=True)
+            logger.error("File upload failed for %s: %s", object_key, e, exc_info=True)
             raise VoiceServiceError(f"File upload failed: {e}")
 
     async def download_file(self, object_key: str) -> bytes:
@@ -184,11 +184,11 @@ class MinioFileManager(FileManagerInterface):
                 object_key
             )
 
-            logger.debug(f"File downloaded: {object_key} ({len(data)} bytes)")
+            logger.debug("File downloaded: %s (%s bytes)", object_key, len(data))
             return data
 
         except Exception as e:
-            logger.error(f"File download failed for {object_key}: {e}", exc_info=True)
+            logger.error("File download failed for %s: %s", object_key, e, exc_info=True)
             raise VoiceServiceError(f"File download failed: {e}")
 
     async def delete_file(self, object_key: str) -> bool:
@@ -213,11 +213,11 @@ class MinioFileManager(FileManagerInterface):
                 object_key
             )
 
-            logger.debug(f"File deleted: {object_key}")
+            logger.debug("File deleted: %s", object_key)
             return True
 
         except Exception as e:
-            logger.error(f"File deletion failed for {object_key}: {e}", exc_info=True)
+            logger.error("File deletion failed for %s: %s", object_key, e, exc_info=True)
             raise VoiceServiceError(f"File deletion failed: {e}")
 
     async def generate_presigned_url(
@@ -253,11 +253,11 @@ class MinioFileManager(FileManagerInterface):
                 method
             )
 
-            logger.debug(f"Presigned URL generated: {object_key} (expires in {expires_hours}h)")
+            logger.debug("Presigned URL generated: %s (expires in %sh)", object_key, expires_hours)
             return url
 
         except Exception as e:
-            logger.error(f"Presigned URL generation failed for {object_key}: {e}", exc_info=True)
+            logger.error("Presigned URL generation failed for %s: %s", object_key, e, exc_info=True)
             raise VoiceServiceError(f"Presigned URL generation failed: {e}")
 
     async def list_files(
@@ -288,11 +288,11 @@ class MinioFileManager(FileManagerInterface):
                 limit
             )
 
-            logger.debug(f"Listed {len(objects)} files with prefix: '{prefix}'")
+            logger.debug("Listed %s files with prefix: '%s'", len(objects), prefix)
             return objects
 
         except Exception as e:
-            logger.error(f"File listing failed with prefix '{prefix}': {e}", exc_info=True)
+            logger.error("File listing failed with prefix '%s': %s", prefix, e, exc_info=True)
             raise VoiceServiceError(f"File listing failed: {e}")
 
     async def file_exists(self, object_key: str) -> bool:
@@ -321,7 +321,7 @@ class MinioFileManager(FileManagerInterface):
                 return False
             raise VoiceServiceError(f"File existence check failed: {e}")
         except Exception as e:
-            logger.error(f"File existence check failed for {object_key}: {e}", exc_info=True)
+            logger.error("File existence check failed for %s: %s", object_key, e, exc_info=True)
             raise VoiceServiceError(f"File existence check failed: {e}")
 
     def generate_object_key(
@@ -375,10 +375,10 @@ class MinioFileManager(FileManagerInterface):
                     self.bucket_name,
                     self.region
                 )
-                logger.info(f"Created bucket: {self.bucket_name}")
+                logger.info("Created bucket: %s", self.bucket_name)
 
         except Exception as e:
-            logger.error(f"Bucket creation/check failed: {e}", exc_info=True)
+            logger.error("Bucket creation/check failed: %s", e, exc_info=True)
             raise VoiceServiceError(f"Bucket operation failed: {e}")
 
     def _upload_sync(

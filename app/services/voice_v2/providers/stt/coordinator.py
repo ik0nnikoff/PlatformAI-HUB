@@ -95,13 +95,13 @@ class STTSystemCoordinator:
 
             # Load system configuration
             system_config = self.config_manager.load_system_config()
-            self.logger.info(f"Loaded system config: enabled={system_config.enabled}")
+            self.logger.info("Loaded system config: enabled=%s", system_config.enabled)
 
             self._initialized = True
             self.logger.info("STT system coordinator initialized successfully")
 
         except Exception as e:
-            self.logger.error(f"Failed to initialize STT system coordinator: {e}")
+            self.logger.error("Failed to initialize STT system coordinator: %s", e)
             raise
 
     async def setup_agent_stt(
@@ -123,7 +123,7 @@ class STTSystemCoordinator:
         Returns:
             List of initialized STT providers
         """
-        self.logger.debug(f"Setting up STT for agent {agent_id}")
+        self.logger.debug("Setting up STT for agent %s", agent_id)
 
         try:
             await self._ensure_initialized()
@@ -136,7 +136,7 @@ class STTSystemCoordinator:
             )
 
             if not agent_config.enabled:
-                self.logger.info(f"STT disabled for agent {agent_id}")
+                self.logger.info("STT disabled for agent %s", agent_id)
                 return []
 
             # Store configuration
@@ -159,11 +159,11 @@ class STTSystemCoordinator:
             # Cache providers
             self._agent_providers[agent_id] = providers
 
-            self.logger.info(f"Successfully set up {len(providers)} STT providers for agent {agent_id}")
+            self.logger.info("Successfully set up %s STT providers for agent %s", len(providers), agent_id)
             return providers
 
         except Exception as e:
-            self.logger.error(f"Failed to setup STT for agent {agent_id}: {e}")
+            self.logger.error("Failed to setup STT for agent %s: %s", agent_id, e)
             return []
 
     async def transcribe(
@@ -186,7 +186,7 @@ class STTSystemCoordinator:
             Transcription result
         """
         start_time = time.time()
-        self.logger.debug(f"Transcribing audio for agent {agent_id}, language={language}")
+        self.logger.debug("Transcribing audio for agent %s, language=%s", agent_id, language)
 
         try:
             await self._ensure_initialized()
@@ -203,11 +203,11 @@ class STTSystemCoordinator:
             last_error = None
             for i, provider in enumerate(sorted_providers):
                 try:
-                    self.logger.debug(f"Attempting transcription with provider {i+1}/{len(sorted_providers)}")
+                    self.logger.debug("Attempting transcription with provider %s/%s", i+1, len(sorted_providers))
 
                     # Check provider health
                     if not await provider.health_check():
-                        self.logger.warning(f"Provider {provider.get_status().provider_type} is unhealthy, skipping")
+                        self.logger.warning("Provider %s is unhealthy, skipping", provider.get_status().provider_type)
                         continue
 
                     # Perform transcription
@@ -255,7 +255,7 @@ class STTSystemCoordinator:
             response_time = time.time() - start_time
             await self._record_failure_metrics(response_time)
 
-            self.logger.error(f"Critical error in transcription: {e}")
+            self.logger.error("Critical error in transcription: %s", e)
             return TranscriptionResult(
                 text="",
                 language=language,
@@ -268,7 +268,7 @@ class STTSystemCoordinator:
 
     async def health_check_agent_providers(self, agent_id: str) -> Dict[str, bool]:
         """Check health of all providers for specific agent"""
-        self.logger.debug(f"Checking provider health for agent {agent_id}")
+        self.logger.debug("Checking provider health for agent %s", agent_id)
 
         try:
             providers = await self._get_agent_providers(agent_id)
@@ -280,13 +280,13 @@ class STTSystemCoordinator:
                     is_healthy = await provider.health_check()
                     health_status[provider_type] = is_healthy
                 except Exception as e:
-                    self.logger.error(f"Health check failed for {provider_type}: {e}")
+                    self.logger.error("Health check failed for %s: %s", provider_type, e)
                     health_status[provider_type] = False
 
             return health_status
 
         except Exception as e:
-            self.logger.error(f"Failed to check provider health for agent {agent_id}: {e}")
+            self.logger.error("Failed to check provider health for agent %s: %s", agent_id, e)
             return {}
 
     async def reload_agent_providers(
@@ -304,7 +304,7 @@ class STTSystemCoordinator:
         Returns:
             True if reload successful
         """
-        self.logger.debug(f"Reloading providers for agent {agent_id}, provider={provider_type}")
+        self.logger.debug("Reloading providers for agent %s, provider=%s", agent_id, provider_type)
 
         try:
             if provider_type:
@@ -318,7 +318,7 @@ class STTSystemCoordinator:
                 # Reload all providers
                 agent_config = self._agent_configs.get(agent_id)
                 if not agent_config:
-                    self.logger.error(f"No configuration found for agent {agent_id}")
+                    self.logger.error("No configuration found for agent %s", agent_id)
                     return False
 
                 # Re-setup all providers
@@ -331,7 +331,7 @@ class STTSystemCoordinator:
                 return len(providers) > 0
 
         except Exception as e:
-            self.logger.error(f"Failed to reload providers for agent {agent_id}: {e}")
+            self.logger.error("Failed to reload providers for agent %s: %s", agent_id, e)
             return False
 
     async def _get_agent_providers(self, agent_id: str) -> List[BaseSTTProvider]:
@@ -341,7 +341,7 @@ class STTSystemCoordinator:
             return self._agent_providers[agent_id]
 
         # Auto-setup if not found
-        self.logger.info(f"Auto-setting up STT providers for agent {agent_id}")
+        self.logger.info("Auto-setting up STT providers for agent %s", agent_id)
         return await self.setup_agent_stt(agent_id)
 
     def _sort_providers_by_priority(

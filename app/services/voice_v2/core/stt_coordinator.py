@@ -61,10 +61,10 @@ class STTCoordinator:
                         provider_name, provider_config
                     )
                     created_providers.append(provider)
-                    logger.info(f"Initialized STT provider: {provider_name}")
+                    logger.info("Initialized STT provider: %s", provider_name)
 
                 except Exception as e:
-                    logger.error(f"Failed to initialize provider {provider_name}: {e}")
+                    logger.error("Failed to initialize provider %s: %s", provider_name, e)
                     continue
 
             if not created_providers:
@@ -73,7 +73,7 @@ class STTCoordinator:
             self.providers = created_providers
             self.is_initialized = True
 
-            logger.info(f"STT Coordinator initialized with {len(self.providers)} providers")
+            logger.info("STT Coordinator initialized with %s providers", len(self.providers))
 
     async def transcribe(self, audio_path: str, language: str = None) -> str:
         """
@@ -107,15 +107,15 @@ class STTCoordinator:
         # Пробуем провайдеры по порядку приоритета
         for provider in available_providers:
             try:
-                logger.debug(f"Attempting transcription with {provider.provider_name}")
+                logger.debug("Attempting transcription with %s", provider.provider_name)
                 result = await self._transcribe_with_provider(provider, audio_path, language)
 
                 if result:
-                    logger.info(f"Successful transcription with {provider.provider_name}")
+                    logger.info("Successful transcription with %s", provider.provider_name)
                     return result
 
             except Exception as e:
-                logger.warning(f"Provider {provider.provider_name} failed: {e}")
+                logger.warning("Provider %s failed: %s", provider.provider_name, e)
                 last_error = e
                 continue
 

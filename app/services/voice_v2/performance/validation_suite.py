@@ -178,11 +178,11 @@ class PerformanceValidationSuite:
                                         load_results: Dict) -> None:
         """Update test cases with load test results"""
         metrics = load_results.get("metrics", {})
-        
+
         # Extract metrics
         stt_metrics = self._extract_stt_metrics(metrics)
         tts_metrics = self._extract_tts_metrics(metrics)
-        
+
         # Update test cases
         self._update_stt_test_cases(test_cases, stt_metrics)
         self._update_tts_test_cases(test_cases, tts_metrics)
@@ -203,7 +203,7 @@ class PerformanceValidationSuite:
             "success_rate": metrics.get("tts_success_rate")
         }
 
-    def _update_stt_test_cases(self, test_cases: List[ValidationTestCase], 
+    def _update_stt_test_cases(self, test_cases: List[ValidationTestCase],
                               stt_metrics: Dict) -> None:
         """Update STT-related test cases"""
         for test_case in test_cases:
@@ -214,7 +214,7 @@ class PerformanceValidationSuite:
             elif test_case.name == "STT Success Rate" and stt_metrics["success_rate"] is not None:
                 test_case.actual_value = stt_metrics["success_rate"]
 
-    def _update_tts_test_cases(self, test_cases: List[ValidationTestCase], 
+    def _update_tts_test_cases(self, test_cases: List[ValidationTestCase],
                               tts_metrics: Dict) -> None:
         """Update TTS-related test cases"""
         for test_case in test_cases:

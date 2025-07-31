@@ -98,7 +98,7 @@ class TTSProviderFactory:
             )
 
         cls._PROVIDER_REGISTRY[name] = provider_class
-        logger.info(f"Registered TTS provider: {name}")
+        logger.info("Registered TTS provider: %s", name)
 
 
 # Global factory instance for backward compatibility

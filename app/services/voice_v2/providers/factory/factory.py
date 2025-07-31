@@ -156,7 +156,7 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
         # Check if provider has required API keys (skip if not available)
         provider_type = provider_info.provider_type.value.lower()
         if not self._has_required_api_keys(provider_type):
-            logger.info(f"Skipping provider '{provider_name}' - missing required API keys")
+            logger.info("Skipping provider '%s' - missing required API keys", provider_name)
             raise ProviderNotAvailableError(f"Provider '{provider_name}' missing required API keys")
 
         # Check if provider is enabled and healthy
@@ -197,7 +197,7 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
             provider_info.health_info.last_check = datetime.utcnow()
             provider_info.health_info.error_message = None
 
-            logger.info(f"Successfully created provider '{provider_name}'")
+            logger.info("Successfully created provider '%s'", provider_name)
             return provider_instance
 
         except Exception as e:
@@ -206,7 +206,7 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
             provider_info.health_info.last_check = datetime.utcnow()
             provider_info.health_info.error_message = str(e)
 
-            logger.error(f"Failed to create provider '{provider_name}': {e}")
+            logger.error("Failed to create provider '%s': %s", provider_name, e)
             raise VoiceServiceError(f"Failed to create provider '{provider_name}': {e}")
 
     async def create_stt_provider(self, provider_type: str) -> Optional[BaseSTTProvider]:
@@ -216,7 +216,7 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
 
         # Check if API keys are available for provider
         if not self._has_required_api_keys(provider_type):
-            logger.info(f"Skipping {provider_type} STT provider - missing API keys")
+            logger.info("Skipping %s STT provider - missing API keys", provider_type)
             return None
 
         # Map provider type to provider name
@@ -228,7 +228,8 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
 
         provider_name = provider_name_map.get(provider_type.lower())
         if not provider_name:
-            logger.warning(f"Unknown STT provider type: {provider_type}")
+            # Log without exposing potentially sensitive provider_type value
+            logger.warning("Unknown STT provider type specified")
             return None
 
         try:
@@ -240,13 +241,13 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
 
             # Validate it's actually an STT provider
             if not isinstance(provider, BaseSTTProvider):
-                logger.error(f"Provider {provider_name} is not an STT provider")
+                logger.error("Provider %s is not an STT provider", provider_name)
                 return None
 
             return provider
 
         except Exception as e:
-            logger.error(f"Failed to create STT provider {provider_type}: {e}")
+            logger.error("Failed to create STT provider %s: %s", provider_type, e)
             return None
 
     async def create_tts_provider(self, provider_type: str) -> Optional[BaseTTSProvider]:
@@ -256,7 +257,7 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
 
         # Check if API keys are available for provider
         if not self._has_required_api_keys(provider_type):
-            logger.info(f"Skipping {provider_type} TTS provider - missing API keys")
+            logger.info("Skipping %s TTS provider - missing API keys", provider_type)
             return None
 
         # Map provider type to provider name
@@ -268,7 +269,8 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
 
         provider_name = provider_name_map.get(provider_type.lower())
         if not provider_name:
-            logger.warning(f"Unknown TTS provider type: {provider_type}")
+            # Log without exposing potentially sensitive provider_type value
+            logger.warning("Unknown TTS provider type specified")
             return None
 
         try:
@@ -280,19 +282,19 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
 
             # Validate it's actually a TTS provider
             if not isinstance(provider, BaseTTSProvider):
-                logger.error(f"Provider {provider_name} is not a TTS provider")
+                logger.error("Provider %s is not a TTS provider", provider_name)
                 return None
 
             return provider
 
         except Exception as e:
-            logger.error(f"Failed to create TTS provider {provider_type}: {e}")
+            logger.error("Failed to create TTS provider %s: %s", provider_type, e)
             return None
 
     def register_provider(self, provider_info: ProviderInfo) -> None:
         """Register new provider in registry"""
         self._providers_registry[provider_info.name] = provider_info
-        logger.info(f"Registered provider '{provider_info.name}' ({provider_info.category.value})")
+        logger.info("Registered provider '%s' (%s)", provider_info.name, provider_info.category.value)
 
     def get_available_providers(
         self,
@@ -319,62 +321,86 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
 
     async def health_check(self, provider_name: Optional[str] = None) -> Dict[str, ProviderHealthInfo]:
         """Perform health check on providers"""
-        if provider_name:
-            providers_to_check = [provider_name] if provider_name in self._providers_registry else []
-        else:
-            providers_to_check = list(self._providers_registry.keys())
-
+        providers_to_check = self._get_providers_to_check(provider_name)
         health_results = {}
 
         for name in providers_to_check:
-            provider_info = self._providers_registry[name]
-
-            # Check if health check is needed
-            last_check = self._last_health_check.get(name)
-            if last_check and datetime.utcnow() - last_check < self._health_check_interval:
-                health_results[name] = provider_info.health_info
-                continue
-
-            try:
-                # Get or create provider instance for health check
-                if name in self._provider_instances:
-                    instance = self._provider_instances[name]
-                else:
-                    # Skip health check if no instance and provider is disabled
-                    if not provider_info.enabled:
-                        provider_info.health_info.status = ProviderStatus.DISABLED
-                        health_results[name] = provider_info.health_info
-                        continue
-
-                    # Create minimal instance for health check
-                    try:
-                        instance = await self.create_provider(name, {})
-                    except Exception as e:
-                        provider_info.health_info.status = ProviderStatus.ERROR
-                        provider_info.health_info.error_message = str(e)
-                        health_results[name] = provider_info.health_info
-                        continue
-
-                # Perform health check
-                is_healthy = await self._is_provider_healthy(instance)
-
-                if is_healthy:
-                    provider_info.health_info.status = ProviderStatus.ACTIVE
-                    provider_info.health_info.error_message = None
-                else:
-                    provider_info.health_info.status = ProviderStatus.ERROR
-                    provider_info.health_info.error_message = "Health check failed"
-
-            except Exception as e:
-                provider_info.health_info.status = ProviderStatus.ERROR
-                provider_info.health_info.error_message = str(e)
-                logger.error(f"Health check failed for provider '{name}': {e}")
-
-            provider_info.health_info.last_check = datetime.utcnow()
-            self._last_health_check[name] = datetime.utcnow()
-            health_results[name] = provider_info.health_info
+            health_results[name] = await self._check_single_provider_health(name)
 
         return health_results
+
+    def _get_providers_to_check(self, provider_name: Optional[str]) -> List[str]:
+        """Get list of providers to check"""
+        if provider_name:
+            return [provider_name] if provider_name in self._providers_registry else []
+        else:
+            return list(self._providers_registry.keys())
+
+    async def _check_single_provider_health(self, name: str) -> ProviderHealthInfo:
+        """Check health of a single provider"""
+        provider_info = self._providers_registry[name]
+
+        # Check if health check is needed
+        if self._is_recent_health_check(name):
+            return provider_info.health_info
+
+        try:
+            # Get or create provider instance for health check
+            instance = await self._get_or_create_provider_for_health_check(name, provider_info)
+            if instance is None:
+                return provider_info.health_info
+
+            # Perform health check
+            await self._perform_health_check_on_instance(instance, provider_info)
+
+        except Exception as e:
+            self._handle_health_check_error(provider_info, name, e)
+
+        # Update timestamps
+        provider_info.health_info.last_check = datetime.utcnow()
+        self._last_health_check[name] = datetime.utcnow()
+
+        return provider_info.health_info
+
+    def _is_recent_health_check(self, name: str) -> bool:
+        """Check if recent health check exists"""
+        last_check = self._last_health_check.get(name)
+        return last_check and datetime.utcnow() - last_check < self._health_check_interval
+
+    async def _get_or_create_provider_for_health_check(self, name: str, provider_info: ProviderInfo):
+        """Get existing or create new provider instance for health check"""
+        if name in self._provider_instances:
+            return self._provider_instances[name]
+
+        # Skip health check if no instance and provider is disabled
+        if not provider_info.enabled:
+            provider_info.health_info.status = ProviderStatus.DISABLED
+            return None
+
+        # Create minimal instance for health check
+        try:
+            return await self.create_provider(name, {})
+        except Exception as e:
+            provider_info.health_info.status = ProviderStatus.ERROR
+            provider_info.health_info.error_message = str(e)
+            return None
+
+    async def _perform_health_check_on_instance(self, instance, provider_info: ProviderInfo):
+        """Perform actual health check on provider instance"""
+        is_healthy = await self._is_provider_healthy(instance)
+
+        if is_healthy:
+            provider_info.health_info.status = ProviderStatus.ACTIVE
+            provider_info.health_info.error_message = None
+        else:
+            provider_info.health_info.status = ProviderStatus.ERROR
+            provider_info.health_info.error_message = "Health check failed"
+
+    def _handle_health_check_error(self, provider_info: ProviderInfo, name: str, error: Exception):
+        """Handle health check error"""
+        provider_info.health_info.status = ProviderStatus.ERROR
+        provider_info.health_info.error_message = str(error)
+        logger.error("Health check failed for provider '%s': %s", name, error)
 
     async def _validate_provider_instance(
         self,
@@ -411,7 +437,7 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
             # Simplified health check - just verify provider is callable
             return hasattr(provider, 'provider_name') and provider.enabled
         except Exception as e:
-            logger.debug(f"Provider health check failed: {e}")
+            logger.debug("Provider health check failed: %s", e)
             return False
 
     async def cleanup(self) -> None:
@@ -424,7 +450,7 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
                 if hasattr(instance, 'cleanup'):
                     await instance.cleanup()
             except Exception as e:
-                logger.error(f"Error cleaning up provider '{provider_name}': {e}")
+                logger.error("Error cleaning up provider '%s': %s", provider_name, e)
 
         self._provider_instances.clear()
 
@@ -548,5 +574,6 @@ class EnhancedVoiceProviderFactory(IEnhancedProviderFactory):
         elif provider_type == "yandex":
             return settings.YANDEX_API_KEY is not None
         else:
-            logger.warning(f"Unknown provider type for API key check: {provider_type}")
+            # Log without exposing potentially sensitive provider_type value
+            logger.warning("Unknown provider type for API key check")
             return False
