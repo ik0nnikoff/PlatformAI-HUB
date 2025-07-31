@@ -29,13 +29,20 @@ from langgraph.prebuilt import InjectedState
 
 # Import voice_v2 tools
 try:
-    from app.services.voice_v2.integration.voice_intent_analysis_tool import voice_intent_analysis_tool
-    from app.services.voice_v2.integration.voice_response_decision_tool import voice_response_decision_tool
+    # NOTE: voice_intent_analysis_tool and voice_response_decision_tool removed 
+    # as anti-patterns (Phase 4.8.1) - LangGraph should use native decision making
+    
+    # Phase 4.8.2: LangGraph native TTS tool
+    from app.services.voice_v2.tools import generate_voice_response
+    
+    # Legacy capabilities tool (still needed)
+    from app.services.voice_v2.integration.voice_capabilities_tool import voice_capabilities_tool
+    
     VOICE_V2_AVAILABLE = True
 except ImportError:
     VOICE_V2_AVAILABLE = False
-    voice_intent_analysis_tool = None
-    voice_response_decision_tool = None
+    generate_voice_response = None
+    voice_capabilities_tool = None
 
 logger = logging.getLogger(__name__)
 
@@ -468,9 +475,10 @@ class ToolsRegistry:
         """Initialize voice_v2 tools registry."""
         if VOICE_V2_AVAILABLE:
             cls.VOICE_V2_TOOLS = {
-                'voice_intent_analysis_tool': voice_intent_analysis_tool,
-                'voice_response_decision_tool': voice_response_decision_tool,
-                'voice_capabilities_tool': voice_capabilities_tool,  # ✅ Add missing tool
+                # Phase 4.8.2: LangGraph native TTS tool (replaces anti-patterns)
+                'generate_voice_response': generate_voice_response,
+                # Legacy capabilities tool (still needed for voice provider info)
+                'voice_capabilities_tool': voice_capabilities_tool,
             }
     
     @classmethod
