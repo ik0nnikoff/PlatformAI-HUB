@@ -346,9 +346,7 @@ class AudioProcessor:
         if duration_seconds > max_duration:
             return f"Аудио слишком длинное: {duration_seconds:.1f}s > {max_duration}s"
         if duration_seconds < AudioLimits.MIN_DURATION_SECONDS:
-            return f"Аудио слишком короткое: {
-                duration_seconds:.1f}s < {
-                AudioLimits.MIN_DURATION_SECONDS}s"
+            return f"Аудио слишком короткое: {duration_seconds:.1f}s < {AudioLimits.MIN_DURATION_SECONDS}s"
 
         return None
 

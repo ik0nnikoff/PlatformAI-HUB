@@ -271,8 +271,8 @@ class GoogleSTTProvider(BaseSTTProvider):
                 creds_file = Path(self._credentials_path)
                 if not creds_file.exists():
                     raise VoiceConfigurationError(
-                        f"Credentials file not found: {
-                            self._credentials_path}")
+                        f"Credentials file not found: {self._credentials_path}"
+                    )
 
                 self._credentials = service_account.Credentials.from_service_account_file(
                     str(creds_file))

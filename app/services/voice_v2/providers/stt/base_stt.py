@@ -96,9 +96,8 @@ class BaseSTTProvider(ABC, RetryMixin):
 
         if not validation_result.get("valid", False):
             raise VoiceServiceError(
-                f"Ошибка валидации аудио: {
-                    validation_result.get(
-                        'error', 'Unknown error')}")
+                f"Ошибка валидации аудио: {validation_result.get('error', 'Unknown error')}"
+            )
 
         try:
             start_time = asyncio.get_event_loop().time()
@@ -271,7 +270,4 @@ class BaseSTTProvider(ABC, RetryMixin):
 
     def __str__(self) -> str:
         """String representation for logging."""
-        return f"STTProvider({
-            self.provider_name}, enabled={
-            self.enabled}, priority={
-            self.priority})"
+        return f"STTProvider({self.provider_name}, enabled={self.enabled}, priority={self.priority})"

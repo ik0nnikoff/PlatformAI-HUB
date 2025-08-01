@@ -458,9 +458,8 @@ class YandexTTSProvider(BaseTTSProvider):
 
         # If we get here, all retries failed
         raise AudioProcessingError(
-            f"TTS synthesis failed after {
-                self.MAX_RETRIES} attempts: {
-                str(last_exception)}")
+            f"TTS synthesis failed after {self.MAX_RETRIES} attempts: {str(last_exception)}"
+        )
 
     async def _upload_audio_to_storage(
         self,

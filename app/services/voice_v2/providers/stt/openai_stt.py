@@ -199,8 +199,8 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
         max_size = 25 * 1024 * 1024  # 25MB OpenAI лимит
         if len(audio_data) > max_size:
             raise AudioProcessingError(
-                f"Аудиофайл слишком большой: {
-                    len(audio_data)} байт (лимит 25MB)")
+                f"Аудиофайл слишком большой: {len(audio_data)} байт (лимит 25MB)"
+            )
 
         # Create temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_file:
@@ -405,8 +405,7 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
                 raise
 
         raise AudioProcessingError(
-            f"OpenAI transcription failed after {
-                max_retries + 1} attempts: {last_exception}")
+            f"OpenAI transcription failed after {max_retries + 1} attempts: {last_exception}")
 
     async def _initial_health_check(self) -> bool:
         """Non-blocking health check при инициализации."""

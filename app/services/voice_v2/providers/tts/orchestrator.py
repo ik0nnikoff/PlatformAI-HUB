@@ -388,10 +388,8 @@ class TTSOrchestrator:
                     break
 
         raise last_error or AudioProcessingError(
-            f"Provider {
-                provider.provider_name} failed after {
-                self.MAX_RETRIES +
-                1} attempts")
+            f"Provider {provider.provider_name} failed after {self.MAX_RETRIES + 1} attempts"
+        )
 
     async def _update_health_status(self, force: bool = False) -> None:
         """Update health status for all providers."""

@@ -241,8 +241,8 @@ class STTSystemCoordinator:
                 except Exception as e:
                     last_error = e
                     self.logger.warning(
-                        f"Transcription failed with provider {
-                            provider.get_status().provider_type}: {e}")
+                        f"Transcription failed with provider {provider.get_status().provider_type}: {e}"
+                    )
                     continue
 
             # All providers failed

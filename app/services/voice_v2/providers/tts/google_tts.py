@@ -356,8 +356,8 @@ class GoogleTTSProvider(BaseTTSProvider):
 
         # Should not reach here, but in case all retries failed
         raise AudioProcessingError(
-            f"Google Cloud TTS failed after {
-                self._max_retries} retries: {last_exception}")
+            f"Google Cloud TTS failed after {self._max_retries} retries: {last_exception}"
+        )
 
     async def get_available_voices(self) -> List[Dict[str, Any]]:
         """
@@ -472,10 +472,7 @@ class GoogleTTSProvider(BaseTTSProvider):
 
     def __str__(self) -> str:
         """String representation of the provider."""
-        return f"GoogleTTSProvider(voice={
-            self._voice_name}, language={
-            self._language_code}, enabled={
-            self.enabled})"
+        return f"GoogleTTSProvider(voice={self._voice_name}, language={self._language_code}, enabled={self.enabled})"
 
     def __repr__(self) -> str:
         """Detailed string representation of the provider."""
