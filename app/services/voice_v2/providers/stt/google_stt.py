@@ -80,19 +80,19 @@ class GoogleSTTProvider(BaseSTTProvider):
         # Apply Phase 1.2.2 SOLID principles - constructor dependency injection
         super().__init__(provider_name, config or {}, priority, enabled, **kwargs)
 
-        # Google-specific configuration with defaults
-        self._credentials_path = self.config.get('credentials_path')
-        self._credentials_json = self.config.get('credentials_json')
-        self._project_id = self.config.get('project_id')
-        self._language_code = self.config.get('language_code', 'ru-RU')
-        self._model = self.config.get('model', 'latest_long')
-        self._use_enhanced = self.config.get('use_enhanced', True)
-
-        # Performance settings from Phase 1.2.3
-        self._max_retries = self.config.get('max_retries', 3)
-        self._base_delay = self.config.get('base_delay', 1.0)
-        self._max_delay = self.config.get('max_delay', 60.0)
-        self._timeout = self.config.get('timeout', 120.0)
+        # Google-specific configuration consolidated into single dictionary
+        self._google_config = {
+            "credentials_path": self.config.get('credentials_path'),
+            "credentials_json": self.config.get('credentials_json'),
+            "project_id": self.config.get('project_id'),
+            "language_code": self.config.get('language_code', 'ru-RU'),
+            "model": self.config.get('model', 'latest_long'),
+            "use_enhanced": self.config.get('use_enhanced', True),
+            "max_retries": self.config.get('max_retries', 3),
+            "base_delay": self.config.get('base_delay', 1.0),
+            "max_delay": self.config.get('max_delay', 60.0),
+            "timeout": self.config.get('timeout', 120.0)
+        }
 
         # Internal state - lazy initialization pattern
         self._client: Optional[speech.SpeechClient] = None
@@ -100,8 +100,8 @@ class GoogleSTTProvider(BaseSTTProvider):
 
         logger.debug(
             "GoogleSTTProvider initialized: model=%s, lang=%s",
-            self._model,
-            self._language_code)
+            self._google_config["model"],
+            self._google_config["language_code"])
 
     def get_required_config_fields(self) -> List[str]:
         """
@@ -161,7 +161,8 @@ class GoogleSTTProvider(BaseSTTProvider):
             logger.debug("Initializing Google STT Provider...")
 
             # Check for credentials availability first
-            if not self.credentials_path and not os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):
+            if (not self._google_config["credentials_path"] and
+                not os.getenv('GOOGLE_APPLICATION_CREDENTIALS')):
                 logger.warning("Google Cloud credentials not configured - provider disabled")
                 raise ProviderNotAvailableError(
                     provider="Google STT",
@@ -182,7 +183,7 @@ class GoogleSTTProvider(BaseSTTProvider):
 
         except Exception as e:
             logger.error("Google STT initialization failed: %s", e, exc_info=True)
-            raise VoiceConfigurationError(f"Google STT init error: {e}")
+            raise VoiceConfigurationError(f"Google STT init error: {e}") from e
 
     async def cleanup(self) -> None:
         """
@@ -232,16 +233,13 @@ class GoogleSTTProvider(BaseSTTProvider):
         audio: speech.RecognitionAudio
     ) -> speech.RecognizeResponse:
         """
-        Enhanced transcription with ConnectionManager integration
+        Enhanced transcription with direct Google API call
 
-        Phase 3.5.2.3: Uses centralized retry logic from ConnectionManager
+        Phase 3.5.2.3: Uses direct client for simplicity
         """
-        return await self._execute_with_connection_manager(
-            operation_name="google_stt_transcription",
-            request_func=self._execute_google_transcription,
-            config=config,
-            audio=audio
-        )
+        if not self._client:
+            raise AudioProcessingError("Google Cloud Speech client not initialized")
+        return await self._execute_google_transcription(config, audio)
 
     async def _execute_google_transcription(
         self,
@@ -259,19 +257,19 @@ class GoogleSTTProvider(BaseSTTProvider):
     async def _initialize_credentials(self) -> None:
         """Initialize Google Cloud credentials"""
         try:
-            if self._credentials_json:
+            if self._google_config["credentials_json"]:
                 # From JSON string
-                creds_dict = json.loads(self._credentials_json)
+                creds_dict = json.loads(self._google_config["credentials_json"])
                 self._credentials = service_account.Credentials.from_service_account_info(
                     creds_dict)
                 logger.debug("Loaded credentials from JSON")
 
-            elif self._credentials_path:
+            elif self._google_config["credentials_path"]:
                 # From file path
-                creds_file = Path(self._credentials_path)
+                creds_file = Path(self._google_config["credentials_path"])
                 if not creds_file.exists():
                     raise VoiceConfigurationError(
-                        f"Credentials file not found: {self._credentials_path}"
+                        f"Credentials file not found: {self._google_config['credentials_path']}"
                     )
 
                 self._credentials = service_account.Credentials.from_service_account_file(
@@ -284,9 +282,9 @@ class GoogleSTTProvider(BaseSTTProvider):
                 logger.debug("Using Application Default Credentials")
 
         except json.JSONDecodeError as e:
-            raise VoiceConfigurationError(f"Invalid credentials JSON: {e}")
+            raise VoiceConfigurationError(f"Invalid credentials JSON: {e}") from e
         except Exception as e:
-            raise VoiceConfigurationError(f"Credentials initialization failed: {e}")
+            raise VoiceConfigurationError(f"Credentials initialization failed: {e}") from e
 
     async def _initialize_client(self) -> None:
         """Initialize Google Speech client"""
@@ -300,7 +298,7 @@ class GoogleSTTProvider(BaseSTTProvider):
             logger.debug("Google Speech client initialized")
 
         except Exception as e:
-            raise VoiceConfigurationError(f"Client initialization failed: {e}")
+            raise VoiceConfigurationError(f"Client initialization failed: {e}") from e
 
     async def _validate_connection(self) -> None:
         """Validate Google Cloud connection"""
@@ -330,7 +328,7 @@ class GoogleSTTProvider(BaseSTTProvider):
             raise VoiceProviderError(
                 f"Google authentication failed: {e}",
                 operation="google_stt_connection_validation"
-            )
+            ) from e
         except Exception as e:
             logger.warning("Connection validation failed (may be normal): %s", e)
 
@@ -342,7 +340,7 @@ class GoogleSTTProvider(BaseSTTProvider):
             with open(audio_path, 'rb') as f:
                 return f.read()
         except Exception as e:
-            raise AudioProcessingError(f"Failed to read audio file {file_path}: {e}")
+            raise AudioProcessingError(f"Failed to read audio file {file_path}: {e}") from e
 
     def _prepare_recognition_config(self, request: STTRequest) -> speech.RecognitionConfig:
         """
@@ -365,11 +363,11 @@ class GoogleSTTProvider(BaseSTTProvider):
         # Build config based on request and provider settings
         return speech.RecognitionConfig(
             encoding=encoding,
-            language_code=request.language if request.language != "auto" else self._language_code,
-            model=self._model,
-            use_enhanced=self._use_enhanced and request.quality in [
-                STTQuality.HIGH,
-                STTQuality.PREMIUM],
+            language_code=(request.language if request.language != "auto"
+                          else self._google_config["language_code"]),
+            model=self._google_config["model"],
+            use_enhanced=(self._google_config["use_enhanced"] and
+                         request.quality in [STTQuality.HIGH, STTQuality.PREMIUM]),
             enable_word_time_offsets=True,
             enable_automatic_punctuation=True,
             max_alternatives=1)
@@ -387,7 +385,7 @@ class GoogleSTTProvider(BaseSTTProvider):
         """
         last_exception = None
 
-        for attempt in range(self._max_retries + 1):
+        for attempt in range(self._google_config["max_retries"] + 1):
             try:
                 # Apply delay for retry attempts
                 if attempt > 0:
@@ -396,47 +394,52 @@ class GoogleSTTProvider(BaseSTTProvider):
                 # Execute transcription via direct API call
                 return await self._execute_google_transcription(config, audio)
 
-            except (google_exceptions.TooManyRequests, google_exceptions.ServiceUnavailable, google_exceptions.DeadlineExceeded) as e:
+            except (google_exceptions.TooManyRequests,
+                    google_exceptions.ServiceUnavailable,
+                    google_exceptions.DeadlineExceeded) as e:
                 last_exception = e
                 if not self._should_retry_transient_error(e, attempt):
                     raise self._create_timeout_error(e, attempt)
 
-            except (google_exceptions.Unauthenticated, google_exceptions.PermissionDenied) as e:
+            except (google_exceptions.Unauthenticated,
+                    google_exceptions.PermissionDenied) as e:
                 # Don't retry auth errors
                 raise VoiceProviderError(
                     f"Google STT authentication error: {e}",
                     operation="google_stt_auth"
-                )
+                ) from e
 
             except Exception as e:
                 last_exception = e
                 logger.warning("Google STT error (attempt %s): %s", attempt + 1, e)
-                if attempt == self._max_retries:
+                if attempt == self._google_config["max_retries"]:
                     break
 
         # All retries exhausted
+        max_attempts = self._google_config['max_retries'] + 1
         raise VoiceProviderError(
-            f"Google STT failed after {self._max_retries + 1} attempts: {last_exception}",
+            f"Google STT failed after {max_attempts} attempts: {last_exception}",
             operation="google_stt_retry_exhausted"
         )
 
     async def _apply_retry_delay(self, attempt: int):
         """Apply exponential backoff delay for retry attempts"""
-        delay = min(self._base_delay * (2 ** (attempt - 1)), self._max_delay)
+        delay = min(
+            self._google_config["base_delay"] * (2 ** (attempt - 1)),
+            self._google_config["max_delay"]
+        )
         logger.debug("Retrying Google STT (attempt %s) after %ss", attempt + 1, delay)
         await asyncio.sleep(delay)
 
     def _should_retry_transient_error(self, error: Exception, attempt: int) -> bool:
         """Check if transient error should be retried"""
-        if attempt == self._max_retries:
+        if attempt == self._google_config["max_retries"]:
             return False
 
         error_type = type(error).__name__
         logger.warning(
             "Google STT %s (attempt %s)",
-            error_type.lower().replace(
-                '_',
-                ' '),
+            error_type.lower().replace('_', ' '),
             attempt + 1)
         return True
 
@@ -453,7 +456,7 @@ class GoogleSTTProvider(BaseSTTProvider):
 
         return VoiceServiceTimeout(
             f"Google STT {message} after {attempt + 1} attempts",
-            timeout_seconds=self._max_delay
+            timeout_seconds=self._google_config["max_delay"]
         )
 
     def _process_response(
@@ -470,11 +473,11 @@ class GoogleSTTProvider(BaseSTTProvider):
             return STTResult(
                 text="",
                 confidence=0.0,
-                language_detected=self._language_code,
+                language_detected=self._google_config["language_code"],
                 provider_metadata={
                     "provider": "google",
-                    "model": self._model,
-                    "enhanced": self._use_enhanced
+                    "model": self._google_config["model"],
+                    "enhanced": self._google_config["use_enhanced"]
                 }
             )
 
@@ -486,8 +489,11 @@ class GoogleSTTProvider(BaseSTTProvider):
             return STTResult(
                 text="",
                 confidence=0.0,
-                language_detected=self._language_code,
-                provider_metadata={"provider": "google", "model": self._model}
+                language_detected=self._google_config["language_code"],
+                provider_metadata={
+                    "provider": "google",
+                    "model": self._google_config["model"]
+                }
             )
 
         # Extract text and confidence
@@ -497,10 +503,11 @@ class GoogleSTTProvider(BaseSTTProvider):
         return STTResult(
             text=text,
             confidence=confidence,
-            language_detected=request.language if request.language != "auto" else self._language_code,
+            language_detected=(request.language if request.language != "auto"
+                              else self._google_config["language_code"]),
             provider_metadata={
                 "provider": "google",
-                "model": self._model,
-                "enhanced": self._use_enhanced,
-                "alternatives_count": len(
-                    best_result.alternatives)})
+                "model": self._google_config["model"],
+                "enhanced": self._google_config["use_enhanced"],
+                "alternatives_count": len(best_result.alternatives)
+            })

@@ -34,10 +34,19 @@ class RetryConfig:
 class RetryMixin:
     """
     Simplified mixin for retry functionality.
-    
+
     Removes enterprise connection manager patterns,
     provides essential retry logic for voice providers.
     """
+
+    def __init__(self, *args, **kwargs):
+        """Initialize retry mixin with simplified connection manager."""
+        super().__init__()
+        self._connection_manager = None  # Simplified version doesn't use connection manager
+
+    def _has_connection_manager(self) -> bool:
+        """Check if connection manager is available (always False in simplified version)."""
+        return False
 
     def _get_retry_config(self, config: Dict[str, Any]) -> RetryConfig:
         """Extract retry configuration from provider config."""
@@ -57,34 +66,34 @@ class RetryMixin:
     ) -> T:
         """Execute async operation with retry logic."""
         last_exception = None
-        
+
         for attempt in range(retry_config.max_attempts):
             try:
                 if asyncio.iscoroutinefunction(operation):
                     return await operation(*args, **kwargs)
                 else:
                     return operation(*args, **kwargs)
-                    
+
             except Exception as e:
                 last_exception = e
-                
+
                 if attempt == retry_config.max_attempts - 1:
                     # Last attempt failed
                     break
-                    
+
                 # Calculate delay with exponential backoff
                 delay = min(
                     retry_config.base_delay * (retry_config.backoff_factor ** attempt),
                     retry_config.max_delay
                 )
-                
+
                 logger.warning(
                     f"Operation failed (attempt {attempt + 1}/{retry_config.max_attempts}), "
                     f"retrying in {delay:.2f}s: {e}"
                 )
-                
+
                 await asyncio.sleep(delay)
-        
+
         # All attempts failed
         logger.error(f"All {retry_config.max_attempts} attempts failed")
         raise last_exception
@@ -98,31 +107,31 @@ class RetryMixin:
     ) -> T:
         """Execute sync operation with retry logic."""
         last_exception = None
-        
+
         for attempt in range(retry_config.max_attempts):
             try:
                 return operation(*args, **kwargs)
-                
+
             except Exception as e:
                 last_exception = e
-                
+
                 if attempt == retry_config.max_attempts - 1:
                     # Last attempt failed
                     break
-                    
+
                 # Calculate delay with exponential backoff
                 delay = min(
                     retry_config.base_delay * (retry_config.backoff_factor ** attempt),
                     retry_config.max_delay
                 )
-                
+
                 logger.warning(
                     f"Operation failed (attempt {attempt + 1}/{retry_config.max_attempts}), "
                     f"retrying in {delay:.2f}s: {e}"
                 )
-                
+
                 time.sleep(delay)
-        
+
         # All attempts failed
         logger.error(f"All {retry_config.max_attempts} attempts failed")
         raise last_exception
@@ -131,7 +140,7 @@ class RetryMixin:
 def provider_operation(operation_name: str):
     """
     Simple decorator for provider operations.
-    
+
     Logs operation start/end for debugging purposes.
     Simplified version without complex connection manager integration.
     """
@@ -146,7 +155,7 @@ def provider_operation(operation_name: str):
             except Exception as e:
                 logger.error(f"Failed {operation_name}: {e}")
                 raise
-                
+
         @wraps(func)
         def sync_wrapper(*args, **kwargs):
             logger.debug(f"Starting {operation_name}")
@@ -157,7 +166,7 @@ def provider_operation(operation_name: str):
             except Exception as e:
                 logger.error(f"Failed {operation_name}: {e}")
                 raise
-        
+
         if asyncio.iscoroutinefunction(func):
             return async_wrapper
         else:

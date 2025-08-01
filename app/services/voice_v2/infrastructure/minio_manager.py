@@ -55,14 +55,18 @@ class MinioFileManager(FileManagerInterface):
             region: MinIO region
             max_pool_size: Maximum connection pool size
         """
-        self.endpoint = endpoint
-        self.access_key = access_key
-        self.secret_key = secret_key
-        self.bucket_name = bucket_name
-        self.secure = secure
-        self.region = region
-        self.max_pool_size = max_pool_size
+        # MinIO configuration consolidated into single dictionary
+        self._minio_config = {
+            "endpoint": endpoint,
+            "access_key": access_key,
+            "secret_key": secret_key,
+            "bucket_name": bucket_name,
+            "secure": secure,
+            "region": region,
+            "max_pool_size": max_pool_size
+        }
 
+        # Internal state - lazy initialization pattern
         self._client: Optional[Minio] = None
         self._initialized = False
         self._executor = None
@@ -72,28 +76,29 @@ class MinioFileManager(FileManagerInterface):
         try:
             # Create thread pool executor for blocking I/O
             self._executor = ThreadPoolExecutor(
-                max_workers=self.max_pool_size,
+                max_workers=self._minio_config["max_pool_size"],
                 thread_name_prefix="minio-"
             )
 
             # Create MinIO client
             self._client = Minio(
-                endpoint=self.endpoint,
-                access_key=self.access_key,
-                secret_key=self.secret_key,
-                secure=self.secure,
-                region=self.region
+                endpoint=self._minio_config["endpoint"],
+                access_key=self._minio_config["access_key"],
+                secret_key=self._minio_config["secret_key"],
+                secure=self._minio_config["secure"],
+                region=self._minio_config["region"]
             )
 
             # Ensure bucket exists
             await self._ensure_bucket_exists()
 
             self._initialized = True
-            logger.info("MinioFileManager initialized - bucket: %s", self.bucket_name)
+            logger.info("MinioFileManager initialized - bucket: %s",
+                       self._minio_config["bucket_name"])
 
         except Exception as e:
             logger.error("Failed to initialize MinioFileManager: %s", e, exc_info=True)
-            raise VoiceServiceError(f"MinIO initialization failed: {e}")
+            raise VoiceServiceError(f"MinIO initialization failed: {e}") from e
 
     async def cleanup(self) -> None:
         """Cleanup resources"""
@@ -151,7 +156,7 @@ class MinioFileManager(FileManagerInterface):
 
             return VoiceFileInfo(
                 object_key=object_key,
-                bucket_name=self.bucket_name,
+                bucket_name=self._minio_config["bucket_name"],
                 file_size=len(file_data),
                 content_type=content_type,
                 upload_time=datetime.utcnow(),
@@ -160,14 +165,15 @@ class MinioFileManager(FileManagerInterface):
 
         except Exception as e:
             logger.error("File upload failed for %s: %s", object_key, e, exc_info=True)
-            raise VoiceServiceError(f"File upload failed: {e}")
+            raise VoiceServiceError(f"File upload failed: {e}") from e
 
-    async def download_file(self, object_key: str) -> bytes:
+    async def download_file(self, object_key: str, bucket_name: Optional[str] = None) -> bytes:
         """
         Download file from MinIO storage
 
         Args:
             object_key: Object key to download
+            bucket_name: Bucket name (optional, defaults to configured bucket)
 
         Returns:
             File binary data
@@ -178,10 +184,10 @@ class MinioFileManager(FileManagerInterface):
         await self._ensure_initialized()
 
         try:
+            bucket = bucket_name or self._minio_config["bucket_name"]
             data = await asyncio.get_event_loop().run_in_executor(
                 self._executor,
-                self._download_sync,
-                object_key
+                lambda: self._download_sync_with_bucket(object_key, bucket)
             )
 
             logger.debug("File downloaded: %s (%s bytes)", object_key, len(data))
@@ -189,7 +195,19 @@ class MinioFileManager(FileManagerInterface):
 
         except Exception as e:
             logger.error("File download failed for %s: %s", object_key, e, exc_info=True)
-            raise VoiceServiceError(f"File download failed: {e}")
+            raise VoiceServiceError(f"File download failed: {e}") from e
+
+    def _download_sync_with_bucket(self, object_key: str, bucket_name: str) -> bytes:
+        """Synchronous download operation with bucket selection"""
+        response = self._client.get_object(
+            bucket_name=bucket_name,
+            object_name=object_key
+        )
+        try:
+            return response.read()
+        finally:
+            response.close()
+            response.release_conn()
 
     async def delete_file(self, object_key: str) -> bool:
         """
@@ -218,7 +236,7 @@ class MinioFileManager(FileManagerInterface):
 
         except Exception as e:
             logger.error("File deletion failed for %s: %s", object_key, e, exc_info=True)
-            raise VoiceServiceError(f"File deletion failed: {e}")
+            raise VoiceServiceError(f"File deletion failed: {e}") from e
 
     async def generate_presigned_url(
         self,
@@ -258,7 +276,7 @@ class MinioFileManager(FileManagerInterface):
 
         except Exception as e:
             logger.error("Presigned URL generation failed for %s: %s", object_key, e, exc_info=True)
-            raise VoiceServiceError(f"Presigned URL generation failed: {e}")
+            raise VoiceServiceError(f"Presigned URL generation failed: {e}") from e
 
     async def list_files(
         self,
@@ -293,7 +311,7 @@ class MinioFileManager(FileManagerInterface):
 
         except Exception as e:
             logger.error("File listing failed with prefix '%s': %s", prefix, e, exc_info=True)
-            raise VoiceServiceError(f"File listing failed: {e}")
+            raise VoiceServiceError(f"File listing failed: {e}") from e
 
     async def file_exists(self, object_key: str) -> bool:
         """
@@ -311,7 +329,7 @@ class MinioFileManager(FileManagerInterface):
             await asyncio.get_event_loop().run_in_executor(
                 self._executor,
                 self._client.stat_object,
-                self.bucket_name,
+                self._minio_config["bucket_name"],
                 object_key
             )
             return True
@@ -319,10 +337,10 @@ class MinioFileManager(FileManagerInterface):
         except S3Error as e:
             if e.code == "NoSuchKey":
                 return False
-            raise VoiceServiceError(f"File existence check failed: {e}")
+            raise VoiceServiceError(f"File existence check failed: {e}") from e
         except Exception as e:
             logger.error("File existence check failed for %s: %s", object_key, e, exc_info=True)
-            raise VoiceServiceError(f"File existence check failed: {e}")
+            raise VoiceServiceError(f"File existence check failed: {e}") from e
 
     def generate_object_key(
         self,
@@ -365,21 +383,21 @@ class MinioFileManager(FileManagerInterface):
             bucket_exists = await asyncio.get_event_loop().run_in_executor(
                 self._executor,
                 self._client.bucket_exists,
-                self.bucket_name
+                self._minio_config["bucket_name"]
             )
 
             if not bucket_exists:
                 await asyncio.get_event_loop().run_in_executor(
                     self._executor,
                     self._client.make_bucket,
-                    self.bucket_name,
-                    self.region
+                    self._minio_config["bucket_name"],
+                    self._minio_config["region"]
                 )
-                logger.info("Created bucket: %s", self.bucket_name)
+                logger.info("Created bucket: %s", self._minio_config["bucket_name"])
 
         except Exception as e:
             logger.error("Bucket creation/check failed: %s", e, exc_info=True)
-            raise VoiceServiceError(f"Bucket operation failed: {e}")
+            raise VoiceServiceError(f"Bucket operation failed: {e}") from e
 
     def _upload_sync(
         self,
@@ -390,7 +408,7 @@ class MinioFileManager(FileManagerInterface):
     ) -> None:
         """Synchronous upload operation"""
         self._client.put_object(
-            bucket_name=self.bucket_name,
+            bucket_name=self._minio_config["bucket_name"],
             object_name=object_key,
             data=BytesIO(file_data),
             length=len(file_data),
@@ -401,7 +419,7 @@ class MinioFileManager(FileManagerInterface):
     def _download_sync(self, object_key: str) -> bytes:
         """Synchronous download operation"""
         response = self._client.get_object(
-            bucket_name=self.bucket_name,
+            bucket_name=self._minio_config["bucket_name"],
             object_name=object_key
         )
         try:
@@ -413,7 +431,7 @@ class MinioFileManager(FileManagerInterface):
     def _delete_sync(self, object_key: str) -> None:
         """Synchronous delete operation"""
         self._client.remove_object(
-            bucket_name=self.bucket_name,
+            bucket_name=self._minio_config["bucket_name"],
             object_name=object_key
         )
 
@@ -424,10 +442,24 @@ class MinioFileManager(FileManagerInterface):
         method: str
     ) -> str:
         """Synchronous presigned URL generation"""
-        return self._client.presigned_url(
-            method=method,
-            bucket_name=self.bucket_name,
-            object_name=object_key,
+        if method.upper() == "GET":
+            return self._client.get_presigned_url(
+                "GET",
+                self._minio_config["bucket_name"],
+                object_key,
+                expires=expires
+            )
+        if method.upper() == "PUT":
+            return self._client.get_presigned_url(
+                "PUT",
+                self._minio_config["bucket_name"],
+                object_key,
+                expires=expires
+            )
+        return self._client.get_presigned_url(
+            method.upper(),
+            self._minio_config["bucket_name"],
+            object_key,
             expires=expires
         )
 
@@ -435,7 +467,7 @@ class MinioFileManager(FileManagerInterface):
         """Synchronous object listing"""
         objects = []
         for obj in self._client.list_objects(
-            bucket_name=self.bucket_name,
+            bucket_name=self._minio_config["bucket_name"],
             prefix=prefix,
             recursive=True
         ):
@@ -443,11 +475,11 @@ class MinioFileManager(FileManagerInterface):
                 break
 
             # Get object metadata
-            stat = self._client.stat_object(self.bucket_name, obj.object_name)
+            stat = self._client.stat_object(self._minio_config["bucket_name"], obj.object_name)
 
             objects.append(VoiceFileInfo(
                 object_key=obj.object_name,
-                bucket_name=self.bucket_name,
+                bucket_name=self._minio_config["bucket_name"],
                 file_size=obj.size,
                 content_type=stat.content_type or "application/octet-stream",
                 upload_time=obj.last_modified,

@@ -101,19 +101,23 @@ class YandexTTSProvider(BaseTTSProvider):
         super().__init__(provider_name, config, priority, enabled, **kwargs)
 
         # Yandex SpeechKit Configuration
-        self._api_key = config.get("api_key")
-        self._folder_id = config.get("folder_id")
-        self._voice_name = config.get("voice_name", "jane")
-        self._language_code = config.get("language_code", "ru-RU")
-        self._audio_format = config.get("audio_format", "mp3")
-        self._speed = config.get("speed", 1.0)
-        self._emotion = config.get("emotion", "neutral")
+        self._yandex_config = {
+            "api_key": config.get("api_key"),
+            "folder_id": config.get("folder_id"),
+            "voice_name": config.get("voice_name", "jane"),
+            "language_code": config.get("language_code", "ru-RU"),
+            "audio_format": config.get("audio_format", "mp3"),
+            "speed": config.get("speed", 1.0),
+            "emotion": config.get("emotion", "neutral")
+        }
 
         # HTTP Session for connection reuse (Performance pattern)
         self._client: Optional[ClientSession] = None
         self._client_timeout = ClientTimeout(total=60, connect=10)
+        self._is_initialized = False
 
-        logger.debug("YandexTTSProvider initialized with voice: %s", self._voice_name)
+        logger.debug("YandexTTSProvider initialized with voice: %s",
+                    self._yandex_config["voice_name"])
 
     def get_required_config_fields(self) -> List[str]:
         """Required configuration fields for Yandex SpeechKit TTS."""
@@ -156,20 +160,21 @@ class YandexTTSProvider(BaseTTSProvider):
             logger.debug("Initializing Yandex TTS Provider...")
 
             # Validate configuration
-            if not self._api_key:
+            if not self._yandex_config["api_key"]:
                 raise VoiceServiceError(
                     "Yandex API key is required (api_key in config)"
                 )
 
-            if not self._folder_id:
+            if not self._yandex_config["folder_id"]:
                 raise VoiceServiceError(
                     "Yandex folder ID is required (folder_id in config)"
                 )
 
             # Validate voice configuration
-            if self._voice_name not in self.VOICE_MAPPING:
-                logger.warning("Unknown voice '%s', using default 'jane'", self._voice_name)
-                self._voice_name = "jane"
+            if self._yandex_config["voice_name"] not in self.VOICE_MAPPING:
+                logger.warning("Unknown voice '%s', using default 'jane'",
+                             self._yandex_config["voice_name"])
+                self._yandex_config["voice_name"] = "jane"
 
             # Initialize HTTP client (connection reuse pattern)
             await self._ensure_client()
@@ -180,11 +185,11 @@ class YandexTTSProvider(BaseTTSProvider):
             self._is_initialized = True
             logger.info(
                 "Yandex TTS Provider initialized successfully with voice: %s",
-                self._voice_name)
+                self._yandex_config["voice_name"])
 
         except Exception as e:
             logger.error("Failed to initialize Yandex TTS Provider: %s", e, exc_info=True)
-            raise AudioProcessingError(f"Yandex TTS initialization failed: {str(e)}")
+            raise AudioProcessingError(f"Yandex TTS initialization failed: {str(e)}") from e
 
     async def cleanup(self) -> None:
         """Clean up provider resources with proper session closure."""
@@ -220,95 +225,111 @@ class YandexTTSProvider(BaseTTSProvider):
         try:
             logger.debug("Synthesizing speech for text length: %s", len(request.text))
 
-            # Validate request
-            if len(request.text) > self.MAX_TEXT_LENGTH:
-                raise AudioProcessingError(
-                    f"Text too long: {len(request.text)} > {self.MAX_TEXT_LENGTH} characters"
-                )
-
-            # Ensure client is available
+            # Validate and prepare
+            self._validate_synthesis_request(request)
             await self._ensure_client()
-
-            # Prepare synthesis parameters
             synthesis_params = self._prepare_synthesis_params(request)
 
-            # Use ConnectionManager if available, fallback to legacy retry
-            if self._has_connection_manager():
-                audio_data = await self._perform_synthesis(synthesis_params)
-            else:
-                # Legacy fallback for backward compatibility
-                audio_data = await self._synthesize_with_retry(synthesis_params)
+            # Perform synthesis
+            audio_data = await self._execute_synthesis_with_fallback(synthesis_params)
 
-            # Upload audio to storage
-            file_path = await self._upload_audio_to_storage(
-                audio_data, request.agent_id if hasattr(request, 'agent_id') else "default",
-                request.user_id if hasattr(request, 'user_id') else "default"
-            )
-
-            processing_time = time.time() - start_time
-
-            # Generate provider metadata
-            metadata = self._generate_metadata(synthesis_params, len(audio_data), processing_time)
-
-            return TTSResult(
-                audio_data=audio_data,  # Include raw audio data
-                audio_url=file_path,    # Keep URL for storage reference
-                text_length=len(request.text),
-                audio_duration=self._estimate_audio_duration(request.text, request.speed or 1.0),
-                processing_time=processing_time,
-                voice_used=self._voice_name,
-                language_used=synthesis_params.get("lang"),
-                provider_metadata=metadata
+            # Process results
+            return await self._create_synthesis_result(
+                request, audio_data, synthesis_params, start_time
             )
 
         except AudioProcessingError:
             raise
         except Exception as e:
-            processing_time = time.time() - start_time
-            logger.error("Yandex TTS synthesis failed: %s", e, exc_info=True)
+            return self._create_error_result(request, e, start_time)
 
-            # Return TTSResult with minimal required fields and metadata in provider_metadata
-            return TTSResult(
-                audio_url="",  # Empty URL for failed synthesis
-                text_length=len(request.text),
-                audio_duration=None,
-                processing_time=processing_time,
-                voice_used=self._voice_name,
-                language_used=request.language or self._language_code,
-                provider_metadata={
-                    "error_type": type(e).__name__,
-                    "error_message": str(e),
-                    "provider": self.provider_name,
-                    "success": False
-                }
+    def _validate_synthesis_request(self, request: TTSRequest) -> None:
+        """Validate TTS request parameters."""
+        if len(request.text) > self.MAX_TEXT_LENGTH:
+            raise AudioProcessingError(
+                f"Text too long: {len(request.text)} > {self.MAX_TEXT_LENGTH} characters"
             )
+
+    async def _execute_synthesis_with_fallback(self, synthesis_params: Dict[str, Any]) -> bytes:
+        """Execute synthesis with ConnectionManager or legacy fallback."""
+        if self._has_connection_manager():
+            return await self._perform_synthesis(synthesis_params)
+
+        # Legacy fallback for backward compatibility
+        return await self._synthesize_with_retry(synthesis_params)
+
+    async def _create_synthesis_result(
+            self, request: TTSRequest, audio_data: bytes,
+            synthesis_params: Dict[str, Any], start_time: float) -> TTSResult:
+        """Create successful synthesis result."""
+        # Upload audio to storage
+        file_path = await self._upload_audio_to_storage(
+            audio_data,
+            getattr(request, 'agent_id', "default"),
+            getattr(request, 'user_id', "default")
+        )
+
+        processing_time = time.time() - start_time
+        metadata = self._generate_metadata(synthesis_params, len(audio_data), processing_time)
+
+        return TTSResult(
+            audio_data=audio_data,  # Include raw audio data
+            audio_url=file_path,    # Keep URL for storage reference
+            text_length=len(request.text),
+            audio_duration=self._estimate_audio_duration(request.text, request.speed or 1.0),
+            processing_time=processing_time,
+            voice_used=self._yandex_config["voice_name"],
+            language_used=synthesis_params.get("lang"),
+            provider_metadata=metadata
+        )
+
+    def _create_error_result(
+            self, request: TTSRequest, error: Exception, start_time: float) -> TTSResult:
+        """Create error result for failed synthesis."""
+        processing_time = time.time() - start_time
+        logger.error("Yandex TTS synthesis failed: %s", error, exc_info=True)
+
+        return TTSResult(
+            audio_url="",  # Empty URL for failed synthesis
+            text_length=len(request.text),
+            audio_duration=None,
+            processing_time=processing_time,
+            voice_used=self._yandex_config["voice_name"],
+            language_used=request.language or self._yandex_config["language_code"],
+            provider_metadata={
+                "error_type": type(error).__name__,
+                "error_message": str(error),
+                "provider": self.provider_name,
+                "success": False
+            }
+        )
 
     async def _perform_synthesis(self, synthesis_params: Dict[str, Any]) -> bytes:
         """
-        Enhanced synthesis with ConnectionManager integration
+        Enhanced synthesis with direct HTTP client
 
-        Phase 3.5.2.3: Uses centralized retry logic from ConnectionManager
+        Phase 3.5.2.3: Uses direct HTTP client for simplicity
         """
-        return await self._execute_with_connection_manager(
-            operation_name="yandex_tts_synthesis",
-            request_func=self._execute_yandex_synthesis,
-            synthesis_params=synthesis_params  # Pass as named parameter
+        await self._ensure_client()
+        return await self._execute_yandex_synthesis(
+            self._client,
+            synthesis_params
         )
 
     async def _execute_yandex_synthesis(
-            self, session, synthesis_params: Dict[str, Any], **kwargs) -> bytes:
+            self, session, synthesis_params: Dict[str, Any], **_kwargs) -> bytes:
         """
         Direct Yandex API call - used by ConnectionManager
 
         Args:
             session: aiohttp session (provided by ConnectionManager)
             synthesis_params: Synthesis parameters
-            **kwargs: Additional parameters from ConnectionManager (ignored)
+            **_kwargs: Additional parameters from ConnectionManager (ignored)
 
         Single Responsibility: Only API communication
         """
         headers = {
-            "Authorization": f"Api-Key {self._api_key}",
+            "Authorization": f"Api-Key {self._yandex_config['api_key']}",
             "Content-Type": "application/x-www-form-urlencoded"
         }
 
@@ -321,9 +342,9 @@ class YandexTTSProvider(BaseTTSProvider):
         ) as response:
             if response.status == 200:
                 return await response.read()
-            else:
-                error_text = await response.text()
-                raise VoiceServiceError(f"Yandex TTS API error {response.status}: {error_text}")
+
+            error_text = await response.text()
+            raise VoiceServiceError(f"Yandex TTS API error {response.status}: {error_text}")
 
     async def get_available_voices(self) -> List[Dict[str, Any]]:
         """Get list of available voices with their characteristics."""
@@ -369,8 +390,8 @@ class YandexTTSProvider(BaseTTSProvider):
 
         # Test API availability with minimal request
         headers = {
-            "Authorization": f"Api-Key {self._api_key}",
-            "x-folder-id": self._folder_id,
+            "Authorization": f"Api-Key {self._yandex_config['api_key']}",
+            "x-folder-id": self._yandex_config['folder_id'],
         }
 
         data = {
@@ -388,16 +409,19 @@ class YandexTTSProvider(BaseTTSProvider):
             ) as response:
                 if response.status == 401:
                     raise ProviderNotAvailableError("Invalid Yandex API credentials")
-                elif response.status == 403:
+                if response.status == 403:
                     raise ProviderNotAvailableError("Yandex API access forbidden")
                 # Note: We don't require 200 for health check, just valid auth
 
         except (ClientError, asyncio.TimeoutError) as e:
-            raise ProviderNotAvailableError(f"Yandex TTS API unreachable: {str(e)}")
+            raise ProviderNotAvailableError(f"Yandex TTS API unreachable: {str(e)}") from e
 
     def _prepare_synthesis_params(self, request: TTSRequest) -> Dict[str, Any]:
         """Prepare synthesis parameters for Yandex SpeechKit API."""
-        voice_config = self.VOICE_MAPPING.get(self._voice_name, self.VOICE_MAPPING["jane"])
+        voice_config = self.VOICE_MAPPING.get(
+            self._yandex_config["voice_name"],
+            self.VOICE_MAPPING["jane"]
+        )
 
         # Use request language if provided, otherwise use voice default
         language = request.language or voice_config["language"]
@@ -408,10 +432,10 @@ class YandexTTSProvider(BaseTTSProvider):
         params = {
             "text": request.text,
             "lang": language,
-            "voice": self._voice_name,
+            "voice": self._yandex_config["voice_name"],
             "format": format_name,
-            "speed": request.speed or self._speed,
-            "emotion": self._emotion
+            "speed": request.speed or self._yandex_config["speed"],
+            "emotion": self._yandex_config["emotion"]
         }
 
         logger.debug("Prepared synthesis params: %s", params)
@@ -429,8 +453,8 @@ class YandexTTSProvider(BaseTTSProvider):
 
         for attempt in range(self.MAX_RETRIES):
             try:
-                # Use direct API call method with self._session for legacy calls
-                return await self._execute_yandex_synthesis(self._session, params)
+                # Use direct API call method with self._client for legacy calls
+                return await self._execute_yandex_synthesis(self._client, params)
 
             except VoiceServiceError as e:
                 # Check for rate limit specifically
@@ -441,7 +465,7 @@ class YandexTTSProvider(BaseTTSProvider):
                     continue
                 # Re-raise other VoiceServiceErrors
                 if attempt == self.MAX_RETRIES - 1:
-                    raise AudioProcessingError(f"Yandex TTS failed: {e}")
+                    raise AudioProcessingError(f"Yandex TTS failed: {e}") from e
 
             except Exception as e:
                 last_exception = e
@@ -477,7 +501,8 @@ class YandexTTSProvider(BaseTTSProvider):
         try:
             # Generate unique filename
             timestamp = int(time.time() * 1000)  # milliseconds
-            filename = f"tts_yandex_{agent_id}_{user_id}_{timestamp}.{self._audio_format}"
+            filename = (f"tts_yandex_{agent_id}_{user_id}_{timestamp}."
+                       f"{self._yandex_config['audio_format']}")
 
             # TODO: Implement MinIO upload when MinIO manager is available
             # For now, return a placeholder URL
@@ -486,7 +511,7 @@ class YandexTTSProvider(BaseTTSProvider):
 
         except Exception as e:
             logger.error("Failed to upload audio to storage: %s", e)
-            raise AudioProcessingError(f"Audio storage upload failed: {e}")
+            raise AudioProcessingError(f"Audio storage upload failed: {e}") from e
 
     def _generate_metadata(
         self,
@@ -495,12 +520,12 @@ class YandexTTSProvider(BaseTTSProvider):
         processing_time: float
     ) -> Dict[str, Any]:
         """Generate comprehensive metadata for monitoring and debugging."""
-        voice_config = self.VOICE_MAPPING.get(self._voice_name, {})
+        voice_config = self.VOICE_MAPPING.get(self._yandex_config["voice_name"], {})
 
         return {
             "provider": self.provider_name,
             "provider_type": ProviderType.YANDEX.value,
-            "voice_name": self._voice_name,
+            "voice_name": self._yandex_config["voice_name"],
             "language": params.get("lang"),
             "audio_format": params.get("format"),
             "speed": params.get("speed"),

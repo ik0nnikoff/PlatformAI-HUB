@@ -172,16 +172,23 @@ class VoiceConfig(BaseModel):
         if not self.stt_providers and not self.tts_providers:
             return self
 
-        # Ensure at least one provider is enabled
-        stt_enabled = any(config.enabled for config in self.stt_providers.values())
-        tts_enabled = any(config.enabled for config in self.tts_providers.values())
-
-        if self.stt_providers and not stt_enabled:
-            raise ValueError("At least one STT provider must be enabled")
-        if self.tts_providers and not tts_enabled:
-            raise ValueError("At least one TTS provider must be enabled")
-
+        # Validate STT and TTS providers
+        self._validate_provider_enablement()
         return self
+
+    def _validate_provider_enablement(self) -> None:
+        """Validate that at least one provider is enabled for each service type."""
+        if self.stt_providers:
+            self._ensure_enabled_providers(self.stt_providers, "STT")
+
+        if self.tts_providers:
+            self._ensure_enabled_providers(self.tts_providers, "TTS")
+
+    def _ensure_enabled_providers(self, providers: Dict, service_type: str) -> None:
+        """Ensure at least one provider is enabled for the given service type."""
+        enabled_providers = [config for config in providers.values() if config.enabled]
+        if not enabled_providers:
+            raise ValueError(f"At least one {service_type} provider must be enabled")
 
 
 # Global configuration instance

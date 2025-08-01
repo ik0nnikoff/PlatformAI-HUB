@@ -43,7 +43,7 @@ class SimpleRateLimiter(RateLimiterInterface):
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self.fail_open = fail_open
-        
+
         # In-memory storage for rate limit tracking
         self._request_counts: Dict[str, int] = {}
         self._window_starts: Dict[str, float] = {}
@@ -73,19 +73,19 @@ class SimpleRateLimiter(RateLimiterInterface):
         """Check rate limit and return information"""
         key = f"{user_id}:{operation}"
         now = time.time()
-        
+
         # Initialize or reset window if needed
         if key not in self._window_starts or (now - self._window_starts[key]) >= self.window_seconds:
             self._window_starts[key] = now
             self._request_counts[key] = 0
 
         current_count = self._request_counts.get(key, 0)
-        
+
         # Check if limit exceeded
         if current_count >= self.max_requests:
             window_start = self._window_starts[key]
             reset_time = max(0.0, (window_start + self.window_seconds) - now)
-            
+
             return RateLimitInfo(
                 allowed=False,
                 remaining_requests=0,
@@ -97,7 +97,7 @@ class SimpleRateLimiter(RateLimiterInterface):
         # Allow request and increment counter
         self._request_counts[key] = current_count + 1
         remaining = self.max_requests - (current_count + 1)
-        
+
         window_start = self._window_starts[key]
         reset_time = max(0.0, (window_start + self.window_seconds) - now)
 
@@ -120,23 +120,23 @@ class SimpleRateLimiter(RateLimiterInterface):
     async def get_reset_time(self, user_id: str, operation: str = "default") -> float:
         """Get time until rate limit reset"""
         key = f"{user_id}:{operation}"
-        
+
         if key not in self._window_starts:
             return 0.0
-            
+
         now = time.time()
         window_start = self._window_starts[key]
         reset_time = max(0.0, (window_start + self.window_seconds) - now)
-        
+
         return reset_time
 
     async def clear_user_limit(self, user_id: str, operation: str = "default") -> bool:
         """Clear rate limit for user"""
         key = f"{user_id}:{operation}"
-        
+
         if key in self._request_counts:
             del self._request_counts[key]
         if key in self._window_starts:
             del self._window_starts[key]
-            
+
         return True

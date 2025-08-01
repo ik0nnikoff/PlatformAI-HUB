@@ -122,16 +122,16 @@ class VoiceMetric(TypedDict):
 
 # Core Protocol Interfaces (ISP Compliance)
 
-class HealthCheckable(Protocol):
-    """Interface for health checking capability"""
+class HealthCheckable(Protocol):  # pylint: disable=too-few-public-methods
+    """Interface for health monitoring components"""
 
     async def health_check(self) -> bool:
-        """Check if service is healthy and operational"""
+        """Check component health status"""
         raise NotImplementedError
 
 
-class Configurable(Protocol[ConfigT]):
-    """Interface for configuration management"""
+class Configurable(Protocol[ConfigT]):  # pylint: disable=too-few-public-methods
+    """Generic configuration interface"""
 
     def get_config(self) -> ConfigT:
         """Get current configuration"""
@@ -142,45 +142,41 @@ class Configurable(Protocol[ConfigT]):
         raise NotImplementedError
 
 
-class MetricsCollector(Protocol):
+class MetricsCollector(Protocol):  # pylint: disable=too-few-public-methods
     """Interface for metrics collection"""
 
-    async def record_metric(self, metric: VoiceMetric) -> None:
-        """Record a performance metric"""
+    async def collect_metrics(self) -> Dict[str, Any]:
+        """Collect current metrics"""
         raise NotImplementedError
 
-    async def get_metrics(self, operation_type: Optional[str] = None) -> List[VoiceMetric]:
-        """Retrieve collected metrics"""
+    def reset_metrics(self) -> None:
+        """Reset metrics counters"""
         raise NotImplementedError
 
 
-class FileValidator(Protocol):
-    """Interface for file validation capability"""
+class FileValidator(Protocol):  # pylint: disable=too-few-public-methods
+    """Interface for file validation"""
 
-    async def validate_file(self, file_path: str) -> bool:
-        """Validate file accessibility and format"""
+    async def validate_audio_file(self, file_data: bytes) -> bool:
+        """Validate audio file format and content"""
         raise NotImplementedError
 
     def get_supported_formats(self) -> List[AudioFormat]:
-        """Get list of supported file formats"""
+        """Get list of supported audio formats"""
         raise NotImplementedError
 
 
-class LanguageDetector(Protocol):
-    """Interface for language detection capability"""
+class LanguageDetector(Protocol):  # pylint: disable=too-few-public-methods
+    """Interface for language detection"""
 
-    async def detect_language(self, audio_file_path: str) -> VoiceLanguage:
-        """Detect language from audio file"""
-        raise NotImplementedError
-
-    def get_supported_languages(self) -> List[VoiceLanguage]:
-        """Get list of supported languages"""
+    async def detect_language(self, audio_data: bytes) -> VoiceLanguage:
+        """Detect language from audio"""
         raise NotImplementedError
 
 
 # STT-specific interfaces
 
-class STTProvider(Protocol):
+class STTProvider(Protocol):  # pylint: disable=too-few-public-methods
     """
     Speech-to-Text provider interface
 
@@ -211,7 +207,7 @@ class STTProvider(Protocol):
         raise NotImplementedError
 
 
-class BatchSTTProvider(Protocol):
+class BatchSTTProvider(Protocol):  # pylint: disable=too-few-public-methods
     """Interface for batch STT processing"""
 
     async def transcribe_batch(
@@ -223,7 +219,7 @@ class BatchSTTProvider(Protocol):
         raise NotImplementedError
 
 
-class StreamingSTTProvider(Protocol):
+class StreamingSTTProvider(Protocol):  # pylint: disable=too-few-public-methods
     """Interface for streaming STT processing"""
 
     async def transcribe_stream(
@@ -237,7 +233,7 @@ class StreamingSTTProvider(Protocol):
 
 # TTS-specific interfaces
 
-class TTSProvider(Protocol):
+class TTSProvider(Protocol):  # pylint: disable=too-few-public-methods
     """
     Text-to-Speech provider interface
 
@@ -270,7 +266,7 @@ class TTSProvider(Protocol):
         raise NotImplementedError
 
 
-class VoiceListProvider(Protocol):
+class VoiceListProvider(Protocol):  # pylint: disable=too-few-public-methods
     """Interface for voice listing capability"""
 
     async def get_available_voices(
@@ -281,7 +277,7 @@ class VoiceListProvider(Protocol):
         raise NotImplementedError
 
 
-class CustomVoiceProvider(Protocol):
+class CustomVoiceProvider(Protocol):  # pylint: disable=too-few-public-methods
     """Interface for custom voice creation"""
 
     async def create_custom_voice(
@@ -357,7 +353,7 @@ class STTCacheInterface(Protocol):
         """Get cached STT result"""
         raise NotImplementedError
 
-    async def cache_stt_result(
+    async def cache_stt_result(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         audio_file_hash: str,
         provider: ProviderType,
@@ -382,7 +378,7 @@ class TTSCacheInterface(Protocol):
         """Get cached TTS result URL"""
         raise NotImplementedError
 
-    async def cache_tts_result(
+    async def cache_tts_result(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         text_hash: str,
         provider: ProviderType,
@@ -436,7 +432,7 @@ class TemporaryFileManager(Protocol):
 
 # Combined interfaces for full-featured providers
 
-class FullSTTProvider(
+class FullSTTProvider(  # pylint: disable=too-many-ancestors
     STTProvider,
     HealthCheckable,
     FileValidator,

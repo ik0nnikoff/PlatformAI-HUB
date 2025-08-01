@@ -65,29 +65,29 @@ class GoogleTTSProvider(BaseTTSProvider):
         """Initialize Google TTS provider."""
         super().__init__(provider_name, config, priority, enabled, **kwargs)
 
-        # Performance settings from Phase 1.2.3
-        self._max_retries = config.get("max_retries", 3)
-        self._timeout = config.get("timeout", 30.0)
-        self._max_text_length = config.get("max_text_length", 5000)
-
-        # Google-specific configuration
-        self._voice_name = config.get("voice_name", "en-US-Wavenet-D")
-        self._language_code = config.get("language_code", "en-US")
-        self._speaking_rate = config.get("speaking_rate", 1.0)
-        self._pitch = config.get("pitch", 0.0)
-        self._credentials_path = config.get("credentials_path")
-        self._project_id = config.get("project_id")
-        self._effects_profile_id = config.get("effects_profile_id")
-        self._volume_gain_db = config.get("volume_gain_db", 0.0)
-        self._sample_rate_hertz = config.get("sample_rate_hertz", 24000)
+        # Google Cloud TTS Configuration
+        self._google_config = {
+            "max_retries": config.get("max_retries", 3),
+            "timeout": config.get("timeout", 30.0),
+            "max_text_length": config.get("max_text_length", 5000),
+            "voice_name": config.get("voice_name", "en-US-Wavenet-D"),
+            "language_code": config.get("language_code", "en-US"),
+            "speaking_rate": config.get("speaking_rate", 1.0),
+            "pitch": config.get("pitch", 0.0),
+            "credentials_path": config.get("credentials_path"),
+            "project_id": config.get("project_id"),
+            "effects_profile_id": config.get("effects_profile_id"),
+            "volume_gain_db": config.get("volume_gain_db", 0.0),
+            "sample_rate_hertz": config.get("sample_rate_hertz", 24000)
+        }
 
         # Internal state - lazy initialization pattern
         self._client: Optional[texttospeech_v1.TextToSpeechAsyncClient] = None
 
         logger.debug(
             "GoogleTTSProvider initialized: voice=%s, language=%s",
-            self._voice_name,
-            self._language_code)
+            self._google_config["voice_name"],
+            self._google_config["language_code"])
 
     async def get_capabilities(self) -> TTSCapabilities:
         """
@@ -114,7 +114,7 @@ class GoogleTTSProvider(BaseTTSProvider):
                     "ja-JP", "ko-KR", "zh-CN", "ru-RU", "pt-BR", "nl-NL"
                 ],
                 available_voices=available_voices,
-                max_text_length=self._max_text_length,
+                max_text_length=self._google_config["max_text_length"],
                 supports_ssml=True,
                 supports_speed_control=True,
                 supports_pitch_control=True,
@@ -129,7 +129,7 @@ class GoogleTTSProvider(BaseTTSProvider):
                 supported_formats=[AudioFormat.MP3],
                 supported_languages=["en-US"],
                 available_voices=[],
-                max_text_length=self._max_text_length,
+                max_text_length=self._google_config["max_text_length"],
                 quality_levels=[TTSQuality.STANDARD]
             )
 
@@ -144,10 +144,10 @@ class GoogleTTSProvider(BaseTTSProvider):
         Implements lazy initialization and connection pooling patterns
         from Phase 1.2.3 performance optimization.
         """
-        if not self._credentials_path:
+        if not self._google_config["credentials_path"]:
             raise ConfigurationError("Google Cloud credentials path not configured")
 
-        if not self._project_id:
+        if not self._google_config["project_id"]:
             raise ConfigurationError("Google Cloud project ID not configured")
 
         try:
@@ -157,16 +157,18 @@ class GoogleTTSProvider(BaseTTSProvider):
             # Test connectivity with a simple list voices call
             await self._test_connectivity()
 
-            logger.debug("Google Cloud TTS client initialized: project=%s", self._project_id)
+            logger.debug("Google Cloud TTS client initialized: project=%s",
+                        self._google_config["project_id"])
 
         except Exception as e:
             logger.error("Failed to initialize Google Cloud TTS client: %s", e)
-            raise AudioProcessingError(f"Google Cloud TTS initialization failed: {e}")
+            raise AudioProcessingError(f"Google Cloud TTS initialization failed: {e}") from e
 
     async def cleanup(self) -> None:
         """Clean up Google Cloud TTS client resources."""
         if self._client:
-            await self._client.close()
+            # Google Cloud clients auto-manage their connections
+            # Just reset the reference
             self._client = None
         logger.debug("Google Cloud TTS client cleaned up")
 
@@ -181,7 +183,7 @@ class GoogleTTSProvider(BaseTTSProvider):
             logger.debug("Google Cloud TTS connectivity test successful")
         except Exception as e:
             logger.error("Google Cloud TTS connectivity test failed: %s", e)
-            raise AudioProcessingError(f"Google Cloud TTS connectivity failed: {e}")
+            raise AudioProcessingError(f"Google Cloud TTS connectivity failed: {e}") from e
 
     @provider_operation("Google TTS Synthesis")
     async def _synthesize_implementation(self, request: TTSRequest) -> str:
@@ -217,15 +219,13 @@ class GoogleTTSProvider(BaseTTSProvider):
 
     async def _perform_synthesis(self, synthesis_params: Dict[str, Any]) -> bytes:
         """
-        Enhanced synthesis with ConnectionManager integration
+        Enhanced synthesis with direct Google TTS client
 
-        Phase 3.5.2.3: Uses centralized retry logic from ConnectionManager
+        Phase 3.5.2.3: Uses direct client for simplicity
         """
-        return await self._execute_with_connection_manager(
-            operation_name="google_tts_synthesis",
-            request_func=self._execute_google_synthesis,
-            synthesis_params=synthesis_params
-        )
+        if not self._client:
+            raise AudioProcessingError("Google Cloud TTS client not initialized")
+        return await self._execute_google_synthesis(synthesis_params)
 
     async def _execute_google_synthesis(self, synthesis_params: Dict[str, Any]) -> bytes:
         """
@@ -242,44 +242,60 @@ class GoogleTTSProvider(BaseTTSProvider):
 
         Implements advanced voice configuration based on quality settings.
         """
-        # Voice selection based on quality and request
-        voice_name = request.voice or self._voice_name
-        language_code = request.language or self._language_code
+        # Configure voice and language
+        voice_name, language_code = self._configure_voice_settings(request)
 
-        # Advanced voice configuration for premium quality
-        if request.quality in [TTSQuality.HIGH, TTSQuality.PREMIUM]:
-            # Use high-quality WaveNet or Journey voices
-            if "Journey" not in voice_name and "WaveNet" not in voice_name:
-                # Upgrade to high-quality voice if available
-                voice_name = self._get_premium_voice_name(language_code)
-
-        # Prepare synthesis input
+        # Build synthesis components
         synthesis_input = types.SynthesisInput(text=request.text)
-
-        # Voice configuration
-        voice = types.VoiceSelectionParams(
-            language_code=language_code,
-            name=voice_name
-        )
-
-        # Audio configuration with quality optimization
-        audio_config = types.AudioConfig(
-            audio_encoding=types.AudioEncoding.MP3,
-            speaking_rate=request.speed or self._speaking_rate,
-            pitch=self._pitch,
-            volume_gain_db=self._volume_gain_db,
-            sample_rate_hertz=self._sample_rate_hertz
-        )
-
-        # Add effects profile for premium quality
-        if request.quality == TTSQuality.PREMIUM and self._effects_profile_id:
-            audio_config.effects_profile_id = [self._effects_profile_id]
+        voice = self._create_voice_selection_params(language_code, voice_name)
+        audio_config = self._create_audio_config(request)
 
         return {
             "input": synthesis_input,
             "voice": voice,
             "audio_config": audio_config
         }
+
+    def _configure_voice_settings(self, request: TTSRequest) -> tuple[str, str]:
+        """Configure voice name and language code based on request quality."""
+        voice_name = request.voice or self._google_config["voice_name"]
+        language_code = request.language or self._google_config["language_code"]
+
+        # Advanced voice configuration for premium quality
+        if request.quality in [TTSQuality.HIGH, TTSQuality.PREMIUM]:
+            voice_name = self._upgrade_to_premium_voice(voice_name, language_code)
+
+        return voice_name, language_code
+
+    def _upgrade_to_premium_voice(self, voice_name: str, language_code: str) -> str:
+        """Upgrade to high-quality voice if available."""
+        if "Journey" not in voice_name and "WaveNet" not in voice_name:
+            return self._get_premium_voice_name(language_code)
+        return voice_name
+
+    def _create_voice_selection_params(self, language_code: str, voice_name: str) -> types.VoiceSelectionParams:
+        """Create voice selection parameters."""
+        return types.VoiceSelectionParams(
+            language_code=language_code,
+            name=voice_name
+        )
+
+    def _create_audio_config(self, request: TTSRequest) -> types.AudioConfig:
+        """Create audio configuration with quality optimization."""
+        audio_config = types.AudioConfig(
+            audio_encoding=types.AudioEncoding.MP3,
+            speaking_rate=request.speed or self._google_config["speaking_rate"],
+            pitch=self._google_config["pitch"],
+            volume_gain_db=self._google_config["volume_gain_db"],
+            sample_rate_hertz=self._google_config["sample_rate_hertz"]
+        )
+
+        # Add effects profile for premium quality
+        if (request.quality == TTSQuality.PREMIUM and
+            self._google_config["effects_profile_id"]):
+            audio_config.effects_profile_id = [self._google_config["effects_profile_id"]]
+
+        return audio_config
 
     def _get_premium_voice_name(self, language_code: str) -> str:
         """Get premium voice name for the specified language."""
@@ -297,7 +313,7 @@ class GoogleTTSProvider(BaseTTSProvider):
             "ru-RU": "ru-RU-Wavenet-A"
         }
 
-        return premium_voices.get(language_code, self._voice_name)
+        return premium_voices.get(language_code, self._google_config["voice_name"])
 
     async def _synthesize_with_retry(self, synthesis_params: Dict[str, Any]) -> bytes:
         """
@@ -308,56 +324,74 @@ class GoogleTTSProvider(BaseTTSProvider):
         """
         last_exception = None
 
-        for attempt in range(self._max_retries + 1):
+        for attempt in range(self._google_config["max_retries"] + 1):
             try:
                 # Use direct API call method
                 return await self._execute_google_synthesis(synthesis_params)
 
-            except google_exceptions.RetryError as e:
-                last_exception = e
-                if attempt < self._max_retries:
-                    delay = 2 ** attempt  # Exponential backoff
-                    logger.warning(
-                        "Google Cloud retry error, retrying in %ss (attempt %s)",
-                        delay,
-                        attempt + 1)
-                    await asyncio.sleep(delay)
-                    continue
-                raise AudioProcessingError(f"Google Cloud retry limit exceeded: {e}")
-
             except google_exceptions.Unauthenticated as e:
                 # Don't retry authentication errors
-                raise AudioProcessingError(f"Google Cloud authentication failed: {e}")
+                raise AudioProcessingError(f"Google Cloud authentication failed: {e}") from e
 
-            except google_exceptions.GoogleAPICallError as e:
+            except (google_exceptions.RetryError, google_exceptions.GoogleAPICallError, Exception) as e:
                 last_exception = e
-                if attempt < self._max_retries and e.code in [
-                        429, 503]:  # Rate limit or service unavailable
-                    delay = 2 ** attempt
-                    logger.warning(
-                        "Google Cloud API error, retrying in %ss (attempt %s)",
-                        delay,
-                        attempt + 1)
-                    await asyncio.sleep(delay)
-                    continue
-                raise AudioProcessingError(f"Google Cloud API error: {e}")
-
-            except Exception as e:
-                last_exception = e
-                if attempt < self._max_retries:
-                    delay = 2 ** attempt
-                    logger.warning(
-                        "Unexpected error, retrying in %ss (attempt %s)",
-                        delay,
-                        attempt + 1)
-                    await asyncio.sleep(delay)
-                    continue
-                raise AudioProcessingError(f"Google Cloud TTS synthesis failed: {e}")
+                if not await self._handle_google_retryable_error(e, attempt):
+                    break
+                continue
 
         # Should not reach here, but in case all retries failed
         raise AudioProcessingError(
-            f"Google Cloud TTS failed after {self._max_retries} retries: {last_exception}"
+            f"Google Cloud TTS failed after {self._google_config['max_retries']} retries: {last_exception}"
         )
+
+    async def _handle_google_retryable_error(self, error: Exception, attempt: int) -> bool:
+        """
+        Handle retryable Google Cloud errors with exponential backoff.
+
+        Returns:
+            bool: True if should retry, False if max retries exceeded
+        """
+        if attempt >= self._google_config["max_retries"]:
+            self._raise_google_retry_exceeded_error(error)
+            return False
+
+        if not self._should_retry_google_error(error):
+            self._raise_google_non_retryable_error(error)
+            return False
+
+        delay = 2 ** attempt  # Exponential backoff
+        error_type = self._get_google_error_type(error)
+
+        logger.warning("Google Cloud %s, retrying in %ss (attempt %s)", error_type, delay, attempt + 1)
+        await asyncio.sleep(delay)
+        return True
+
+    def _should_retry_google_error(self, error: Exception) -> bool:
+        """Check if Google Cloud error should be retried."""
+        if isinstance(error, google_exceptions.GoogleAPICallError):
+            return error.code in [429, 503]  # Rate limit or service unavailable
+        return isinstance(error, (google_exceptions.RetryError, Exception))
+
+    def _get_google_error_type(self, error: Exception) -> str:
+        """Get human-readable error type for Google Cloud errors."""
+        if isinstance(error, google_exceptions.RetryError):
+            return "retry error"
+        if isinstance(error, google_exceptions.GoogleAPICallError):
+            return "API error"
+        return "unexpected error"
+
+    def _raise_google_non_retryable_error(self, error: Exception) -> None:
+        """Raise appropriate error for non-retryable Google Cloud exceptions."""
+        if isinstance(error, google_exceptions.GoogleAPICallError):
+            raise AudioProcessingError(f"Google Cloud API error: {error}")
+
+    def _raise_google_retry_exceeded_error(self, error: Exception) -> None:
+        """Raise appropriate error when max retries exceeded for Google Cloud."""
+        if isinstance(error, google_exceptions.RetryError):
+            raise AudioProcessingError(f"Google Cloud retry limit exceeded: {error}")
+        if isinstance(error, google_exceptions.GoogleAPICallError):
+            raise AudioProcessingError(f"Google Cloud API error: {error}")
+        raise AudioProcessingError(f"Google Cloud TTS synthesis failed: {error}")
 
     async def get_available_voices(self) -> List[Dict[str, Any]]:
         """
@@ -386,7 +420,7 @@ class GoogleTTSProvider(BaseTTSProvider):
 
         except Exception as e:
             logger.error("Failed to get Google Cloud voices: %s", e)
-            raise AudioProcessingError(f"Failed to retrieve Google Cloud voices: {e}")
+            raise AudioProcessingError(f"Failed to retrieve Google Cloud voices: {e}") from e
 
     async def _upload_audio_to_storage(
         self,
@@ -407,7 +441,7 @@ class GoogleTTSProvider(BaseTTSProvider):
 
         except Exception as e:
             logger.error("Failed to upload audio to storage: %s", e)
-            raise AudioProcessingError(f"Audio storage upload failed: {e}")
+            raise AudioProcessingError(f"Audio storage upload failed: {e}") from e
 
     def _estimate_audio_duration(self, text: str, speaking_rate: float = 1.0) -> float:
         """
@@ -422,13 +456,13 @@ class GoogleTTSProvider(BaseTTSProvider):
     def _get_provider_metadata(self, request: TTSRequest) -> Dict[str, Any]:
         """Get provider-specific metadata for the synthesis result."""
         return {
-            "voice_name": request.voice or self._voice_name,
-            "language_code": request.language or self._language_code,
-            "speaking_rate": request.speed or self._speaking_rate,
-            "pitch": self._pitch,
+            "voice_name": request.voice or self._google_config["voice_name"],
+            "language_code": request.language or self._google_config["language_code"],
+            "speaking_rate": request.speed or self._google_config["speaking_rate"],
+            "pitch": self._google_config["pitch"],
             "audio_encoding": "MP3",
-            "sample_rate_hertz": self._sample_rate_hertz,
-            "effects_profile": self._effects_profile_id,
+            "sample_rate_hertz": self._google_config["sample_rate_hertz"],
+            "effects_profile": self._google_config["effects_profile_id"],
             "provider_version": "texttospeech_v1"
         }
 
@@ -468,18 +502,19 @@ class GoogleTTSProvider(BaseTTSProvider):
     @property
     def max_text_length(self) -> int:
         """Maximum text length supported by Google Cloud TTS."""
-        return self._max_text_length
+        return self._google_config["max_text_length"]
 
     def __str__(self) -> str:
         """String representation of the provider."""
-        return f"GoogleTTSProvider(voice={self._voice_name}, language={self._language_code}, enabled={self.enabled})"
+        return (f"GoogleTTSProvider(voice={self._google_config['voice_name']}, "
+               f"language={self._google_config['language_code']}, enabled={self.enabled})")
 
     def __repr__(self) -> str:
         """Detailed string representation of the provider."""
         return (
             f"GoogleTTSProvider("
-            f"voice={self._voice_name}, "
-            f"language={self._language_code}, "
+            f"voice={self._google_config['voice_name']}, "
+            f"language={self._google_config['language_code']}, "
             f"priority={self.priority}, "
             f"enabled={self.enabled}"
             f")"

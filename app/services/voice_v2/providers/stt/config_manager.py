@@ -1,3 +1,18 @@
+"""
+Voice v2 STT Configuration Manager - Simplified Provider Configuration
+
+This module provides simplified configuration management for STT providers,
+replacing enterprise configuration system with basic environment-based setup.
+
+Features:
+- Basic provider configuration from environment variables
+- Simple validation and caching
+- Agent-specific settings support
+- Streamlined configuration without hot-reload complexity
+
+Author: PlatformAI Team
+"""
+
 # STT Configuration Manager Simplification
 # Enterprise → Simple pattern transformation
 # Features removed:
@@ -16,7 +31,6 @@ import os
 import logging
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
-from app.core.logging_config import setup_logger
 
 
 @dataclass
@@ -28,7 +42,7 @@ class STTProviderConfig:
     settings: Dict[str, Any]
 
 
-@dataclass  
+@dataclass
 class AgentSTTConfig:
     """Simplified agent STT configuration"""
     agent_id: str
@@ -40,20 +54,24 @@ class AgentSTTConfig:
 class STTConfigManager:
     """
     Simplified STT configuration manager
-    
+
     Replaces enterprise configuration system with basic environment-based setup.
     Removes hot-reload, multiple sources, file management complexity.
     """
 
     def __init__(self, logger: Optional[logging.Logger] = None):
         """Initialize simplified configuration manager"""
-        self.logger = logger or setup_logger("stt_config_manager")
+        self.logger = logger or logging.getLogger(__name__)
         self._config_cache: Dict[str, AgentSTTConfig] = {}
 
-    def get_agent_config(self, agent_id: str, voice_config: Optional[Dict[str, Any]] = None) -> AgentSTTConfig:
+    def get_agent_config(
+        self,
+        agent_id: str,
+        voice_config: Optional[Dict[str, Any]] = None
+    ) -> AgentSTTConfig:
         """
         Get agent STT configuration
-        
+
         Priority:
         1. Provided voice_config
         2. Cached configuration
@@ -74,13 +92,13 @@ class STTConfigManager:
         return config
 
     def _create_config_from_voice_settings(
-        self, 
-        agent_id: str, 
+        self,
+        agent_id: str,
         voice_config: Dict[str, Any]
     ) -> AgentSTTConfig:
         """Create configuration from agent voice settings"""
         providers = []
-        
+
         for provider_data in voice_config.get("providers", []):
             if provider_data.get("provider") in ["openai", "google", "yandex"]:
                 provider_config = STTProviderConfig(
@@ -89,7 +107,7 @@ class STTConfigManager:
                     priority=provider_data.get("priority", 1),
                     settings=provider_data.get("settings", {})
                 )
-                
+
                 # Validate provider has required settings
                 if self._validate_provider(provider_config):
                     providers.append(provider_config)
@@ -117,7 +135,7 @@ class STTConfigManager:
                 }
             ))
 
-        # Google provider  
+        # Google provider
         if os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or os.getenv("GOOGLE_CLOUD_PROJECT_ID"):
             providers.append(STTProviderConfig(
                 provider="google",
@@ -132,7 +150,7 @@ class STTConfigManager:
         # Yandex provider
         if os.getenv("YANDEX_API_KEY") and os.getenv("YANDEX_FOLDER_ID"):
             providers.append(STTProviderConfig(
-                provider="yandex", 
+                provider="yandex",
                 enabled=True,
                 priority=3,
                 settings={
@@ -154,11 +172,11 @@ class STTConfigManager:
 
         if provider.provider == "openai":
             return bool(settings.get("api_key"))
-        elif provider.provider == "google":
+        if provider.provider == "google":
             return bool(settings.get("credentials_path") or settings.get("project_id"))
-        elif provider.provider == "yandex":
+        if provider.provider == "yandex":
             return bool(settings.get("api_key") and settings.get("folder_id"))
-        
+
         return False
 
     def clear_cache(self, agent_id: Optional[str] = None) -> None:
@@ -172,6 +190,6 @@ class STTConfigManager:
 # Export interface
 __all__ = [
     "STTProviderConfig",
-    "AgentSTTConfig", 
+    "AgentSTTConfig",
     "STTConfigManager"
 ]

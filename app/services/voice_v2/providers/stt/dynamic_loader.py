@@ -35,13 +35,13 @@ class ProviderLoadingConfig:
 class SimplifiedSTTProviderFactory:
     """
     Simplified STT provider factory.
-    
+
     Reduces 518 → ~100 lines by removing:
     - Health monitoring loops
-    - Hot-reload mechanisms  
+    - Hot-reload mechanisms
     - Lazy proxy patterns
     - Complex management layers
-    
+
     Preserves:
     - Basic provider instantiation
     - Simple error handling
@@ -71,7 +71,7 @@ class SimplifiedSTTProviderFactory:
 
         provider_class = self._provider_classes[name]
         provider_config = {**self._provider_configs[name]}
-        
+
         if config:
             provider_config.update(config)
 
@@ -82,7 +82,7 @@ class SimplifiedSTTProviderFactory:
             )
             self._logger.info(f"Created STT provider: {name}")
             return provider
-            
+
         except Exception as e:
             self._logger.error(f"Failed to create STT provider {name}: {e}")
             raise
@@ -105,7 +105,7 @@ LazySTTProviderProxy = None  # Removed enterprise pattern
 
 __all__ = [
     'LoadingStrategy',
-    'ProviderLoadingConfig', 
+    'ProviderLoadingConfig',
     'SimplifiedSTTProviderFactory',
     'STTProviderManager'  # Backward compatibility
 ]

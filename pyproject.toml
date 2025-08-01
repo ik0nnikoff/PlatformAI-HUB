@@ -59,6 +59,8 @@ dependencies = [
     "tornado>=6.5",
     "psutil>=7.0.0",
     "urllib3>=2.5.0",
+    "lizard>=1.17.31",
+    "pylint>=3.3.7",
 ]
 
 [tool.uv.sources]
@@ -72,7 +74,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]  # Look in the root directory
-include = ["hub*"]  # Include only these packages and their submodules
+include = ["app*", "hub*"]  # Include app and hub packages
 #exclude = ["last_bot*", "temp_files*", "temp_files_qdrant*"] # Explicitly exclude others if needed
 
 # Optional: Configure linters/formatters like Ruff
@@ -95,3 +97,5 @@ addopts = [
     "--strict-config",
     "--tb=short"
 ]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

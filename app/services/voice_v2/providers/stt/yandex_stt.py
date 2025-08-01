@@ -6,7 +6,7 @@ Removed YandexAudioProcessor extraction for consolidation and simplification.
 
 Features:
 - Consolidated audio processing
-- SOLID principles compliance  
+- SOLID principles compliance
 - Performance optimization
 - Reduced file dependencies
 """
@@ -46,6 +46,7 @@ class YandexSTTProvider(BaseSTTProvider):
     STT_API_URL = "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize"
     MAX_FILE_SIZE_MB = 1.0
     DEFAULT_SAMPLE_RATE = 16000
+    TIMEOUT_SECONDS = 30
 
     def __init__(self,
                  provider_name: str,
@@ -94,9 +95,8 @@ class YandexSTTProvider(BaseSTTProvider):
                 "ru-RU", "en-US", "tr-TR", "uk-UA", "uz-UZ", "kk-KK"
             ],
             max_file_size_mb=self.MAX_FILE_SIZE_MB,
-            quality=STTQuality.HIGH,
-            supports_streaming=False,
-            supports_real_time=False,
+            max_duration_seconds=300.0,
+            supports_quality_levels=[STTQuality.HIGH],
             supports_speaker_diarization=False
         )
 
@@ -174,20 +174,33 @@ class YandexSTTProvider(BaseSTTProvider):
                 # Even if transcription fails, 200 or 400 means service is up
                 return response.status in [200, 400]
 
-        except Exception as e:
+        except (VoiceServiceError, AudioProcessingError):
+            return False
+        except (OSError, ConnectionError) as e:
             logger.warning("Yandex STT health check failed: %s", e)
             return False
 
-    async def _validate_request(self, request: STTRequest) -> None:
+    def _validate_request(
+        self,
+        audio_data: bytes,
+        audio_format: str,
+        language: str
+    ) -> Dict[str, Any]:
         """Validate STT request."""
-        if not request.audio_data:
+        if not audio_data:
             raise AudioProcessingError("Empty audio data")
 
-        if len(request.audio_data) > self.MAX_FILE_SIZE_MB * 1024 * 1024:
-            raise AudioProcessingError(f"Audio file too large: {len(request.audio_data)} bytes")
+        if len(audio_data) > self.MAX_FILE_SIZE_MB * 1024 * 1024:
+            raise AudioProcessingError(f"Audio file too large: {len(audio_data)} bytes")
 
-        if not self.validate_audio_format(request.audio_format):
-            raise AudioProcessingError(f"Unsupported audio format: {request.audio_format}")
+        if not self.validate_audio_format(audio_format):
+            raise AudioProcessingError(f"Unsupported audio format: {audio_format}")
+
+        return {
+            "audio_data_size": len(audio_data),
+            "audio_format": audio_format,
+            "language": language
+        }
 
     async def _transcribe_implementation(self, request: STTRequest) -> STTResult:
         """Main transcription implementation."""
@@ -195,7 +208,11 @@ class YandexSTTProvider(BaseSTTProvider):
 
         try:
             # Validate request
-            await self._validate_request(request)
+            self._validate_request(
+                request.audio_data,
+                request.audio_format,
+                request.language or "ru-RU"
+            )
 
             # Process audio data
             processed_audio, final_format = await self.process_audio_data(
@@ -213,7 +230,7 @@ class YandexSTTProvider(BaseSTTProvider):
 
             # Update performance stats
             processing_time = time.perf_counter() - start_time
-            logger.debug(f"Yandex STT transcription completed in {processing_time:.3f}s")
+            logger.debug("Yandex STT transcription completed in %.3fs", processing_time)
             self._update_performance_stats(processing_time)
 
             return result
@@ -226,56 +243,82 @@ class YandexSTTProvider(BaseSTTProvider):
                                      audio_data: bytes,
                                      audio_format: str,
                                      language: str,
-                                     enable_profanity_filter: bool = True,
-                                     max_retries: int = 3) -> STTResult:
+                                     enable_profanity_filter: bool = True) -> STTResult:
         """Perform transcription with retry logic."""
+        max_retries = 3
         normalized_language = self.normalize_language(language)
+        params = self._prepare_transcription_params(
+            normalized_language, audio_format, enable_profanity_filter
+        )
 
         for attempt in range(max_retries):
             try:
                 if not self._session:
                     await self._setup_connection_pool()
 
-                params = {
-                    "folderId": self.folder_id,
-                    "format": audio_format,
-                    "sampleRateHertz": self.DEFAULT_SAMPLE_RATE,
-                    "lang": normalized_language,
-                    "profanityFilter": str(enable_profanity_filter).lower()
-                }
-
-                async with self._session.post(
-                    self.STT_API_URL,
-                    data=audio_data,
-                    params=params
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        return self._parse_transcription_result(result)
-                    else:
-                        error_text = await response.text()
-                        if response.status == 429 and attempt < max_retries - 1:
-                            # Rate limiting - wait and retry
-                            await asyncio.sleep(2 ** attempt)
-                            continue
-
-                        raise VoiceServiceError(
-                            f"Yandex STT API error {response.status}: {error_text}"
-                        )
+                return await self._execute_transcription_request(audio_data, params)
 
             except asyncio.TimeoutError:
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(1)
-                    continue
-                raise VoiceServiceTimeout("Yandex STT request timeout")
+                if not await self._handle_yandex_timeout_error(attempt, max_retries):
+                    break
+                continue
 
-            except Exception:
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(1)
-                    continue
-                raise
+            except (VoiceServiceError, AudioProcessingError) as e:
+                if not await self._handle_yandex_general_error(e, attempt, max_retries):
+                    break
+                continue
 
         raise VoiceServiceError("All retry attempts failed")
+
+    def _prepare_transcription_params(self, language: str, audio_format: str,
+                                    enable_profanity_filter: bool) -> Dict[str, str]:
+        """Prepare parameters for Yandex STT API request."""
+        return {
+            "folderId": self.folder_id,
+            "format": audio_format,
+            "sampleRateHertz": self.DEFAULT_SAMPLE_RATE,
+            "lang": language,
+            "profanityFilter": str(enable_profanity_filter).lower()
+        }
+
+    async def _execute_transcription_request(self, audio_data: bytes,
+                                           params: Dict[str, str]) -> STTResult:
+        """Execute transcription request to Yandex API."""
+        async with self._session.post(
+            self.STT_API_URL,
+            data=audio_data,
+            params=params
+        ) as response:
+            if response.status == 200:
+                result = await response.json()
+                return self._parse_transcription_result(result)
+
+            await self._handle_api_error_response(response)
+
+    async def _handle_api_error_response(self, response) -> None:
+        """Handle API error responses from Yandex."""
+        error_text = await response.text()
+        raise VoiceServiceError(
+            f"Yandex STT API error {response.status}: {error_text}"
+        )
+
+    async def _handle_yandex_timeout_error(self, attempt: int, max_retries: int) -> bool:
+        """Handle timeout errors with retry logic."""
+        if attempt < max_retries - 1:
+            await asyncio.sleep(1)
+            return True
+        raise VoiceServiceTimeout(
+            "Yandex STT request timeout",
+            timeout_seconds=self.TIMEOUT_SECONDS
+        )
+
+    async def _handle_yandex_general_error(self, error: Exception,
+                                         attempt: int, max_retries: int) -> bool:
+        """Handle general errors with retry logic."""
+        if attempt < max_retries - 1:
+            await asyncio.sleep(1)
+            return True
+        raise error
 
     def _parse_transcription_result(self, result: Dict[str, Any]) -> STTResult:
         """Parse Yandex API response."""
@@ -285,8 +328,8 @@ class YandexSTTProvider(BaseSTTProvider):
             text=result_text,
             confidence=0.95,  # Yandex doesn't provide confidence scores
             language_detected=None,  # Yandex doesn't return detected language
-            processing_time_ms=0,  # Will be set by caller
-            provider_specific_data={
+            processing_time=0.0,  # Will be set by caller
+            provider_metadata={
                 "yandex_result": result,
                 "api_version": "v1"
             }
@@ -330,7 +373,7 @@ class YandexSTTProvider(BaseSTTProvider):
         }
 
     # Audio processing methods (integrated from YandexAudioProcessor)
-    
+
     def validate_audio_format(self, audio_format: str) -> bool:
         """Validate if audio format is supported"""
         return audio_format.lower() in self.supported_formats
@@ -342,11 +385,11 @@ class YandexSTTProvider(BaseSTTProvider):
             "uz": "uz-UZ", "kk": "kk-KK", "de": "de-DE", "fr": "fr-FR",
             "es": "es-ES", "it": "it-IT", "he": "he-IL", "ar": "ar-AE"
         }
-        
+
         # Handle full locale codes
         if "-" in language:
             return language
-        
+
         return language_map.get(language.lower(), "ru-RU")
 
     async def process_audio_data(self, audio_data: bytes, audio_format: str) -> Tuple[bytes, str]:
@@ -368,7 +411,7 @@ class YandexSTTProvider(BaseSTTProvider):
         """Convert audio to WAV format"""
         try:
             from pydub import AudioSegment
-            
+
             # Determine input format
             if audio_format == "mp3":
                 audio_segment = AudioSegment.from_mp3(io.BytesIO(audio_data))
@@ -386,13 +429,16 @@ class YandexSTTProvider(BaseSTTProvider):
             )
 
             converted_data = wav_io.getvalue()
-            logger.debug(f"Converted {audio_format} to WAV: {len(audio_data)} -> {len(converted_data)} bytes")
-            
+            logger.debug(
+                "Converted %s to WAV: %d -> %d bytes",
+                audio_format, len(audio_data), len(converted_data)
+            )
+
             return converted_data, "wav"
 
-        except ImportError:
+        except ImportError as exc:
             logger.error("pydub not available for audio conversion")
-            raise RuntimeError("Audio conversion not available - pydub required")
+            raise RuntimeError("Audio conversion not available - pydub required") from exc
         except Exception as e:
-            logger.error(f"Audio conversion to WAV failed: {e}")
+            logger.error("Audio conversion to WAV failed: %s", e)
             raise

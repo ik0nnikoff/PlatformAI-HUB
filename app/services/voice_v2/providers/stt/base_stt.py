@@ -30,15 +30,17 @@ class BaseSTTProvider(ABC, RetryMixin):
         priority: int = 1,
         enabled: bool = True
     ):
+        super().__init__()  # Initialize RetryMixin
         self.provider_name = provider_name
         self.config = config
         self.priority = priority
         self.enabled = enabled
         self._initialized = False
+        self.logger = logging.getLogger(f"{__name__}.{provider_name}")
 
         # Initialize retry configuration через RetryMixin
         self._retry_config = self._get_retry_config(config)
-        logger.debug(f"{provider_name} STT provider with retry config: {self._retry_config.max_attempts} attempts")
+        logger.debug("STT provider %s with retry config: %s attempts", provider_name, self._retry_config.max_attempts)
 
         # Quick config validation
         missing = [f for f in self.get_required_config_fields() if f not in config]
@@ -56,22 +58,47 @@ class BaseSTTProvider(ABC, RetryMixin):
 
     @abstractmethod
     async def get_capabilities(self) -> STTCapabilities:
-        pass
+        """Get provider capabilities."""
 
     @abstractmethod
     async def initialize(self) -> None:
-        pass
+        """Initialize provider."""
 
     @abstractmethod
     async def cleanup(self) -> None:
-        pass
+        """Clean up provider resources."""
 
     @abstractmethod
     async def _transcribe_implementation(self, request: STTRequest) -> STTResult:
-        pass
+        """Core transcription implementation."""
+
+    @abstractmethod
+    def get_supported_formats(self) -> List[str]:
+        """Get list of supported audio formats."""
+
+    @abstractmethod
+    def get_supported_languages(self) -> List[str]:
+        """Get list of supported languages."""
 
     async def transcribe_audio(self, request: STTRequest) -> STTResult:
         """Main transcription with validation."""
+        # Pre-processing checks
+        await self._ensure_provider_ready()
+        self._validate_transcription_request(request)
+
+        try:
+            # Perform transcription
+            start_time = asyncio.get_event_loop().time()
+            result = await self._transcribe_implementation(request)
+
+            # Post-process result
+            return self._enrich_transcription_result(result, start_time)
+
+        except Exception as e:
+            self._handle_transcription_error(e)
+
+    async def _ensure_provider_ready(self) -> None:
+        """Ensure provider is enabled and initialized."""
         if not self.enabled:
             raise ProviderNotAvailableError(f"Provider {self.provider_name} disabled")
 
@@ -79,6 +106,8 @@ class BaseSTTProvider(ABC, RetryMixin):
             await self.initialize()
             self._initialized = True
 
+    def _validate_transcription_request(self, request: STTRequest) -> None:
+        """Validate transcription request parameters."""
         validation_result = self._validate_request(
             request.audio_data,
             request.audio_format,
@@ -90,23 +119,24 @@ class BaseSTTProvider(ABC, RetryMixin):
                 f"Ошибка валидации аудио: {validation_result.get('error', 'Unknown error')}"
             )
 
-        try:
-            start_time = asyncio.get_event_loop().time()
-            result = await self._transcribe_implementation(request)
+    def _enrich_transcription_result(self, result: STTResult, start_time: float) -> STTResult:
+        """Enrich transcription result with computed metadata."""
+        # Set processing time if not already set
+        if result.processing_time is None:
+            result.processing_time = asyncio.get_event_loop().time() - start_time
 
-            # Enrich result
-            if result.processing_time is None:
-                result.processing_time = asyncio.get_event_loop().time() - start_time
-            if result.word_count is None and result.text:
-                result.word_count = len(result.text.split())
+        # Set word count if not already set
+        if result.word_count is None and result.text:
+            result.word_count = len(result.text.split())
 
-            return result
+        return result
 
-        except Exception as e:
-            logger.error("STT failed: %s", e)
-            if isinstance(e, VoiceServiceError):
-                raise
-            raise VoiceServiceError(f"STT error: {e}") from e
+    def _handle_transcription_error(self, error: Exception) -> None:
+        """Handle and re-raise transcription errors appropriately."""
+        logger.error("STT failed: %s", error)
+        if isinstance(error, VoiceServiceError):
+            raise VoiceServiceError(f"STT error: {error}") from error
+        raise VoiceServiceError(f"STT error: {error}") from error
 
     def _validate_request(
         self,

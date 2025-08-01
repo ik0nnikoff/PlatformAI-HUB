@@ -18,6 +18,7 @@ SOLID Principles Implementation:
 
 import asyncio
 import hashlib
+import re
 import time
 from typing import Dict, List, Optional, Any
 import logging
@@ -68,52 +69,34 @@ class OpenAITTSProvider(BaseTTSProvider):
         **kwargs
     ):
         """Initialize OpenAI TTS provider with configuration."""
-        # Extract configuration first
-        self._api_key = config.get("api_key")
-        self._model = config.get("model", "tts-1")
-        self._voice = config.get("voice", "alloy")
-        self._max_retries = config.get("max_retries", 3)
-        self._timeout = config.get("timeout", 30.0)
+        # Initialize parent first
+        super().__init__(provider_name, config or {}, priority, enabled, **kwargs)
 
-        # Initialize parent with pre-extracted config
-        super().__init__(provider_name, config, priority, enabled, **kwargs)
-
-        # Retry configuration
-        self._base_delay = config.get("base_delay", 1.0)
-        self._max_delay = config.get("max_delay", 60.0)
-
-        # OpenAI client (lazy initialization)
-        self._client: Optional[AsyncOpenAI] = None
-
-        # OpenAI TTS limits
-        self._max_text_length = 4096
-        self._max_concurrent_chunks = 5
-        config = config or {}
-        super().__init__(provider_name, config, priority, enabled)
-
-        # OpenAI-specific configuration with defaults
-        self._api_key = self.config.get('api_key') or (
-            settings.OPENAI_API_KEY.get_secret_value() if settings.OPENAI_API_KEY else None
-        )
-        self._model = self.config.get('model', 'tts-1')
-        self._voice = self.config.get('voice', 'alloy')
-        self._speed = self.config.get('speed', 1.0)
-
-        # Performance settings from Phase 1.2.3
-        self._max_retries = self.config.get('max_retries', 3)
-        self._base_delay = self.config.get('base_delay', 1.0)
-        self._max_delay = self.config.get('max_delay', 60.0)
-        self._timeout = self.config.get('timeout', 30.0)
-        self._max_text_length = self.config.get('max_text_length', 4096)
+        # OpenAI-specific configuration consolidated into single dictionary
+        self._openai_config = {
+            "api_key": (config.get('api_key') or
+                       (settings.OPENAI_API_KEY.get_secret_value()
+                        if settings.OPENAI_API_KEY else None)),
+            "model": config.get('model', 'tts-1'),
+            "voice": config.get('voice', 'alloy'),
+            "speed": config.get('speed', 1.0),
+            "max_retries": config.get('max_retries', 3),
+            "base_delay": config.get('base_delay', 1.0),
+            "max_delay": config.get('max_delay', 60.0),
+            "timeout": config.get('timeout', 30.0),
+            "max_text_length": config.get('max_text_length', 4096),
+            "max_concurrent_chunks": config.get('max_concurrent_chunks', 5)
+        }
 
         # Internal state - lazy initialization pattern
         self._client: Optional[AsyncOpenAI] = None
 
-        logger.debug("OpenAITTSProvider initialized: model=%s, voice=%s", self._model, self._voice)
+        logger.debug("OpenAITTSProvider initialized: model=%s, voice=%s",
+                    self._openai_config["model"], self._openai_config["voice"])
 
     def get_required_config_fields(self) -> List[str]:
         """Required configuration fields for OpenAI TTS."""
-        return ["api_key"] if not self._api_key else []
+        return ["api_key"] if not self._openai_config["api_key"] else []
 
     async def get_capabilities(self) -> TTSCapabilities:
         """
@@ -136,7 +119,7 @@ class OpenAITTSProvider(BaseTTSProvider):
                 "sk", "hu", "ro", "bg", "hr", "sl", "et", "lv", "lt", "uk"
             ],
             available_voices=["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
-            max_text_length=self._max_text_length,
+            max_text_length=self._openai_config["max_text_length"],
             supports_ssml=False,  # OpenAI TTS doesn't support SSML
             supports_speed_control=True,  # Speed parameter supported (0.25 to 4.0)
             supports_pitch_control=False,  # No pitch control in OpenAI TTS
@@ -151,22 +134,23 @@ class OpenAITTSProvider(BaseTTSProvider):
         Implements lazy initialization and connection pooling patterns
         from Phase 1.2.3 performance optimization.
         """
-        if not self._api_key:
+        if not self._openai_config["api_key"]:
             raise AudioProcessingError("OpenAI API key not configured")
 
         try:
             # Initialize OpenAI client with performance settings
             self._client = AsyncOpenAI(
-                api_key=self._api_key,
-                timeout=self._timeout,
-                max_retries=self._max_retries
+                api_key=self._openai_config["api_key"],
+                timeout=self._openai_config["timeout"],
+                max_retries=self._openai_config["max_retries"]
             )
 
-            logger.debug("OpenAI TTS client initialized: model=%s", self._model)
+            logger.debug("OpenAI TTS client initialized: model=%s",
+                        self._openai_config["model"])
 
         except Exception as e:
             logger.error("Failed to initialize OpenAI TTS client: %s", e)
-            raise AudioProcessingError(f"OpenAI TTS initialization failed: {e}")
+            raise AudioProcessingError(f"OpenAI TTS initialization failed: {e}") from e
 
     async def cleanup(self) -> None:
         """Clean up OpenAI client resources."""
@@ -212,7 +196,7 @@ class OpenAITTSProvider(BaseTTSProvider):
             text_length=len(request.text),
             audio_duration=await self.estimate_audio_duration(request.text),
             processing_time=processing_time,
-            voice_used=synthesis_params.get("voice", self._voice),
+            voice_used=synthesis_params.get("voice", self._openai_config["voice"]),
             language_used=request.language,
             provider_metadata={
                 "model": synthesis_params["model"],
@@ -225,15 +209,13 @@ class OpenAITTSProvider(BaseTTSProvider):
 
     async def _perform_synthesis(self, synthesis_params: Dict[str, Any]) -> bytes:
         """
-        Enhanced synthesis with ConnectionManager integration
+        Enhanced synthesis with direct OpenAI API call
 
-        Phase 3.5.2.3: Uses centralized retry logic from ConnectionManager
+        Phase 3.5.2.3: Uses direct client for simplicity
         """
-        return await self._execute_with_connection_manager(
-            operation_name="openai_tts_synthesis",
-            request_func=self._execute_openai_synthesis,
-            synthesis_params=synthesis_params
-        )
+        if not self._client:
+            raise AudioProcessingError("OpenAI TTS client not initialized")
+        return await self._execute_openai_synthesis(synthesis_params)
 
     async def _execute_openai_synthesis(self, synthesis_params: Dict[str, Any]) -> bytes:
         """
@@ -251,7 +233,7 @@ class OpenAITTSProvider(BaseTTSProvider):
         Implements voice quality optimization features.
         """
         # Determine model - use default (no quality in new schema)
-        model = self._model  # Default to standard quality
+        model = self._openai_config["model"]  # Default to standard quality
 
         # Default response format (no output_format in new schema)
         response_format = "mp3"  # Default format
@@ -260,7 +242,7 @@ class OpenAITTSProvider(BaseTTSProvider):
         params = {
             "model": model,
             "input": request.text.strip(),
-            "voice": request.voice or self._voice,
+            "voice": request.voice or self._openai_config["voice"],
             "response_format": response_format
         }
 
@@ -287,56 +269,75 @@ class OpenAITTSProvider(BaseTTSProvider):
         """
         last_exception = None
 
-        for attempt in range(self._max_retries + 1):
+        for attempt in range(self._openai_config["max_retries"] + 1):
             try:
                 # Use direct API call method
                 return await self._execute_openai_synthesis(synthesis_params)
 
-            except RateLimitError as e:
+            except (RateLimitError, APIConnectionError, asyncio.TimeoutError) as e:
                 last_exception = e
-                if attempt < self._max_retries:
-                    delay = min(self._base_delay * (2 ** attempt), self._max_delay)
-                    logger.warning(
-                        "Rate limit hit, retrying in %ss (attempt %s)",
-                        delay,
-                        attempt + 1)
-                    await asyncio.sleep(delay)
-                    continue
-                raise AudioProcessingError(f"Rate limit exceeded after {self._max_retries} retries: {e}")
+                if not await self._handle_retryable_error(e, attempt):
+                    break
+                continue
 
-            except APIConnectionError as e:
-                last_exception = e
-                if attempt < self._max_retries:
-                    delay = min(self._base_delay * (2 ** attempt), self._max_delay)
-                    logger.warning(
-                        "Connection error, retrying in %ss (attempt %s)",
-                        delay,
-                        attempt + 1)
-                    await asyncio.sleep(delay)
-                    continue
-                raise AudioProcessingError(f"Connection failed after {self._max_retries} retries: {e}")
-
-            except AuthenticationError as e:
-                # Don't retry authentication errors
-                raise AudioProcessingError(f"OpenAI authentication failed: {e}")
-
-            except APIError as e:
-                # Don't retry client errors (4xx)
-                raise AudioProcessingError(f"OpenAI API error: {e}")
-
-            except asyncio.TimeoutError as e:
-                last_exception = e
-                if attempt < self._max_retries:
-                    delay = min(self._base_delay * (2 ** attempt), self._max_delay)
-                    logger.warning("Timeout, retrying in %ss (attempt %s)", delay, attempt + 1)
-                    await asyncio.sleep(delay)
-                    continue
-                raise VoiceServiceTimeout("synthesis", self._timeout)
+            except (AuthenticationError, APIError) as e:
+                self._raise_non_retryable_error(e)
 
         # If we get here, all retries failed
-        raise AudioProcessingError(f"Synthesis failed after {self._max_retries} retries: {last_exception}")
+        max_retries = self._openai_config["max_retries"]
+        raise AudioProcessingError(
+            f"Synthesis failed after {max_retries} retries: {last_exception}"
+        )
 
-    async def _upload_audio_to_storage(self, audio_data: bytes, request: TTSRequest) -> str:
+    async def _handle_retryable_error(self, error: Exception, attempt: int) -> bool:
+        """
+        Handle retryable errors with exponential backoff.
+
+        Returns:
+            bool: True if should retry, False if max retries exceeded
+        """
+        if attempt >= self._openai_config["max_retries"]:
+            self._raise_retry_exceeded_error(error)
+            return False
+
+        delay = min(
+            self._openai_config["base_delay"] * (2 ** attempt),
+            self._openai_config["max_delay"]
+        )
+        error_type = ("rate limit" if isinstance(error, RateLimitError) else
+                     "connection error" if isinstance(error, APIConnectionError) else "timeout")
+
+        logger.warning("%s, retrying in %ss (attempt %s)", error_type, delay, attempt + 1)
+        await asyncio.sleep(delay)
+        return True
+
+    def _raise_non_retryable_error(self, error: Exception) -> None:
+        """Raise appropriate error for non-retryable exceptions."""
+        if isinstance(error, AuthenticationError):
+            raise AudioProcessingError(f"OpenAI authentication failed: {error}")
+
+        raise AudioProcessingError(f"OpenAI API error: {error}")
+
+    def _raise_retry_exceeded_error(self, error: Exception) -> None:
+        """Raise appropriate error when max retries exceeded."""
+        if isinstance(error, RateLimitError):
+            max_retries = self._openai_config["max_retries"]
+            raise AudioProcessingError(f"Rate limit exceeded after {max_retries} retries: {error}")
+
+        if isinstance(error, APIConnectionError):
+            max_retries = self._openai_config["max_retries"]
+            raise AudioProcessingError(f"Connection failed after {max_retries} retries: {error}")
+
+        if isinstance(error, asyncio.TimeoutError):
+            raise VoiceServiceTimeout("synthesis", self._openai_config["timeout"])
+
+        # Default case
+        max_retries = self._openai_config["max_retries"]
+        raise AudioProcessingError(
+            f"Synthesis failed after {max_retries} retries: {error}"
+        )
+
+    async def _upload_audio_to_storage(self, _audio_data: bytes, request: TTSRequest) -> str:
         """
         Upload generated audio to MinIO storage and return URL.
 
@@ -360,15 +361,15 @@ class OpenAITTSProvider(BaseTTSProvider):
         Splits long text into chunks and processes them in parallel
         for better performance and user experience.
         """
-        if len(text) <= self._max_text_length:
+        if len(text) <= self._openai_config["max_text_length"]:
             # Text is short enough for single request
             request = TTSRequest(text=text, **kwargs)
             result = await self.synthesize_speech(request)
             return [result]
 
         # Split text into chunks
-        chunks = self._split_text_intelligently(
-            text, self._max_text_length - 100)  # Buffer for safety
+        max_chunk_size = self._openai_config["max_text_length"] - 100  # Buffer for safety
+        chunks = self._split_text_intelligently(text, max_chunk_size)
 
         # Create requests for each chunk
         tasks = []
@@ -412,7 +413,6 @@ class OpenAITTSProvider(BaseTTSProvider):
         current_chunk = ""
 
         # Split by sentences (periods, exclamation marks, question marks)
-        import re
         sentences = re.split(r'(?<=[.!?])\s+', text)
 
         for sentence in sentences:
@@ -455,4 +455,5 @@ class OpenAITTSProvider(BaseTTSProvider):
         return chunks
 
     def __repr__(self) -> str:
-        return f"OpenAITTSProvider(model={self._model}, voice={self._voice}, enabled={self.enabled})"
+        return (f"OpenAITTSProvider(model={self._openai_config['model']}, "
+                f"voice={self._openai_config['voice']}, enabled={self.enabled})")
