@@ -21,7 +21,7 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
 from app.services.voice_v2.core.orchestrator.tts_manager import VoiceTTSManager
-from app.services.voice_v2.core.schemas import TTSRequest, TTSResponse, AudioFormat
+from app.services.voice_v2.core.schemas import TTSRequest, TTSResponse
 from app.services.voice_v2.core.exceptions import VoiceServiceError
 
 logger = logging.getLogger(__name__)
@@ -32,13 +32,13 @@ class VoiceExecutionResult:
 
     def __init__(self, success: bool, audio_url: Optional[str] = None,
                  error_message: Optional[str] = None, processing_time: float = 0.0,
-                 provider: Optional[str] = None, format: Optional[str] = None):
+                 provider: Optional[str] = None, audio_format: Optional[str] = None):
         self.success = success
         self.audio_url = audio_url
         self.error_message = error_message
         self.processing_time = processing_time
         self.provider = provider
-        self.format = format
+        self.audio_format = audio_format
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for LangGraph state"""
@@ -48,7 +48,7 @@ class VoiceExecutionResult:
             "error_message": self.error_message,
             "processing_time": self.processing_time,
             "provider": self.provider,
-            "format": self.format
+            "format": self.audio_format
         }
 
 
@@ -80,7 +80,7 @@ async def voice_execution_tool(
     # Extract context from agent state
     agent_id = state.get("config", {}).get("configurable", {}).get("agent_id", "unknown_agent")
     chat_id = state.get("chat_id", "unknown_chat")
-    user_data = state.get("user_data", {})
+    # user_data = state.get("user_data", {})
 
     # Setup logger with agent context
     log_adapter = logging.LoggerAdapter(logger, {
@@ -134,7 +134,7 @@ async def voice_execution_tool(
                 audio_url=audio_url,
                 processing_time=tts_response.processing_time,
                 provider=tts_response.provider,
-                format=tts_response.format.value
+                audio_format=tts_response.format.value
             )
 
             log_adapter.info(f"TTS execution successful: {audio_url} "

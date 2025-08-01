@@ -147,7 +147,7 @@
 - **app/db/**: База данных (alchemy_models, session, crud/)
 - **app/agent_runner/**: Система запуска агентов (agent_runner.py, runner_main.py, langgraph/, common/)
 - **app/integrations/**: Интеграции (telegram/, whatsapp/)
-- **app/services/**: Бизнес-логика (process_manager, redis_service, websocket_manager, voice/)
+- **app/services/**: Бизнес-логика (process_manager, redis_service, websocket_manager, voice_v2/)
 - **app/workers/**: Фоновые задачи (history_saver_worker, token_usage_worker, inactivity_monitor_worker)
 
 ## Архитектурные паттерны
@@ -172,7 +172,6 @@
 - **Вывод агента**: `agent:{agent_id}:output` - Ответы агента  
 - **Ключи статуса**: `agent_status:{agent_id}`, `integration_status:{agent_id}:{type}`
 - **Очереди**: `history_queue`, `token_usage_queue` для фоновой обработки
-- **Кэш**: STT результаты, пользовательские данные с TTL
 
 ### Паттерн зависимостей FastAPI
 Все зависимости определены в `app/core/dependencies.py`:
@@ -280,9 +279,6 @@ GET    /api/v1/agents/{id}/sse           # Server-Sent Events
 
 ### Интеграция голосовых сервисов
 Голосовые возможности настраиваются для каждого агента в `config.simple.settings.voice_settings`:
-- Мульти-провайдерная система fallback (OpenAI → Google → Yandex)
-- Обнаружение намерений с сопоставлением ключевых слов
-- STT/TTS обработка через `VoiceServiceOrchestrator`
 - Обработка аудиофайлов с хранением в MinIO
 
 **Аутентификация Yandex SpeechKit**: Использует API Key (`YANDEX_API_KEY`) аутентификацию, НЕ IAM Token. IAM Token аутентификация устарела для этого проекта.
@@ -335,35 +331,9 @@ uv run pytest -k "test_name"        # Запуск конкретного тес
 - **Google Cloud**: `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT_ID`
 - **OpenAI**: Использует существующий `OPENAI_API_KEY`
 
-**Важно**: Аутентификация Yandex использует метод API Key, не IAM Token.
 
 ### Конфигурация настроек (app/core/config.py)
-Все настройки проекта централизованы в `Settings` класс:
-```python
-class Settings:
-    # Основные настройки
-    PROJECT_NAME: str = "PlatformAI Hub"
-    PROJECT_VERSION: str = "0.1.0" 
-    API_V1_STR: str = "/api/v1"
-    
-    # Сервер
-    SERVER_HOST: str = "localhost"
-    SERVER_PORT: int = 8001
-    DEBUG: bool = True
-    
-    # База данных и Redis
-    DATABASE_URL: str = os.getenv("DATABASE_URL")
-    REDIS_URL: str = os.getenv("REDIS_URL")
-    
-    # Настройки агентов
-    AGENT_RUNNER_MODULE_PATH: str = "app.agent_runner.runner_main"
-    AGENT_INACTIVITY_TIMEOUT: int = 1800  # 30 минут
-    
-    # Голосовые сервисы
-    VOICE_MAX_DURATION: int = 120
-    VOICE_MAX_FILE_SIZE_MB: int = 25
-    MINIO_ENDPOINT: str = "localhost:9000"
-```
+Все настройки проекта централизованы в `Settings` класс
 
 ## Алгоритм общения пользователей с агентами
 
@@ -400,37 +370,10 @@ class Settings:
 
 ### Архитектура медиа-обработки
 Проект использует оркестраторы для централизованного управления медиа-контентом:
-- **VoiceServiceOrchестrator** (`app/services/voice/voice_service_orchestrator.py`)
 - **ImageOrchестrator** (`app/services/media/image_orchestrator.py`)
 - **DocumentOrchестrator** (`app/services/media/document_orchestrator.py`)
 
 Все оркестраторы следуют паттерну мульти-провайдерной архитектуры с fallback механизмами.
-
-### Голосовые сообщения
-**Архитектура**: VoiceServiceOrчестrator с мульти-провайдерной системой (OpenAI → Google → Yandex)
-
-**Компоненты системы**:
-- **OpenAIVoiceService**: STT/TTS через OpenAI Whisper и TTS API
-- **GoogleVoiceService**: Google Cloud Speech-to-Text и Text-to-Speech
-- **YandexVoiceService**: Yandex SpeechKit с API Key аутентификацией
-- **Аудио конвертация**: pydub для преобразования OGG→WAV (совместимость с провайдерами)
-
-**Алгоритм обработки**:
-1. Интеграция получает голосовое сообщение (OGG, MP3, WAV, OPUS, FLAC, AAC)
-2. VoiceServiceOrчестrator загружает файл в MinIO bucket `voice-files`
-3. Аудио конвертируется в WAV через pydub для совместимости
-4. STT обработка с fallback: OpenAI → Google → Yandex (по приоритету)
-5. Результат кэшируется в Redis (TTL 24 часа) и отправляется агенту
-6. При необходимости TTS ответа: обратная цепочка провайдеров
-7. Аудио ответ загружается в MinIO и отправляется пользователю
-
-**Методы VoiceServiceOrчестrator**:
-- `transcribe_audio(file_path, language="auto")`: STT с автоопределением языка
-- `synthesize_speech(text, voice_settings)`: TTS с настройками голоса
-- `get_supported_formats()`: Список поддерживаемых аудио форматов
-- `convert_audio_format(input_path, output_format)`: Конвертация форматов
-
-**Кэширование**: Redis ключи `stt_cache:{file_hash}` и `tts_cache:{text_hash}` с TTL 24 часа
 
 ### Изображения  
 **Архитектура**: ImageOrчестrator с Vision API провайдерами (OpenAI GPT-4V → Google Vision → Claude Vision)
@@ -542,7 +485,7 @@ class AgentState(TypedDict):
 - `tools_condition`: Выбор между safe_tools и datastore
 
 ### Типы tools в проекте:
-- **Internal tools**: voice_capabilities_tool, auth_tool, get_user_info_tool
+- **Internal tools**: auth_tool, get_user_info_tool
 - **Vision tools**: analyze_images 
 - **Document tools**: process_document_tool, edit_document_tool, generate_document_tool, convert_document_format_tool, extract_document_metadata_tool, search_document_content_tool, summarize_document_tool
 - **Knowledge Base tools**: retriever tools для RAG
@@ -622,21 +565,6 @@ def tool_name(
 2. **Automatic fallback**: При ошибке автоматическое переключение на следующий провайдер
 3. **Error handling**: Логирование ошибок и метрики по каждому провайдеру
 4. **Circuit breaker**: Временное отключение провайдера при множественных ошибках
-
-### Конфигурация провайдеров
-**Пример для голосовых сервисов**:
-```json
-{
-  "voice_settings": {
-    "enabled": true,
-    "providers": [
-      {"provider": "openai", "priority": 1, "enabled": true},
-      {"provider": "google", "priority": 2, "enabled": true},
-      {"provider": "yandex", "priority": 3, "enabled": true}
-    ]
-  }
-}
-```
 
 ### Обработка ошибок провайдеров
 - **Network errors**: Немедленное переключение на следующий провайдер

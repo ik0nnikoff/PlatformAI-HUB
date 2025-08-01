@@ -146,10 +146,7 @@ async def _get_voice_v2_capabilities(
         # Platform limitations
         capabilities["limitations"] = _get_platform_limitations(channel)
 
-        log_adapter.debug(
-            f"Voice capabilities retrieved: {
-                len(tts_providers)} TTS, {
-                len(stt_providers)} STT providers")
+        log_adapter.debug(f"Voice capabilities retrieved: {len(tts_providers)} TTS, {len(stt_providers)} STT providers")
 
     except Exception as e:
         log_adapter.warning(f"Error querying voice_v2 capabilities: {e}")
