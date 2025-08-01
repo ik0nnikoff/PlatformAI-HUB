@@ -1,122 +1,168 @@
 """
-RetryMixin для стандартизации retry конфигурации в voice_v2 провайдерах.
+Simplified RetryMixin для voice_v2 провайдеров - Phase 3.1.2 Implementation
 
-Phase 3.5.2 - Code Deduplication Implementation:
-- Централизация retry конфигурации
-- Интеграция с EnhancedConnectionManager
-- SOLID принципы compliance
-- Устранение дублирования retry параметров
+Removes connection manager dependencies, integrates retry logic directly.
+Centralizes retry configuration without enterprise over-engineering.
 """
 
-from typing import Dict, Any
+import time
+import asyncio
+from typing import Dict, Any, Callable, TypeVar
 from functools import wraps
 import logging
 
-from app.services.voice_v2.providers.enhanced_connection_manager import (
-    ConnectionConfig, RetryStrategy
-)
-
 logger = logging.getLogger(__name__)
+
+T = TypeVar('T')
+
+
+class RetryConfig:
+    """Simple retry configuration."""
+    def __init__(
+        self,
+        max_attempts: int = 3,
+        base_delay: float = 1.0,
+        max_delay: float = 30.0,
+        backoff_factor: float = 2.0
+    ):
+        self.max_attempts = max_attempts
+        self.base_delay = base_delay
+        self.max_delay = max_delay
+        self.backoff_factor = backoff_factor
 
 
 class RetryMixin:
     """
-    Mixin для стандартизации retry конфигурации и ConnectionManager integration.
-
-    Implements DRY principle by centralizing retry parameter handling.
+    Simplified mixin for retry functionality.
+    
+    Removes enterprise connection manager patterns,
+    provides essential retry logic for voice providers.
     """
 
-    def _get_retry_config(self, config: Dict[str, Any]) -> ConnectionConfig:
-        """
-        Извлечение retry конфигурации из provider config.
-
-        Args:
-            config: Provider configuration dictionary
-
-        Returns:
-            ConnectionConfig with retry settings
-        """
-        return ConnectionConfig(
-            # Connection settings
-            max_connections=config.get("max_connections", 100),
-            max_connections_per_host=config.get("max_connections_per_host", 30),
-            connection_timeout=config.get("connection_timeout", 30.0),
-            read_timeout=config.get("read_timeout", 60.0),
-            total_timeout=config.get("total_timeout", 120.0),
-
-            # Retry settings
-            retry_strategy=RetryStrategy.EXPONENTIAL_BACKOFF,
-            max_retries=config.get("max_retries", 3),
-            base_delay=config.get("base_delay", 1.0),
-            max_delay=config.get("max_delay", 60.0),
-            backoff_factor=config.get("backoff_factor", 2.0),
-            jitter=config.get("jitter", True),
-
-            # Circuit breaker settings
-            circuit_breaker_threshold=config.get("circuit_breaker_threshold", 5),
-            circuit_breaker_timeout_minutes=config.get("circuit_breaker_timeout_minutes", 5),
-
-            # Keep-alive settings
-            keepalive_timeout=config.get("keepalive_timeout", 30),
-            enable_cleanup_closed=config.get("enable_cleanup_closed", True)
+    def _get_retry_config(self, config: Dict[str, Any]) -> RetryConfig:
+        """Extract retry configuration from provider config."""
+        return RetryConfig(
+            max_attempts=config.get('max_retry_attempts', 3),
+            base_delay=config.get('retry_base_delay', 1.0),
+            max_delay=config.get('retry_max_delay', 30.0),
+            backoff_factor=config.get('retry_backoff_factor', 2.0)
         )
 
-    def _has_connection_manager(self) -> bool:
-        """Check if connection manager is available."""
-        return hasattr(self, '_connection_manager') and self._connection_manager is not None
+    async def _retry_async_operation(
+        self,
+        operation: Callable[..., T],
+        retry_config: RetryConfig,
+        *args,
+        **kwargs
+    ) -> T:
+        """Execute async operation with retry logic."""
+        last_exception = None
+        
+        for attempt in range(retry_config.max_attempts):
+            try:
+                if asyncio.iscoroutinefunction(operation):
+                    return await operation(*args, **kwargs)
+                else:
+                    return operation(*args, **kwargs)
+                    
+            except Exception as e:
+                last_exception = e
+                
+                if attempt == retry_config.max_attempts - 1:
+                    # Last attempt failed
+                    break
+                    
+                # Calculate delay with exponential backoff
+                delay = min(
+                    retry_config.base_delay * (retry_config.backoff_factor ** attempt),
+                    retry_config.max_delay
+                )
+                
+                logger.warning(
+                    f"Operation failed (attempt {attempt + 1}/{retry_config.max_attempts}), "
+                    f"retrying in {delay:.2f}s: {e}"
+                )
+                
+                await asyncio.sleep(delay)
+        
+        # All attempts failed
+        logger.error(f"All {retry_config.max_attempts} attempts failed")
+        raise last_exception
 
-    async def _execute_with_connection_manager(self, request_func, *args, **kwargs):
-        """
-        Execute request using ConnectionManager retry logic.
-
-        Args:
-            request_func: Function to execute
-            *args: Function arguments
-            **kwargs: Function keyword arguments
-
-        Returns:
-            Result of request_func execution
-        """
-        if not self._has_connection_manager():
-            raise RuntimeError("ConnectionManager not available for retry execution")
-
-        # Remove provider_name from kwargs if present to avoid duplication
-        kwargs.pop('provider_name', None)
-
-        return await self._connection_manager.execute_request(
-            provider_name=self.provider_name,
-            request_func=request_func,
-            *args,
-            **kwargs
-        )
+    def _retry_sync_operation(
+        self,
+        operation: Callable[..., T],
+        retry_config: RetryConfig,
+        *args,
+        **kwargs
+    ) -> T:
+        """Execute sync operation with retry logic."""
+        last_exception = None
+        
+        for attempt in range(retry_config.max_attempts):
+            try:
+                return operation(*args, **kwargs)
+                
+            except Exception as e:
+                last_exception = e
+                
+                if attempt == retry_config.max_attempts - 1:
+                    # Last attempt failed
+                    break
+                    
+                # Calculate delay with exponential backoff
+                delay = min(
+                    retry_config.base_delay * (retry_config.backoff_factor ** attempt),
+                    retry_config.max_delay
+                )
+                
+                logger.warning(
+                    f"Operation failed (attempt {attempt + 1}/{retry_config.max_attempts}), "
+                    f"retrying in {delay:.2f}s: {e}"
+                )
+                
+                time.sleep(delay)
+        
+        # All attempts failed
+        logger.error(f"All {retry_config.max_attempts} attempts failed")
+        raise last_exception
 
 
 def provider_operation(operation_name: str):
     """
-    Декоратор для стандартизации логирования provider операций.
-
-    Args:
-        operation_name: Name of the operation for logging
-
-    Returns:
-        Decorated function with standard logging
+    Simple decorator for provider operations.
+    
+    Logs operation start/end for debugging purposes.
+    Simplified version without complex connection manager integration.
     """
     def decorator(func):
         @wraps(func)
-        async def wrapper(self, *args, **kwargs):
-            provider_name = getattr(self, 'provider_name', 'unknown')
-            logger.debug("Starting %s for %s", operation_name, provider_name)
+        async def async_wrapper(*args, **kwargs):
+            logger.debug(f"Starting {operation_name}")
             try:
-                result = await func(self, *args, **kwargs)
-                logger.debug("%s successful for %s", operation_name, provider_name)
+                result = await func(*args, **kwargs)
+                logger.debug(f"Completed {operation_name}")
                 return result
             except Exception as e:
-                logger.error(
-                    "%s failed for %s: %s",
-                    operation_name,
-                    provider_name,
-                    e,
-                    exc_info=True)
+                logger.error(f"Failed {operation_name}: {e}")
                 raise
-        return wrapper
+                
+        @wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            logger.debug(f"Starting {operation_name}")
+            try:
+                result = func(*args, **kwargs)
+                logger.debug(f"Completed {operation_name}")
+                return result
+            except Exception as e:
+                logger.error(f"Failed {operation_name}: {e}")
+                raise
+        
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        else:
+            return sync_wrapper
     return decorator
+
+
+__all__ = ['RetryMixin', 'RetryConfig', 'provider_operation']

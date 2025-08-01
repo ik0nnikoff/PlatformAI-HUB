@@ -16,7 +16,7 @@ from ..schemas import (
 from ..config import VoiceConfig, get_config
 from ..exceptions import VoiceServiceError
 
-from ...providers.enhanced_factory import EnhancedVoiceProviderFactory
+from ...providers.unified_factory import VoiceProviderFactory
 
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ class VoiceServiceOrchestrator:
         cache_manager: Optional[CacheInterface] = None,
         file_manager: Optional[FileManagerInterface] = None,
         config: Optional[VoiceConfig] = None,
-        enhanced_factory: Optional[EnhancedVoiceProviderFactory] = None
+        enhanced_factory: Optional[VoiceProviderFactory] = None
     ):
         """
         Initialize orchestrator with dependencies
@@ -79,7 +79,7 @@ class VoiceServiceOrchestrator:
         self,
         stt_providers: Optional[Dict[ProviderType, FullSTTProvider]],
         tts_providers: Optional[Dict[ProviderType, FullTTSProvider]],
-        enhanced_factory: Optional[EnhancedVoiceProviderFactory]
+        enhanced_factory: Optional[VoiceProviderFactory]
     ) -> None:
         """Initialize provider system (Enhanced Factory or Legacy)"""
         # Enhanced Factory Mode (recommended)
@@ -197,7 +197,7 @@ class VoiceServiceOrchestrator:
         logger.info("Creating orchestrator with Enhanced Factory pattern")
 
         # Create Enhanced Factory
-        enhanced_factory = EnhancedVoiceProviderFactory()
+        enhanced_factory = VoiceProviderFactory()
         # Factory will be initialized when first provider is requested
 
         # Create orchestrator instance

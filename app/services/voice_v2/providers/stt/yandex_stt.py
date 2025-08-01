@@ -1,45 +1,45 @@
 """
-Yandex SpeechKit STT Provider - Simplified Version
+Yandex SpeechKit STT Provider - Consolidated Version
 
-Упрощенная версия Yandex STT provider с модульной архитектурой.
-Reduced from 614 to ~350 lines через extraction audio processing логики.
+Интегрированная версия Yandex STT provider с встроенной audio processing логикой.
+Removed YandexAudioProcessor extraction for consolidation and simplification.
 
 Features:
-- Модульная архитектура с YandexAudioProcessor
-- SOLID principles compliance
-- Reduced cyclomatic complexity
+- Consolidated audio processing
+- SOLID principles compliance  
 - Performance optimization
+- Reduced file dependencies
 """
 
 import asyncio
 import logging
-from typing import Dict, List, Optional, Any
+import time
+import io
+from typing import Any, Dict, List, Optional, Tuple
 
-from aiohttp import ClientTimeout, ClientSession, TCPConnector
+from aiohttp import ClientSession, TCPConnector, ClientTimeout
 
-from app.core.config import settings
-from app.services.voice_v2.providers.stt.base_stt import BaseSTTProvider
-from app.services.voice_v2.core.schemas import STTRequest
-from app.services.voice_v2.providers.stt.models import STTResult, STTCapabilities, STTQuality
-from app.services.voice_v2.core.interfaces import ProviderType, AudioFormat
 from app.services.voice_v2.core.exceptions import (
-    VoiceServiceError,
-    ProviderNotAvailableError,
     AudioProcessingError,
+    ProviderNotAvailableError,
+    VoiceServiceError,
     VoiceServiceTimeout
 )
-from app.services.voice_v2.utils.performance import PerformanceTimer
-from .yandex_audio_processor import YandexAudioProcessor
+from app.services.voice_v2.core.schemas import STTRequest
+from app.services.voice_v2.core.interfaces import ProviderType, AudioFormat
+from app.services.voice_v2.providers.stt.base_stt import BaseSTTProvider
+from app.services.voice_v2.providers.stt.models import STTResult, STTCapabilities, STTQuality
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 class YandexSTTProvider(BaseSTTProvider):
     """
-    Simplified Yandex SpeechKit STT Provider.
+    Consolidated Yandex SpeechKit STT Provider.
 
-    Delegated audio processing to YandexAudioProcessor for modularity.
-    Single Responsibility: Yandex API integration and coordination.
+    Integrated audio processing for simplified architecture.
+    Single Responsibility: Complete Yandex STT integration.
     """
 
     # Yandex SpeechKit constants
@@ -49,8 +49,7 @@ class YandexSTTProvider(BaseSTTProvider):
 
     def __init__(self,
                  provider_name: str,
-                 config: Dict[str,
-                              Any],
+                 config: Dict[str, Any],
                  priority: int = 3,
                  enabled: bool = True,
                  **kwargs):
@@ -68,8 +67,8 @@ class YandexSTTProvider(BaseSTTProvider):
         self.connection_timeout = config.get("connection_timeout", 30.0)
         self.read_timeout = config.get("read_timeout", 60.0)
 
-        # Modular components
-        self.audio_processor = YandexAudioProcessor()
+        # Audio processing configuration
+        self.supported_formats = ["wav", "ogg", "opus", "mp3"]
 
         # Session management
         self._session: Optional[ClientSession] = None
@@ -187,19 +186,19 @@ class YandexSTTProvider(BaseSTTProvider):
         if len(request.audio_data) > self.MAX_FILE_SIZE_MB * 1024 * 1024:
             raise AudioProcessingError(f"Audio file too large: {len(request.audio_data)} bytes")
 
-        if not self.audio_processor.validate_audio_format(request.audio_format):
+        if not self.validate_audio_format(request.audio_format):
             raise AudioProcessingError(f"Unsupported audio format: {request.audio_format}")
 
     async def _transcribe_implementation(self, request: STTRequest) -> STTResult:
         """Main transcription implementation."""
-        timer = PerformanceTimer()
+        start_time = time.perf_counter()
 
         try:
             # Validate request
             await self._validate_request(request)
 
             # Process audio data
-            processed_audio, final_format = await self.audio_processor.process_audio_data(
+            processed_audio, final_format = await self.process_audio_data(
                 request.audio_data,
                 request.audio_format
             )
@@ -213,7 +212,8 @@ class YandexSTTProvider(BaseSTTProvider):
             )
 
             # Update performance stats
-            processing_time = timer.get_elapsed_seconds()
+            processing_time = time.perf_counter() - start_time
+            logger.debug(f"Yandex STT transcription completed in {processing_time:.3f}s")
             self._update_performance_stats(processing_time)
 
             return result
@@ -229,7 +229,7 @@ class YandexSTTProvider(BaseSTTProvider):
                                      enable_profanity_filter: bool = True,
                                      max_retries: int = 3) -> STTResult:
         """Perform transcription with retry logic."""
-        normalized_language = self.audio_processor.normalize_language(language)
+        normalized_language = self.normalize_language(language)
 
         for attempt in range(max_retries):
             try:
@@ -328,3 +328,71 @@ class YandexSTTProvider(BaseSTTProvider):
                 "supported_languages": ["ru-RU", "en-US", "tr-TR", "uk-UA"]
             }
         }
+
+    # Audio processing methods (integrated from YandexAudioProcessor)
+    
+    def validate_audio_format(self, audio_format: str) -> bool:
+        """Validate if audio format is supported"""
+        return audio_format.lower() in self.supported_formats
+
+    def normalize_language(self, language: str) -> str:
+        """Normalize language code for Yandex API"""
+        language_map = {
+            "ru": "ru-RU", "en": "en-US", "tr": "tr-TR", "uk": "uk-UA",
+            "uz": "uz-UZ", "kk": "kk-KK", "de": "de-DE", "fr": "fr-FR",
+            "es": "es-ES", "it": "it-IT", "he": "he-IL", "ar": "ar-AE"
+        }
+        
+        # Handle full locale codes
+        if "-" in language:
+            return language
+        
+        return language_map.get(language.lower(), "ru-RU")
+
+    async def process_audio_data(self, audio_data: bytes, audio_format: str) -> Tuple[bytes, str]:
+        """Process audio data for Yandex STT API"""
+        format_lower = audio_format.lower()
+
+        # Direct passthrough for supported formats
+        if format_lower in ["wav", "opus"]:
+            return audio_data, format_lower
+
+        # Convert unsupported formats to WAV
+        if format_lower in ["ogg", "mp3"]:
+            return await self._convert_to_wav(audio_data, format_lower)
+
+        # Default fallback
+        return audio_data, "wav"
+
+    async def _convert_to_wav(self, audio_data: bytes, audio_format: str) -> Tuple[bytes, str]:
+        """Convert audio to WAV format"""
+        try:
+            from pydub import AudioSegment
+            
+            # Determine input format
+            if audio_format == "mp3":
+                audio_segment = AudioSegment.from_mp3(io.BytesIO(audio_data))
+            elif audio_format == "ogg":
+                audio_segment = AudioSegment.from_ogg(io.BytesIO(audio_data))
+            else:
+                audio_segment = AudioSegment.from_file(io.BytesIO(audio_data))
+
+            # Convert to WAV with Yandex-optimal parameters
+            wav_io = io.BytesIO()
+            audio_segment.export(
+                wav_io,
+                format="wav",
+                parameters=["-ar", "16000", "-ac", "1", "-sample_fmt", "s16"]
+            )
+
+            converted_data = wav_io.getvalue()
+            logger.debug(f"Converted {audio_format} to WAV: {len(audio_data)} -> {len(converted_data)} bytes")
+            
+            return converted_data, "wav"
+
+        except ImportError:
+            logger.error("pydub not available for audio conversion")
+            raise RuntimeError("Audio conversion not available - pydub required")
+        except Exception as e:
+            logger.error(f"Audio conversion to WAV failed: {e}")
+            raise

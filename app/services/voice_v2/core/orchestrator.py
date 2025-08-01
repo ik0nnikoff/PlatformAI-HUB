@@ -1,43 +1,14 @@
 """
-Voice_v2 Orchestrator - Modular Voice Service Orchestrator
+Voice_v2 Orchestrator - Simplified Entry Point
 
-Implements modular orchestrator following SOLID principles.
-Delegates responsibilities to specialized managers in orchestrator/ module.
-
-This file now serves as the main entry point, importing modular components.
+Main entry point for voice_v2 orchestrator.
+Removed specialized managers as unused over-engineering.
 """
 
-# Import modular orchestrator components
-from .orchestrator.orchestrator_manager import (
-    VoiceOrchestratorManager,
-    IOrchestratorManager
-)
-from .orchestrator.provider_manager import (
-    VoiceProviderManager,
-    IProviderManager
-)
-from .orchestrator.stt_manager import (
-    VoiceSTTManager,
-    ISTTManager
-)
-from .orchestrator.tts_manager import (
-    VoiceTTSManager,
-    ITTSManager
-)
+# Import main orchestrator
+from .orchestrator.base_orchestrator import VoiceServiceOrchestrator
 
-# Re-export for backward compatibility
+# Export for public API
 __all__ = [
-    # Main orchestrator manager
-    "VoiceOrchestratorManager",         # New modular orchestrator manager
-
-    # Specialized managers
-    "VoiceProviderManager",             # Provider management
-    "VoiceSTTManager",                  # STT operations
-    "VoiceTTSManager",                  # TTS operations
-
-    # Interfaces
-    "IProviderManager",
-    "ISTTManager",
-    "ITTSManager",
-    "IOrchestratorManager"
+    "VoiceServiceOrchestrator",
 ]

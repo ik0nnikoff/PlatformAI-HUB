@@ -14,6 +14,7 @@ from .exceptions import (
 )
 # Временно отключено до исправления импортов
 # from .stt_factory import STTProviderFactory
+# Coordinator removed as unused
 # from .stt_coordinator import STTCoordinator
 
 # Core exports (will be populated as files are created)
@@ -26,5 +27,6 @@ __all__ = [
     "create_voice_error",
     # STT Components - временно отключено
     # "STTProviderFactory",
+    # Coordinator removed as unused
     # "STTCoordinator",
 ]

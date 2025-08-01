@@ -3,15 +3,12 @@
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List
 
 from app.services.voice_v2.core.schemas import STTRequest
 from .models import STTResult, STTCapabilities
 from ...core.exceptions import VoiceServiceError, ProviderNotAvailableError
 from ..retry_mixin import RetryMixin
-
-if TYPE_CHECKING:
-    from ..enhanced_connection_manager import IConnectionManager
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +28,7 @@ class BaseSTTProvider(ABC, RetryMixin):
         provider_name: str,
         config: Dict[str, Any],
         priority: int = 1,
-        enabled: bool = True,
-        connection_manager: Optional['IConnectionManager'] = None
+        enabled: bool = True
     ):
         self.provider_name = provider_name
         self.config = config
@@ -40,14 +36,9 @@ class BaseSTTProvider(ABC, RetryMixin):
         self.enabled = enabled
         self._initialized = False
 
-        # Enhanced Connection Manager Integration (Phase 3.4.2.2)
-        self._connection_manager = connection_manager
-
         # Initialize retry configuration через RetryMixin
-        if self._has_connection_manager():
-            # Get retry config for validation only
-            self._get_retry_config(config)
-            logger.debug("%s STT provider using ConnectionManager with retry config", provider_name)
+        self._retry_config = self._get_retry_config(config)
+        logger.debug(f"{provider_name} STT provider with retry config: {self._retry_config.max_attempts} attempts")
 
         # Quick config validation
         missing = [f for f in self.get_required_config_fields() if f not in config]
