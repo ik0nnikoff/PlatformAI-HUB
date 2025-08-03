@@ -214,20 +214,32 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin, STTInitializationMixin, STT
 
     async def _create_temp_audio_file(self, audio_data) -> Path:
         """Create temporary audio file with validation"""
-        # Validate audio data
-        if not isinstance(audio_data, (bytes, bytearray)):
-            raise AudioProcessingError("Некорректный формат аудиоданных (ожидается bytes)")
-
-        max_size = 25 * 1024 * 1024  # 25MB OpenAI лимит
-        if len(audio_data) > max_size:
-            raise AudioProcessingError(
-                f"Аудиофайл слишком большой: {len(audio_data)} байт (лимит 25MB)"
-            )
+        # Validate audio data using unified validation method
+        validation_result = self._validate_audio_data_for_openai(audio_data)
+        if not validation_result["valid"]:
+            raise AudioProcessingError(validation_result["error"])
 
         # Create temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_file:
             temp_file.write(audio_data)
             return Path(temp_file.name)
+
+    def _validate_audio_data_for_openai(self, audio_data) -> Dict[str, Any]:
+        """Unified validation for audio data with OpenAI limits"""
+        if not isinstance(audio_data, (bytes, bytearray)):
+            return {
+                "valid": False,
+                "error": "Некорректный формат аудиоданных (ожидается bytes)"
+            }
+
+        max_size = 25 * 1024 * 1024  # 25MB OpenAI лимит
+        if len(audio_data) > max_size:
+            return {
+                "valid": False,
+                "error": f"Аудиофайл слишком большой: {len(audio_data)} байт (лимит 25MB)"
+            }
+
+        return {"valid": True}
 
     async def _execute_transcription_workflow(
             self,
@@ -236,7 +248,6 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin, STTInitializationMixin, STT
             start_time: float) -> STTResult:
         """Execute transcription workflow with error handling"""
         try:
-            await self._validate_audio_file(audio_path)
             transcription_params = self._prepare_transcription_params(request)
 
             # Perform transcription
@@ -271,16 +282,6 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin, STTInitializationMixin, STT
             os.unlink(audio_path)
         except OSError as e:
             logger.warning("Failed to cleanup temp file %s: %s", audio_path, e)
-
-    async def _validate_audio_file(self, audio_path: Path) -> None:
-        """Validate audio file existence and size."""
-        if not audio_path.exists():
-            raise AudioProcessingError(f"Аудиофайл не найден: {audio_path}")
-
-        file_size = audio_path.stat().st_size
-        if file_size > 25 * 1024 * 1024:  # 25MB OpenAI limit
-            raise AudioProcessingError(
-                f"Файл слишком большой: {file_size} bytes (лимит 25MB)")
 
     def _prepare_transcription_params(self, request: STTRequest) -> Dict[str, Any]:
         """Prepare OpenAI transcription parameters."""

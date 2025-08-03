@@ -13,7 +13,6 @@ Features:
 
 import asyncio
 import logging
-import time
 import io
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -80,7 +79,7 @@ class YandexSTTProvider(BaseSTTProvider, STTInitializationMixin, STTRetryMixin):
         self._connector: Optional[TCPConnector] = None
 
         # Performance tracking
-        self._stats = {'request_count': 0, 'total_processing_time': 0.0}
+        self._stats = {'request_count': 0}
 
     def get_required_config_fields(self) -> List[str]:
         """Required configuration fields."""
@@ -223,40 +222,9 @@ class YandexSTTProvider(BaseSTTProvider, STTInitializationMixin, STTRetryMixin):
             logger.warning("Yandex STT health check failed: %s", e)
             return False
 
-    def _validate_request(
-        self,
-        audio_data: bytes,
-        audio_format: str,
-        language: str
-    ) -> Dict[str, Any]:
-        """Validate STT request."""
-        if not audio_data:
-            raise AudioProcessingError("Empty audio data")
-
-        if len(audio_data) > self.MAX_FILE_SIZE_MB * 1024 * 1024:
-            raise AudioProcessingError(f"Audio file too large: {len(audio_data)} bytes")
-
-        if not self.validate_audio_format(audio_format):
-            raise AudioProcessingError(f"Unsupported audio format: {audio_format}")
-
-        return {
-            "audio_data_size": len(audio_data),
-            "audio_format": audio_format,
-            "language": language
-        }
-
     async def _transcribe_implementation(self, request: STTRequest) -> STTResult:
         """Main transcription implementation."""
-        start_time = time.perf_counter()
-
         try:
-            # Validate request
-            self._validate_request(
-                request.audio_data,
-                request.audio_format,
-                request.language or "ru-RU"
-            )
-
             # Process audio data
             processed_audio, final_format = await self.process_audio_data(
                 request.audio_data,
@@ -271,10 +239,9 @@ class YandexSTTProvider(BaseSTTProvider, STTInitializationMixin, STTRetryMixin):
                 enable_profanity_filter=request.enable_profanity_filter
             )
 
-            # Update performance stats
-            processing_time = time.perf_counter() - start_time
-            logger.debug("Yandex STT transcription completed in %.3fs", processing_time)
-            self._update_performance_stats(processing_time)
+            # Update request count stats only
+            self._stats['request_count'] += 1
+            logger.debug("Yandex STT transcription completed")
 
             return result
 
@@ -376,18 +343,8 @@ class YandexSTTProvider(BaseSTTProvider, STTInitializationMixin, STTRetryMixin):
             }
         )
 
-    def _update_performance_stats(self, processing_time: float) -> None:
-        """Update internal performance statistics."""
-        self._stats['request_count'] += 1
-        self._stats['total_processing_time'] += processing_time
-
     def get_status_info(self) -> Dict[str, Any]:
         """Get provider status information."""
-        avg_time = (
-            self._stats['total_processing_time'] / self._stats['request_count']
-            if self._stats['request_count'] > 0 else 0.0
-        )
-
         return {
             "provider_name": self.provider_name,
             "provider_type": "yandex_stt",
@@ -400,9 +357,7 @@ class YandexSTTProvider(BaseSTTProvider, STTInitializationMixin, STTRetryMixin):
                 "read_timeout": self._config['read_timeout']
             },
             "performance": {
-                "requests_processed": self._stats['request_count'],
-                "average_processing_time": round(avg_time, 3),
-                "total_processing_time": round(self._stats['total_processing_time'], 3)
+                "requests_processed": self._stats['request_count']
             },
             "capabilities": {
                 "supports_streaming": False,
@@ -414,14 +369,6 @@ class YandexSTTProvider(BaseSTTProvider, STTInitializationMixin, STTRetryMixin):
         }
 
     # Audio processing methods (integrated from YandexAudioProcessor)
-
-    def validate_audio_format(self, audio_format: str) -> bool:
-        """Validate if audio format is supported"""
-        # Исправлено: обрабатываем enum AudioFormat
-        audio_format_str = audio_format
-        if hasattr(audio_format, 'value'):  # Это enum
-            audio_format_str = audio_format.value
-        return audio_format_str.lower() in self._config['supported_formats']
 
     def normalize_language(self, language: str) -> str:
         """Normalize language code for Yandex API"""

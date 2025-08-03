@@ -12,7 +12,7 @@ Architecture Compliance:
 
 import asyncio
 import logging
-import random
+import secrets
 from typing import Any, Awaitable, Callable, Dict, Type
 
 from ...core.exceptions import VoiceServiceError
@@ -30,6 +30,20 @@ class STTRetryMixin:
     - Retry attempt logging
     - Timeout обработки
     """
+
+    def get_retry_configuration(self) -> Dict[str, Any]:
+        """
+        Возвращает стандартную конфигурацию retry параметров.
+
+        Returns:
+            Словарь с конфигурацией retry
+        """
+        return {
+            'max_retries': 3,
+            'base_delay': 1.0,
+            'max_delay': 60.0,
+            'jitter_range': (0.1, 0.3)
+        }
 
     async def _standard_transcribe_with_retry(
         self,
@@ -66,31 +80,89 @@ class STTRetryMixin:
             except (ConnectionError, TimeoutError, OSError, VoiceServiceError) as error:
                 last_exception = error
 
-                # Проверяем, нужно ли повторять
-                should_retry = False
-                for error_type, handler in error_handlers.items():
-                    if isinstance(error, error_type):
-                        should_retry = handler(error, attempt)
-                        break
-
-                if not should_retry or attempt >= max_retries:
-                    logger.error("%s transcription failed permanently: %s",
-                               provider_name, error)
+                if not await self._should_retry_transcription(
+                    error,
+                    {
+                        "attempt": attempt,
+                        "max_retries": max_retries,
+                        "provider_name": provider_name
+                    },
+                    error_handlers
+                ):
                     break
 
-                # Применяем exponential backoff
-                delay = await self._calculate_retry_delay(
-                    attempt, base_delay, max_delay
+                await self._handle_retry_delay(
+                    {
+                        "attempt": attempt,
+                        "base_delay": base_delay,
+                        "max_delay": max_delay,
+                        "provider_name": provider_name
+                    },
+                    error
                 )
-                logger.warning(
-                    "%s transcription failed (attempt %d), retrying in %.2fs: %s",
-                    provider_name, attempt + 1, delay, error
-                )
-                await asyncio.sleep(delay)        # Все попытки исчерпаны
+
+        # Все попытки исчерпаны
         raise VoiceServiceError(
             f"{provider_name} transcription failed after {max_retries + 1} attempts: "
             f"{last_exception}"
         )
+
+    async def _should_retry_transcription(
+        self,
+        error: Exception,
+        retry_state: Dict[str, Any],
+        error_handlers: Dict[Type[Exception], Callable[[Exception, int], bool]]
+    ) -> bool:
+        """
+        Определяет, нужно ли повторять попытку транскрипции.
+
+        Args:
+            error: Возникшая ошибка
+            retry_state: Состояние retry (attempt, max_retries, provider_name)
+            error_handlers: Обработчики ошибок
+
+        Returns:
+            True если нужно повторить попытку, False иначе
+        """
+        # Проверяем, нужно ли повторять
+        should_retry = False
+        for error_type, handler in error_handlers.items():
+            if isinstance(error, error_type):
+                should_retry = handler(error, retry_state["attempt"])
+                break
+
+        if not should_retry or retry_state["attempt"] >= retry_state["max_retries"]:
+            logger.error("%s transcription failed permanently: %s",
+                       retry_state["provider_name"], error)
+            return False
+
+        return True
+
+    async def _handle_retry_delay(
+        self,
+        retry_context: Dict[str, Any],
+        error: Exception
+    ) -> None:
+        """
+        Обрабатывает задержку перед повторной попыткой.
+
+        Args:
+            retry_context: Контекст retry (attempt, base_delay, max_delay, provider_name)
+            error: Ошибка, которая привела к retry
+        """
+        delay = await self._calculate_retry_delay(
+            retry_context["attempt"],
+            retry_context["base_delay"],
+            retry_context["max_delay"]
+        )
+        logger.warning(
+            "%s transcription failed (attempt %d), retrying in %.2fs: %s",
+            retry_context["provider_name"],
+            retry_context["attempt"] + 1,
+            delay,
+            error
+        )
+        await asyncio.sleep(delay)
 
     async def _calculate_retry_delay(
         self,
@@ -116,9 +188,21 @@ class STTRetryMixin:
         delay = min(delay, max_delay)
 
         # Добавляем jitter для предотвращения thundering herd
-        jitter = random.uniform(0.1, 0.3) * delay
+        # Используем криптографически безопасный генератор
+        jitter_factor = secrets.randbelow(21) / 100.0 + 0.1  # Диапазон 0.1-0.3
+        jitter = jitter_factor * delay
 
         return delay + jitter
+
+    def get_default_error_handlers(self) -> Dict[Type[Exception],
+                                                   Callable[[Exception, int], bool]]:
+        """
+        Возвращает базовые error handlers для общих случаев.
+
+        Returns:
+            Словарь обработчиков ошибок для типичных сценариев
+        """
+        return self._get_default_error_handlers()
 
     def _get_default_error_handlers(self) -> Dict[Type[Exception],
                                                    Callable[[Exception, int], bool]]:
