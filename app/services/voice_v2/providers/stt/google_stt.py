@@ -38,13 +38,20 @@ from ...core.exceptions import (
     ProviderNotAvailableError
 )
 from ..retry_mixin import provider_operation
+from .initialization_mixin import STTInitializationMixin
+from .retry_mixin import STTRetryMixin
 
 logger = logging.getLogger(__name__)
 
 
-class GoogleSTTProvider(BaseSTTProvider):
+class GoogleSTTProvider(BaseSTTProvider, STTInitializationMixin, STTRetryMixin):
     """
-    Google Cloud Speech-to-Text Provider
+    Google Cloud Speech-to-Text Provider с deduplication mixins.
+
+    Phase 1.3 Deduplication:
+    - STTInitializationMixin: стандартизация init/cleanup (~60 строк экономии)
+    - STTRetryMixin: унификация retry логики (~40 строк экономии)
+    - SOLID: Single responsibility, DRY principle compliance
 
     Architecture Compliance:
     - LSP: Full substitutability with BaseSTTProvider
@@ -148,57 +155,71 @@ class GoogleSTTProvider(BaseSTTProvider):
             supports_speaker_diarization=True
         )
 
+    def get_supported_formats(self) -> List[str]:
+        """Get supported audio formats."""
+        return [
+            "wav", "flac", "ogg", "opus", "mp3", "m4a", "webm"
+        ]
+
+    def get_supported_languages(self) -> List[str]:
+        """Get supported languages."""
+        return [
+            "en-US", "ru-RU", "es-ES", "fr-FR", "de-DE", "it-IT", 
+            "pt-PT", "pl-PL", "tr-TR", "nl-NL", "sv-SE", "da-DK", 
+            "no-NO", "fi-FI", "he-IL", "ar-SA", "zh-CN", "ja-JP", 
+            "ko-KR", "hi-IN", "th-TH", "vi-VN", "uk-UA", "bg-BG", 
+            "hr-HR", "cs-CZ", "et-EE", "lv-LV", "lt-LT", "sk-SK", 
+            "sl-SI", "hu-HU", "ro-RO"
+        ]
+
     async def initialize(self) -> None:
         """
-        Async initialization with connection pooling
+        Инициализация через STTInitializationMixin - устранение дублирования.
 
-        Implements async patterns from Phase 1.2.3
+        Phase 1.3 Deduplication: Использует стандартную логику инициализации.
         """
-        if self._initialized:
-            return
+        # Создаем валидации через mixin
+        validations = []
 
-        try:
-            logger.debug("Initializing Google STT Provider...")
-
-            # Check for credentials availability first
-            if (not self._google_config["credentials_path"] and
-                not os.getenv('GOOGLE_APPLICATION_CREDENTIALS')):
-                logger.warning("Google Cloud credentials not configured - provider disabled")
-                raise ProviderNotAvailableError(
+        # Google может использовать ADC, поэтому валидация условная
+        if (not self._google_config["credentials_path"] and
+            not os.getenv('GOOGLE_APPLICATION_CREDENTIALS')):
+            validations.append(
+                lambda: (_ for _ in ()).throw(ProviderNotAvailableError(
                     provider="Google STT",
                     reason="No credentials configured (set GOOGLE_APPLICATION_CREDENTIALS)"
-                )
+                ))
+            )
 
-            # Initialize credentials following DIP principle
+        # Создаем фабрику клиента
+        async def create_google_client():
             await self._initialize_credentials()
-
-            # Initialize client with connection pooling
             await self._initialize_client()
 
-            # Validate connection
-            await self._validate_connection()
-
-            self._initialized = True
-            logger.info("Google STT Provider initialized successfully")
-
-        except Exception as e:
-            logger.error("Google STT initialization failed: %s", e, exc_info=True)
-            raise VoiceConfigurationError(f"Google STT init error: {e}") from e
+        # Используем стандартную инициализацию
+        await self._standard_initialize(
+            validation_checks=validations,
+            client_factory=create_google_client,
+            health_check=self._validate_connection,
+            provider_name=self.provider_name
+        )
 
     async def cleanup(self) -> None:
         """
-        Resource cleanup with proper async patterns
+        Очистка ресурсов через STTInitializationMixin - устранение дублирования.
+
+        Phase 1.3 Deduplication: Использует стандартную логику cleanup.
         """
-        try:
-            # Clear Google client
-            self._client = None
-            self._credentials = None
-            self._initialized = False
+        # Создаем задачи очистки через mixin
+        cleanup_tasks = [
+            self._create_client_cleanup(['_client', '_credentials'])()
+        ]
 
-            logger.debug("Google STT Provider cleaned up")
-
-        except Exception as e:
-            logger.error("Google STT cleanup error: %s", e, exc_info=True)
+        # Используем стандартную очистку
+        await self._standard_cleanup(
+            cleanup_tasks=cleanup_tasks,
+            provider_name=self.provider_name
+        )
 
     @provider_operation("Google STT Transcription")
     async def _transcribe_implementation(self, request: STTRequest) -> STTResult:
@@ -329,7 +350,7 @@ class GoogleSTTProvider(BaseSTTProvider):
                 f"Google authentication failed: {e}",
                 operation="google_stt_connection_validation"
             ) from e
-        except Exception as e:
+        except (OSError, ConnectionError) as e:
             logger.warning("Connection validation failed (may be normal): %s", e)
 
     async def _read_audio_file(self, file_path: str) -> bytes:
@@ -378,49 +399,46 @@ class GoogleSTTProvider(BaseSTTProvider):
         audio: speech.RecognitionAudio
     ) -> speech.RecognizeResponse:
         """
-        Legacy transcription with exponential backoff retry
+        Legacy transcription replaced with STTRetryMixin - устранение дублирования.
 
-        Phase 3.5.2.3: Preserved for backward compatibility
-        Will be deprecated after ConnectionManager migration is complete
+        Phase 1.3 Deduplication: Использует стандартную retry логику через mixin.
         """
-        last_exception = None
+        # Создаем операцию транскрипции через mixin
+        async def transcription_operation():
+            return await self._execute_google_transcription(config, audio)
 
-        for attempt in range(self._google_config["max_retries"] + 1):
-            try:
-                # Apply delay for retry attempts
-                if attempt > 0:
-                    await self._apply_retry_delay(attempt)
-
-                # Execute transcription via direct API call
-                return await self._execute_google_transcription(config, audio)
-
-            except (google_exceptions.TooManyRequests,
-                    google_exceptions.ServiceUnavailable,
-                    google_exceptions.DeadlineExceeded) as e:
-                last_exception = e
-                if not self._should_retry_transient_error(e, attempt):
-                    raise self._create_timeout_error(e, attempt)
-
-            except (google_exceptions.Unauthenticated,
-                    google_exceptions.PermissionDenied) as e:
-                # Don't retry auth errors
-                raise VoiceProviderError(
-                    f"Google STT authentication error: {e}",
-                    operation="google_stt_auth"
-                ) from e
-
-            except Exception as e:
-                last_exception = e
-                logger.warning("Google STT error (attempt %s): %s", attempt + 1, e)
-                if attempt == self._google_config["max_retries"]:
-                    break
-
-        # All retries exhausted
-        max_attempts = self._google_config['max_retries'] + 1
-        raise VoiceProviderError(
-            f"Google STT failed after {max_attempts} attempts: {last_exception}",
-            operation="google_stt_retry_exhausted"
+        # Используем стандартную retry логику
+        return await self._standard_transcribe_with_retry(
+            transcription_func=transcription_operation,
+            error_handlers=self._get_google_error_handlers(),
+            provider_name=self.provider_name
         )
+
+    def _get_google_error_handlers(self) -> dict:
+        """Создает error handlers для Google STT операций."""
+        def handle_rate_limit_error(error, attempt: int) -> bool:
+            logger.warning("Google STT rate limit (attempt %s): %s", attempt + 1, error)
+            return True  # Retry rate limits
+
+        def handle_service_error(error, attempt: int) -> bool:
+            logger.warning("Google STT service error (attempt %s): %s", attempt + 1, error)
+            return True  # Retry service unavailable
+
+        def handle_deadline_error(error, attempt: int) -> bool:
+            logger.warning("Google STT timeout (attempt %s): %s", attempt + 1, error)
+            return True  # Retry timeouts
+
+        def handle_auth_error(error, _attempt: int) -> bool:
+            logger.error("Google STT auth error: %s", error)
+            return False  # Don't retry auth errors
+
+        return {
+            google_exceptions.TooManyRequests: handle_rate_limit_error,
+            google_exceptions.ServiceUnavailable: handle_service_error,
+            google_exceptions.DeadlineExceeded: handle_deadline_error,
+            google_exceptions.Unauthenticated: handle_auth_error,
+            google_exceptions.PermissionDenied: handle_auth_error,
+        }
 
     async def _apply_retry_delay(self, attempt: int):
         """Apply exponential backoff delay for retry attempts"""

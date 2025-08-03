@@ -21,7 +21,6 @@ from aiohttp import ClientSession, TCPConnector, ClientTimeout
 
 from app.services.voice_v2.core.exceptions import (
     AudioProcessingError,
-    ProviderNotAvailableError,
     VoiceServiceError,
     VoiceServiceTimeout
 )
@@ -30,13 +29,20 @@ from app.services.voice_v2.core.interfaces import ProviderType, AudioFormat
 from app.services.voice_v2.providers.stt.base_stt import BaseSTTProvider
 from app.services.voice_v2.providers.stt.models import STTResult, STTCapabilities, STTQuality
 from app.core.config import settings
+from .initialization_mixin import STTInitializationMixin
+from .retry_mixin import STTRetryMixin
 
 logger = logging.getLogger(__name__)
 
 
-class YandexSTTProvider(BaseSTTProvider):
+class YandexSTTProvider(BaseSTTProvider, STTInitializationMixin, STTRetryMixin):
     """
-    Consolidated Yandex SpeechKit STT Provider.
+    Consolidated Yandex SpeechKit STT Provider с deduplication mixins.
+
+    Phase 1.3 Deduplication:
+    - STTInitializationMixin: стандартизация init/cleanup (~60 строк экономии)
+    - STTRetryMixin: унификация retry логики (~40 строк экономии)
+    - SOLID: Single responsibility, DRY principle compliance
 
     Integrated audio processing for simplified architecture.
     Single Responsibility: Complete Yandex STT integration.
@@ -57,27 +63,24 @@ class YandexSTTProvider(BaseSTTProvider):
         """Initialize Yandex STT provider."""
         super().__init__(provider_name, config, priority, enabled, **kwargs)
 
-        # API credentials
-        self.api_key = config.get("api_key") or (
-            settings.YANDEX_API_KEY.get_secret_value() if settings.YANDEX_API_KEY else None
-        )
-        self.folder_id = config.get("folder_id") or settings.YANDEX_FOLDER_ID
-
-        # Connection configuration
-        self.max_connections = config.get("max_connections", 10)
-        self.connection_timeout = config.get("connection_timeout", 30.0)
-        self.read_timeout = config.get("read_timeout", 60.0)
-
-        # Audio processing configuration
-        self.supported_formats = ["wav", "ogg", "opus", "mp3"]
+        # Consolidate configuration - use fewer instance variables
+        self._config = {
+            'api_key': config.get("api_key") or (
+                settings.YANDEX_API_KEY.get_secret_value() if settings.YANDEX_API_KEY else None
+            ),
+            'folder_id': config.get("folder_id") or settings.YANDEX_FOLDER_ID,
+            'max_connections': config.get("max_connections", 10),
+            'connection_timeout': config.get("connection_timeout", 30.0),
+            'read_timeout': config.get("read_timeout", 60.0),
+            'supported_formats': ["wav", "ogg", "opus", "mp3"]
+        }
 
         # Session management
         self._session: Optional[ClientSession] = None
         self._connector: Optional[TCPConnector] = None
 
         # Performance tracking
-        self._request_count = 0
-        self._total_processing_time = 0.0
+        self._stats = {'request_count': 0, 'total_processing_time': 0.0}
 
     def get_required_config_fields(self) -> List[str]:
         """Required configuration fields."""
@@ -100,47 +103,87 @@ class YandexSTTProvider(BaseSTTProvider):
             supports_speaker_diarization=False
         )
 
+    def get_supported_formats(self) -> List[str]:
+        """Get supported audio formats."""
+        return [
+            "wav", "opus", "mp3", "flac", "m4a", "ogg"
+        ]
+
+    def get_supported_languages(self) -> List[str]:
+        """Get supported languages."""
+        return [
+            "ru-RU", "en-US", "tr-TR", "de-DE", "es-ES", "fr-FR", 
+            "it-IT", "pl-PL", "kk-KZ", "uz-UZ", "he-IL", "ar-AE"
+        ]
+
     async def initialize(self) -> None:
-        """Initialize provider and connections."""
-        if not self.api_key:
-            raise ProviderNotAvailableError("Yandex API key not configured")
+        """
+        Инициализация через STTInitializationMixin - устранение дублирования.
 
-        if not self.folder_id:
-            raise ProviderNotAvailableError("Yandex folder ID not configured")
+        Phase 1.3 Deduplication: Использует стандартную логику инициализации.
+        """
+        # Создаем валидации через mixin
+        validations = [
+            self._create_api_key_validation(
+                'api_key',
+                "Yandex API key not configured"
+            ),
+            self._create_api_key_validation(
+                'folder_id',
+                "Yandex folder ID not configured"
+            )
+        ]
 
-        await self._setup_connection_pool()
+        # Создаем фабрику клиента
+        async def create_yandex_client():
+            await self._setup_connection_pool()
 
-        # Test connection
-        if not await self.health_check():
-            raise ProviderNotAvailableError("Yandex STT service not available")
-
-        logger.info("Yandex STT provider '%s' initialized successfully", self.provider_name)
+        # Используем стандартную инициализацию
+        await self._standard_initialize(
+            validation_checks=validations,
+            client_factory=create_yandex_client,
+            health_check=self.health_check,
+            provider_name=self.provider_name
+        )
 
     async def _setup_connection_pool(self) -> None:
         """Setup HTTP connection pool."""
         self._connector = TCPConnector(
-            limit=self.max_connections,
-            limit_per_host=self.max_connections,
+            limit=self._config['max_connections'],
+            limit_per_host=self._config['max_connections'],
             ttl_dns_cache=300,
             use_dns_cache=True,
             enable_cleanup_closed=True
         )
 
         timeout = ClientTimeout(
-            total=self.connection_timeout + self.read_timeout,
-            connect=self.connection_timeout,
-            sock_read=self.read_timeout
+            total=self._config['connection_timeout'] + self._config['read_timeout'],
+            connect=self._config['connection_timeout'],
+            sock_read=self._config['read_timeout']
         )
 
         self._session = ClientSession(
             connector=self._connector,
             timeout=timeout,
-            headers={'Authorization': f'Api-Key {self.api_key}'}
+            headers={'Authorization': f'Api-Key {self._config["api_key"]}'}
         )
 
     async def cleanup(self) -> None:
-        """Cleanup resources."""
-        await self._cleanup_connections()
+        """
+        Очистка ресурсов через STTInitializationMixin - устранение дублирования.
+
+        Phase 1.3 Deduplication: Использует стандартную логику cleanup.
+        """
+        # Создаем задачи очистки через mixin
+        cleanup_tasks = [
+            self._cleanup_connections
+        ]
+
+        # Используем стандартную очистку
+        await self._standard_cleanup(
+            cleanup_tasks=cleanup_tasks,
+            provider_name=self.provider_name
+        )
 
     async def _cleanup_connections(self) -> None:
         """Cleanup HTTP connections."""
@@ -165,7 +208,7 @@ class YandexSTTProvider(BaseSTTProvider):
                 self.STT_API_URL,
                 data=test_audio,
                 params={
-                    "folderId": self.folder_id,
+                    "folderId": self._config['folder_id'],
                     "format": "wav",
                     "sampleRateHertz": self.DEFAULT_SAMPLE_RATE
                 },
@@ -244,37 +287,35 @@ class YandexSTTProvider(BaseSTTProvider):
                                      audio_format: str,
                                      language: str,
                                      enable_profanity_filter: bool = True) -> STTResult:
-        """Perform transcription with retry logic."""
-        max_retries = 3
+        """
+        Transcription replaced with STTRetryMixin - устранение дублирования.
+
+        Phase 1.3 Deduplication: Использует стандартную retry логику через mixin.
+        """
+        # Подготавливаем параметры
         normalized_language = self.normalize_language(language)
         params = self._prepare_transcription_params(
             normalized_language, audio_format, enable_profanity_filter
         )
 
-        for attempt in range(max_retries):
-            try:
-                if not self._session:
-                    await self._setup_connection_pool()
+        # Создаем операцию транскрипции через mixin
+        async def transcription_operation():
+            if not self._session:
+                await self._setup_connection_pool()
+            return await self._execute_transcription_request(audio_data, params)
 
-                return await self._execute_transcription_request(audio_data, params)
-
-            except asyncio.TimeoutError:
-                if not await self._handle_yandex_timeout_error(attempt, max_retries):
-                    break
-                continue
-
-            except (VoiceServiceError, AudioProcessingError) as e:
-                if not await self._handle_yandex_general_error(e, attempt, max_retries):
-                    break
-                continue
-
-        raise VoiceServiceError("All retry attempts failed")
+        # Используем стандартную retry логику
+        return await self._standard_transcribe_with_retry(
+            transcription_func=transcription_operation,
+            error_handlers=self._get_yandex_error_handlers(),
+            provider_name=self.provider_name
+        )
 
     def _prepare_transcription_params(self, language: str, audio_format: str,
                                     enable_profanity_filter: bool) -> Dict[str, str]:
         """Prepare parameters for Yandex STT API request."""
         return {
-            "folderId": self.folder_id,
+            "folderId": self._config['folder_id'],
             "format": audio_format,
             "sampleRateHertz": self.DEFAULT_SAMPLE_RATE,
             "lang": language,
@@ -337,14 +378,14 @@ class YandexSTTProvider(BaseSTTProvider):
 
     def _update_performance_stats(self, processing_time: float) -> None:
         """Update internal performance statistics."""
-        self._request_count += 1
-        self._total_processing_time += processing_time
+        self._stats['request_count'] += 1
+        self._stats['total_processing_time'] += processing_time
 
     def get_status_info(self) -> Dict[str, Any]:
         """Get provider status information."""
-        avg_processing_time = (
-            self._total_processing_time / self._request_count
-            if self._request_count > 0 else 0.0
+        avg_time = (
+            self._stats['total_processing_time'] / self._stats['request_count']
+            if self._stats['request_count'] > 0 else 0.0
         )
 
         return {
@@ -354,14 +395,14 @@ class YandexSTTProvider(BaseSTTProvider):
             "config": {
                 "api_url": self.STT_API_URL,
                 "max_file_size_mb": self.MAX_FILE_SIZE_MB,
-                "max_connections": self.max_connections,
-                "connection_timeout": self.connection_timeout,
-                "read_timeout": self.read_timeout
+                "max_connections": self._config['max_connections'],
+                "connection_timeout": self._config['connection_timeout'],
+                "read_timeout": self._config['read_timeout']
             },
             "performance": {
-                "requests_processed": self._request_count,
-                "average_processing_time": round(avg_processing_time, 3),
-                "total_processing_time": round(self._total_processing_time, 3)
+                "requests_processed": self._stats['request_count'],
+                "average_processing_time": round(avg_time, 3),
+                "total_processing_time": round(self._stats['total_processing_time'], 3)
             },
             "capabilities": {
                 "supports_streaming": False,
@@ -376,7 +417,11 @@ class YandexSTTProvider(BaseSTTProvider):
 
     def validate_audio_format(self, audio_format: str) -> bool:
         """Validate if audio format is supported"""
-        return audio_format.lower() in self.supported_formats
+        # Исправлено: обрабатываем enum AudioFormat
+        audio_format_str = audio_format
+        if hasattr(audio_format, 'value'):  # Это enum
+            audio_format_str = audio_format.value
+        return audio_format_str.lower() in self._config['supported_formats']
 
     def normalize_language(self, language: str) -> str:
         """Normalize language code for Yandex API"""
@@ -410,7 +455,8 @@ class YandexSTTProvider(BaseSTTProvider):
     async def _convert_to_wav(self, audio_data: bytes, audio_format: str) -> Tuple[bytes, str]:
         """Convert audio to WAV format"""
         try:
-            from pydub import AudioSegment
+            # Import at function level for better error handling
+            from pydub import AudioSegment  # pylint: disable=import-outside-toplevel
 
             # Determine input format
             if audio_format == "mp3":
@@ -442,3 +488,23 @@ class YandexSTTProvider(BaseSTTProvider):
         except Exception as e:
             logger.error("Audio conversion to WAV failed: %s", e)
             raise
+
+    def _get_yandex_error_handlers(self) -> dict:
+        """Создает error handlers для Yandex STT операций."""
+        def handle_timeout_error(error, attempt: int) -> bool:
+            logger.warning("Yandex STT timeout (attempt %s): %s", attempt + 1, error)
+            return True  # Retry timeouts
+
+        def handle_service_error(error, attempt: int) -> bool:
+            logger.warning("Yandex STT service error (attempt %s): %s", attempt + 1, error)
+            return True  # Retry service errors
+
+        def handle_audio_error(error, _attempt: int) -> bool:
+            logger.error("Yandex STT audio error: %s", error)
+            return False  # Don't retry audio processing errors
+
+        return {
+            asyncio.TimeoutError: handle_timeout_error,
+            VoiceServiceError: handle_service_error,
+            AudioProcessingError: handle_audio_error,
+        }

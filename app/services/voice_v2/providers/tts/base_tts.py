@@ -23,6 +23,7 @@ from typing import Any, Dict, List
 
 from app.services.voice_v2.core.schemas import TTSRequest
 from .models import TTSResult, TTSCapabilities
+from .storage_mixin import TTSStorageMixin
 from ...core.exceptions import VoiceServiceError, ProviderNotAvailableError, AudioProcessingError
 from ...utils.validators import ConfigurationValidator
 from ..retry_mixin import RetryMixin
@@ -30,7 +31,7 @@ from ..retry_mixin import RetryMixin
 logger = logging.getLogger(__name__)
 
 
-class BaseTTSProvider(ABC, RetryMixin):
+class BaseTTSProvider(ABC, RetryMixin, TTSStorageMixin):
     """
     Minimal abstract base for TTS providers with RetryMixin integration.
 
@@ -48,6 +49,9 @@ class BaseTTSProvider(ABC, RetryMixin):
         priority: int = 1,
         enabled: bool = True
     ):
+        # Initialize parent classes
+        super().__init__()
+
         self.provider_name = provider_name
         self.config = config
         self.priority = priority
@@ -56,7 +60,8 @@ class BaseTTSProvider(ABC, RetryMixin):
 
         # Initialize retry configuration через RetryMixin
         self._retry_config = self._get_retry_config(config)
-        logger.debug(f"{provider_name} TTS provider with retry config: {self._retry_config.max_attempts} attempts")
+        logger.debug("%s TTS provider with retry config: %s attempts",
+                    provider_name, self._retry_config.max_attempts)
 
         # Quick config validation - SRP principle
         missing = [f for f in self.get_required_config_fields() if f not in config]
@@ -126,10 +131,14 @@ class BaseTTSProvider(ABC, RetryMixin):
                          result.text_length, result.processing_time)
             return result
 
+        except AudioProcessingError:
+            # Re-raise audio processing errors as-is
+            raise
+        except VoiceServiceError:
+            # Re-raise voice service errors as-is
+            raise
         except Exception as e:
             logger.error("TTS synthesis failed: %s", e)
-            if isinstance(e, VoiceServiceError):
-                raise
             raise VoiceServiceError(f"TTS synthesis error: {e}") from e
 
     async def _validate_request(self, request: TTSRequest) -> None:
@@ -174,22 +183,15 @@ class BaseTTSProvider(ABC, RetryMixin):
                 await self.initialize()
                 self._initialized = True
             return True
-        except Exception as e:
+        except (AudioProcessingError, ProviderNotAvailableError, VoiceServiceError) as e:
             logger.warning("Health check failed for %s: %s", self.provider_name, e)
             return False
-
-    async def estimate_audio_duration(self, text: str) -> float:
-        """
-        Estimate audio duration from text.
-
-        Uses Phase 1.1.2 reference system calculation:
-        ~150 words per minute, average word length 5 characters
-        """
-        if not text:
-            return 0.0
-
-        words = len(text) / 5  # Average word length
-        return (words / 150) * 60  # 150 WPM to seconds
+        except (ConnectionError, TimeoutError) as e:
+            logger.error("Connection error during health check for %s: %s", self.provider_name, e)
+            return False
+        except Exception as e:
+            logger.error("Unexpected error during health check for %s: %s", self.provider_name, e)
+            return False
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(name={self.provider_name}, enabled={self.enabled})"

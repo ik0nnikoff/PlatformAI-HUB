@@ -33,8 +33,6 @@ from .base_tts import BaseTTSProvider
 from .models import TTSRequest, TTSResult, TTSCapabilities, TTSQuality
 from ...core.exceptions import VoiceServiceError, AudioProcessingError, ProviderNotAvailableError
 from ...core.interfaces import ProviderType, AudioFormat
-from ...infrastructure.minio_manager import MinioFileManager
-from ...core.config import get_config
 logger = logging.getLogger(__name__)
 
 
@@ -264,11 +262,26 @@ class YandexTTSProvider(BaseTTSProvider):
             synthesis_params: Dict[str, Any], start_time: float) -> TTSResult:
         """Create successful synthesis result."""
         # Upload audio to storage
-        file_path = await self._upload_audio_to_storage(
-            audio_data,
-            getattr(request, 'agent_id', "default"),
-            getattr(request, 'user_id', "default")
+        # Upload to storage using TTSStorageMixin
+        from .storage_mixin import AudioUploadParams
+
+        upload_params = AudioUploadParams(
+            audio_data=audio_data,
+            provider_name="yandex",
+            agent_id=getattr(request, 'agent_id', 'default'),
+            user_id=getattr(request, 'user_id', 'default'),
+            voice=self._yandex_config["voice_name"],
+            language=self._yandex_config["language_code"],
+            audio_format=self._yandex_config['audio_format'],
+            additional_metadata={
+                "emotion": synthesis_params.get("emotion", "neutral"),
+                "speed": synthesis_params.get("speed", "1.0"),
+                "sample_rate": self._yandex_config.get("sample_rate_hertz", "22050")
+            },
+            filename_prefix="yandex_tts"
         )
+
+        file_path = await self._upload_audio_to_storage(upload_params)
 
         processing_time = time.time() - start_time
         metadata = self._generate_metadata(synthesis_params, len(audio_data), processing_time)
@@ -486,93 +499,6 @@ class YandexTTSProvider(BaseTTSProvider):
             f"TTS synthesis failed after {self.MAX_RETRIES} attempts: {str(last_exception)}"
         )
 
-    async def _upload_audio_to_storage(
-        self,
-        audio_data: bytes,
-        agent_id: str,
-        user_id: str
-    ) -> str:
-        """
-        Upload synthesized audio to MinIO storage and return presigned URL.
-
-        Args:
-            audio_data: Synthesized audio bytes
-            agent_id: Agent identifier
-            user_id: User identifier
-
-        Returns:
-            Presigned URL for audio file access
-
-        Raises:
-            AudioProcessingError: If upload fails
-        """
-        try:
-            # Get voice configuration
-            voice_config = get_config()
-            storage_config = voice_config.file_storage
-            
-            # Initialize MinIO manager
-            minio_manager = MinioFileManager(
-                endpoint=storage_config.minio_endpoint or "127.0.0.1:9000",
-                access_key=storage_config.minio_access_key or "minioadmin", 
-                secret_key=storage_config.minio_secret_key or "minioadmin",
-                bucket_name=storage_config.minio_bucket or "voice-files",
-                secure=storage_config.minio_secure or False
-            )
-            
-            # Ensure MinIO manager is initialized
-            await minio_manager.initialize()
-
-            # Generate unique object key
-            timestamp = int(time.time() * 1000)  # milliseconds for uniqueness
-            audio_format = self._yandex_config['audio_format']
-            object_key = (f"tts/yandex/{agent_id}/{user_id}/"
-                         f"tts_yandex_{timestamp}.{audio_format}")
-
-            # Determine content type based on format
-            content_type_mapping = {
-                "mp3": "audio/mpeg",
-                "wav": "audio/wav", 
-                "ogg": "audio/ogg",
-                "oggopus": "audio/ogg"
-            }
-            content_type = content_type_mapping.get(audio_format, "audio/mpeg")
-
-            # Upload file to MinIO
-            await minio_manager.upload_file(
-                file_data=audio_data,
-                object_key=object_key,
-                content_type=content_type,
-                metadata={
-                    "provider": "yandex",
-                    "agent_id": agent_id,
-                    "user_id": user_id,
-                    "voice": self._yandex_config["voice_name"],
-                    "language": self._yandex_config["language_code"],
-                    "format": audio_format,
-                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-            )
-
-            # Generate presigned URL (expires in 24 hours)
-            presigned_url = await minio_manager.generate_presigned_url(
-                object_key=object_key,
-                expires_hours=24,
-                method="GET"
-            )
-
-            # Cleanup MinIO manager
-            await minio_manager.cleanup()
-
-            logger.debug("Audio uploaded to MinIO: %s (size: %d bytes)", 
-                        object_key, len(audio_data))
-
-            return presigned_url
-
-        except Exception as e:
-            logger.error("Failed to upload audio to MinIO storage: %s", e, exc_info=True)
-            raise AudioProcessingError(f"Audio storage upload failed: {e}") from e
-
     def _generate_metadata(
         self,
         params: Dict[str, Any],
@@ -598,13 +524,3 @@ class YandexTTSProvider(BaseTTSProvider):
             "api_endpoint": self.API_BASE_URL,
             "timestamp": time.time()
         }
-
-    def _estimate_audio_duration(self, text: str, speed: float = 1.0) -> float:
-        """
-        Estimate audio duration based on text length and speech speed.
-
-        Based on average speech rate: ~150 words per minute for Russian
-        """
-        words = len(text.split())
-        base_duration = (words / 150) * 60  # seconds
-        return base_duration / speed

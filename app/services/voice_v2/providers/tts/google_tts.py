@@ -16,7 +16,6 @@ Architecture References:
 
 import asyncio
 import logging
-import time
 from typing import Any, Dict, List, Optional
 
 from google.cloud import texttospeech_v1
@@ -31,8 +30,7 @@ from app.services.voice_v2.core.exceptions import (
 )
 from app.services.voice_v2.core.interfaces import ProviderType, AudioFormat
 from app.services.voice_v2.providers.retry_mixin import provider_operation
-from ...infrastructure.minio_manager import MinioFileManager
-from ...core.config import get_config
+
 logger = logging.getLogger(__name__)
 
 
@@ -216,11 +214,26 @@ class GoogleTTSProvider(BaseTTSProvider):
             audio_data = await self._synthesize_with_retry(synthesis_params)
 
         # Upload to storage and return URL
-        audio_url = await self._upload_audio_to_storage(
-            audio_data,
-            f"google_tts_{int(time.time() * 1000)}.mp3",
-            request
+        # Upload audio to storage using TTSStorageMixin
+        from .storage_mixin import AudioUploadParams
+
+        upload_params = AudioUploadParams(
+            audio_data=audio_data,
+            provider_name="google",
+            agent_id=getattr(request, 'agent_id', 'default'),
+            user_id=getattr(request, 'user_id', 'default'),
+            voice=getattr(request, 'voice', 'default'),
+            language=getattr(request, 'language', 'en-US'),
+            audio_format="mp3",
+            additional_metadata={
+                "model": self._google_config.get("model", "basic"),
+                "sample_rate": self._google_config.get("sample_rate_hertz", "22050"),
+                "effects_profile": self._google_config.get("effects_profile_id", None)
+            },
+            filename_prefix="google_tts"
         )
+
+        audio_url = await self._upload_audio_to_storage(upload_params)
 
         return audio_url
 
@@ -428,96 +441,6 @@ class GoogleTTSProvider(BaseTTSProvider):
         except Exception as e:
             logger.error("Failed to get Google Cloud voices: %s", e)
             raise AudioProcessingError(f"Failed to retrieve Google Cloud voices: {e}") from e
-
-    async def _upload_audio_to_storage(
-        self,
-        audio_data: bytes,
-        filename: str,
-        request: TTSRequest
-    ) -> str:
-        """
-        Upload generated audio to MinIO storage and return presigned URL.
-
-        Args:
-            audio_data: Synthesized audio bytes
-            filename: Generated filename for the audio file
-            request: Original TTS request
-
-        Returns:
-            Presigned URL for audio file access
-
-        Raises:
-            AudioProcessingError: If upload fails
-        """
-        try:
-            # Get voice configuration
-            voice_config = get_config()
-            storage_config = voice_config.file_storage
-            
-            # Initialize MinIO manager
-            minio_manager = MinioFileManager(
-                endpoint=storage_config.minio_endpoint or "127.0.0.1:9000",
-                access_key=storage_config.minio_access_key or "minioadmin", 
-                secret_key=storage_config.minio_secret_key or "minioadmin",
-                bucket_name=storage_config.minio_bucket or "voice-files",
-                secure=storage_config.minio_secure or False
-            )
-            
-            # Ensure MinIO manager is initialized
-            await minio_manager.initialize()
-
-            # Generate object key from filename  
-            agent_id = getattr(request, 'agent_id', 'default')
-            user_id = getattr(request, 'user_id', 'default')
-            object_key = f"tts/google/{agent_id}/{user_id}/{filename}"
-
-            # Determine content type (Google TTS typically outputs MP3)
-            content_type = "audio/mpeg"  # Google TTS default format
-
-            # Upload file to MinIO
-            await minio_manager.upload_file(
-                file_data=audio_data,
-                object_key=object_key,
-                content_type=content_type,
-                metadata={
-                    "provider": "google",
-                    "agent_id": agent_id,
-                    "user_id": user_id,
-                    "voice": getattr(request, 'voice', 'default'),
-                    "language": getattr(request, 'language', 'en-US'),
-                    "format": "mp3",
-                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-            )
-
-            # Generate presigned URL (expires in 24 hours)
-            presigned_url = await minio_manager.generate_presigned_url(
-                object_key=object_key,
-                expires_hours=24,
-                method="GET"
-            )
-
-            # Cleanup MinIO manager
-            await minio_manager.cleanup()
-
-            logger.debug("Audio uploaded to MinIO: %s (size: %d bytes)", 
-                        object_key, len(audio_data))
-
-            return presigned_url
-
-        except Exception as e:
-            logger.error("Failed to upload audio to MinIO storage: %s", e, exc_info=True)
-            raise AudioProcessingError(f"Audio storage upload failed: {e}") from e
-
-    def _estimate_audio_duration(self, text: str, speaking_rate: float = 1.0) -> float:
-        """
-        Estimate audio duration for Google Cloud TTS.
-
-        Based on average speaking rate of ~150 words per minute.
-        """
-        words = len(text.split())
-        base_duration = (words / 150) * 60  # Base duration in seconds
-        return base_duration / speaking_rate
 
     def _get_provider_metadata(self, request: TTSRequest) -> Dict[str, Any]:
         """Get provider-specific metadata for the synthesis result."""

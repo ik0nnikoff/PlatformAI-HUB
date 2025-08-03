@@ -1,10 +1,10 @@
 """
-OpenAI STT Provider для Voice_v2 - Phase 3.5.2 Enhanced
+OpenAI STT Provider для Voice_v2 - Phase 1.3 Deduplication Enhanced
 
-Рефакторинг для устранения дублирования retry логики:
+Рефакторинг для устранения дублирования:
+- STTInitializationMixin для стандартизации инициализации/cleanup
+- STTRetryMixin для унификации retry логики
 - ConnectionManager integration для centralized retry logic
-- RetryMixin for configuration standardization
-- Removed duplicated _execute_with_retry method
 - SOLID principles compliance
 """
 
@@ -14,7 +14,7 @@ import time
 import tempfile
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Type, Callable
 import logging
 import aiohttp
 
@@ -32,39 +32,51 @@ from app.services.voice_v2.providers.stt.models import STTResult, STTCapabilitie
 from app.services.voice_v2.core.interfaces import ProviderType, AudioFormat
 from app.services.voice_v2.utils.validators import ConfigurationValidator
 from app.services.voice_v2.providers.retry_mixin import RetryMixin, provider_operation
+from .initialization_mixin import STTInitializationMixin
+from .retry_mixin import STTRetryMixin
 
 logger = logging.getLogger(__name__)
 
 
-class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
+class OpenAISTTProvider(BaseSTTProvider, RetryMixin, STTInitializationMixin, STTRetryMixin):
     """
-    OpenAI Whisper STT Provider с ConnectionManager integration.
+    OpenAI Whisper STT Provider с deduplication mixins.
 
-    Phase 3.5.2 Deduplication:
-    - Uses RetryMixin for configuration standardization
-    - ConnectionManager integration for centralized retry logic
-    - Removed duplicated retry implementation
+    Phase 1.3 Deduplication:
+    - STTInitializationMixin: стандартизация init/cleanup (~60 строк экономии)
+    - STTRetryMixin: унификация retry логики (~40 строк экономии)
+    - ConnectionManager integration для enhanced retry logic
     - SOLID: Single responsibility, DRY principle compliance
     """
 
-    def __init__(self, provider_name: str, config: Dict[str, Any], **kwargs):
-        """Инициализация с валидацией OpenAI-specific конфигурации."""
-        super().__init__(provider_name, config, **kwargs)
+    def __init__(self, provider_name: str = "openai", config: Dict[str, Any] = None, priority: int = 1, enabled: bool = True):
+        """
+        Инициализация OpenAI STT провайдера с поддержкой различных моделей.
+        
+        Args:
+            provider_name: Имя провайдера
+            config: Конфигурация провайдера
+            priority: Приоритет провайдера
+            enabled: Включён ли провайдер
+        """
+        config = config or {}
+        super().__init__(provider_name, config, priority, enabled)
 
+        # Ограничиваем количество атрибутов экземпляра для Pylint
         self.client: Optional[AsyncOpenAI] = None
         self._session: Optional[aiohttp.ClientSession] = None
         self._connection_lock = asyncio.Lock()
 
         # Правильно извлекаем API ключ из SecretStr
         config_api_key = config.get("api_key")
-        settings_api_key = settings.OPENAI_API_KEY.get_secret_value() if settings.OPENAI_API_KEY else None
+        settings_api_key = (settings.OPENAI_API_KEY.get_secret_value()
+                           if settings.OPENAI_API_KEY else None)
         self.api_key = config_api_key or settings_api_key
 
         self.model = config.get("model", "whisper-1")
         self.timeout = config.get("timeout", 30)
 
         # Retry configuration через RetryMixin
-        # Always set max_retries for compatibility
         self.max_retries = config.get("max_retries", 3)
         self.retry_delay = config.get("retry_delay", 1.0)
 
@@ -72,12 +84,13 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
             # Register retry configuration with ConnectionManager
             retry_config = self._get_retry_config(config)
             logger.info(
-                "OpenAISTTProvider using ConnectionManager with retry config: %s retries",
+                "OpenAISTTProvider using ConnectionManager with %s retries",
                 retry_config.max_retries)
         else:
             # Fallback к legacy parameters для compatibility
             logger.warning(
-                "OpenAISTTProvider fallback to legacy retry - ConnectionManager not available")
+                "OpenAISTTProvider fallback to legacy retry - "
+                "ConnectionManager not available")
 
         logger.info(
             "OpenAISTTProvider initialized: model=%s, timeout=%ss",
@@ -115,61 +128,70 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
             supports_speaker_diarization=False  # Not supported by Whisper
         )
 
+    def get_supported_formats(self) -> List[str]:
+        """Get supported audio formats."""
+        return [
+            "mp3", "webm", "m4a", "wav", "flac", "ogg", "opus"
+        ]
+
+    def get_supported_languages(self) -> List[str]:
+        """Get supported languages."""
+        return [
+            "en", "ru", "es", "fr", "de", "it", "pt", "pl", "tr", "nl",
+            "sv", "da", "no", "fi", "he", "ar", "zh", "ja", "ko", "hi",
+            "th", "vi", "uk", "bg", "hr", "cs", "et", "lv", "lt", "sk",
+            "sl", "hu", "ro", "mt", "is", "mk", "sq", "az", "be", "bs",
+            "eu", "ga", "gl", "ka", "ky", "lb", "mi", "ms", "ne", "cy"
+        ]
+
     async def initialize(self) -> None:
         """
-        Асинхронная инициализация с connection pooling optimization.
+        Инициализация через STTInitializationMixin - устранение дублирования.
 
-        Phase_1_2_3_performance_optimization.md:
-        - Connection pooling для concurrent requests
-        - Proper async patterns
+        Phase 1.3 Deduplication: Использует стандартную логику инициализации.
         """
-        if not self.api_key:
-            raise ProviderNotAvailableError(
-                self.provider_name,
+        # Создаем валидации через mixin
+        validations = [
+            self._create_api_key_validation(
+                'api_key',
                 "OpenAI API key не настроен"
             )
+        ]
 
-        try:
-            # Enhanced connection settings для performance
+        # Создаем фабрику клиента
+        async def create_openai_client():
             await self._ensure_session()
-
             self.client = AsyncOpenAI(
                 api_key=self.api_key,
                 timeout=self.timeout,
                 max_retries=self.max_retries,
-                # Use custom session for connection pooling
-                http_client=None  # Will use default with connection pooling
+                http_client=None  # Default connection pooling
             )
 
-            # Health check при инициализации (non-blocking)
-            health_result = await self._initial_health_check()
-            if not health_result:
-                logger.warning("OpenAI API health check failed during initialization")
-
-            self._initialized = True
-            logger.info("OpenAI STT provider initialized successfully")
-
-        except Exception as e:
-            logger.error("Failed to initialize OpenAI STT provider: %s", e, exc_info=True)
-            raise ProviderNotAvailableError(
-                self.provider_name,
-                f"Ошибка инициализации: {str(e)}"
-            )
+        # Используем стандартную инициализацию
+        await self._standard_initialize(
+            validation_checks=validations,
+            client_factory=create_openai_client,
+            health_check=self._initial_health_check,
+            provider_name=self.provider_name
+        )
 
     async def cleanup(self) -> None:
-        """Очистка ресурсов и connections."""
-        try:
-            if self.client:
-                await self.client.close()
-            if self._session:
-                await self._session.close()
-            logger.info("OpenAI STT provider cleaned up")
-        except Exception as e:
-            logger.warning("Cleanup warning: %s", e)
-        finally:
-            self.client = None
-            self._session = None
-            self._initialized = False
+        """
+        Очистка ресурсов через STTInitializationMixin - устранение дублирования.
+
+        Phase 1.3 Deduplication: Использует стандартную логику cleanup.
+        """
+        # Создаем задачи очистки через mixin
+        cleanup_tasks = [
+            self._create_client_cleanup(['client', '_session'])()
+        ]
+
+        # Используем стандартную очистку
+        await self._standard_cleanup(
+            cleanup_tasks=cleanup_tasks,
+            provider_name=self.provider_name
+        )
 
     @provider_operation("transcription")
     async def _transcribe_implementation(self, request: STTRequest) -> STTResult:
@@ -231,22 +253,23 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
             raise
         except AuthenticationError as e:
             logger.error("OpenAI authentication error: %s", e)
-            raise ProviderNotAvailableError(self.provider_name, f"Ошибка аутентификации: {e}")
+            raise ProviderNotAvailableError(
+                self.provider_name, f"Ошибка аутентификации: {e}") from e
         except RateLimitError as e:
             logger.warning("OpenAI rate limit exceeded: %s", e)
-            raise AudioProcessingError(f"Превышен лимит запросов: {e}")
+            raise AudioProcessingError(f"Превышен лимит запросов: {e}") from e
         except APIConnectionError as e:
             logger.error("OpenAI connection error: %s", e)
-            raise AudioProcessingError(f"Ошибка соединения с OpenAI: {e}")
+            raise AudioProcessingError(f"Ошибка соединения с OpenAI: {e}") from e
         except Exception as e:
             logger.error("Unexpected OpenAI STT error: %s", e, exc_info=True)
-            raise AudioProcessingError(f"Неожиданная ошибка OpenAI: {e}")
+            raise AudioProcessingError(f"Неожиданная ошибка OpenAI: {e}") from e
 
     async def _cleanup_temp_file(self, audio_path: Path):
         """Clean up temporary audio file"""
         try:
             os.unlink(audio_path)
-        except Exception as e:
+        except OSError as e:
             logger.warning("Failed to cleanup temp file %s: %s", audio_path, e)
 
     async def _validate_audio_file(self, audio_path: Path) -> None:
@@ -256,7 +279,8 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
 
         file_size = audio_path.stat().st_size
         if file_size > 25 * 1024 * 1024:  # 25MB OpenAI limit
-            raise AudioProcessingError(f"Файл слишком большой: {file_size} bytes (лимит 25MB)")
+            raise AudioProcessingError(
+                f"Файл слишком большой: {file_size} bytes (лимит 25MB)")
 
     def _prepare_transcription_params(self, request: STTRequest) -> Dict[str, Any]:
         """Prepare OpenAI transcription parameters."""
@@ -270,7 +294,8 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
             # Normalize language code for OpenAI Whisper
             normalized_lang = self._normalize_language(request.language)
             if not ConfigurationValidator.validate_language_code(normalized_lang):
-                raise AudioProcessingError(f"Language {request.language} unsupported")
+                raise AudioProcessingError(
+                    f"Language {request.language} unsupported")
             transcription_params["language"] = normalized_lang
 
         # Custom settings integration (SOLID: Open/Closed principle)
@@ -300,8 +325,8 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
             raise AudioProcessingError("Не удалось распознать речь в аудиофайле")
 
         logger.info(
-            f"OpenAI transcription completed: {len(text)} chars, "
-            f"{processing_time:.2f}s, lang={language_detected}"
+            "OpenAI transcription completed: %d chars, %.2fs, lang=%s",
+            len(text), processing_time, language_detected
         )
 
         return STTResult(
@@ -318,10 +343,12 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
             }
         )
 
-    async def _perform_transcription(self, session, audio_path: Path,
+    async def _perform_transcription(self, _session, audio_path: Path,
                                      params: Dict[str, Any]) -> Any:
         """
-        Core transcription operation for ConnectionManager execution.
+        Core transcription operation через STTRetryMixin - устранение дублирования.
+
+        Phase 1.3 Deduplication: Использует стандартную retry логику.
 
         Args:
             session: HTTP session (provided by ConnectionManager)
@@ -331,81 +358,57 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
         Returns:
             OpenAI transcription response
         """
-        with open(audio_path, "rb") as audio_file:
-            # Copy file to BytesIO для async operation
-            audio_data = io.BytesIO(audio_file.read())
-            audio_data.name = audio_path.name
+        # Создаем операцию транскрипции через mixin
+        async def transcription_operation():
+            with open(audio_path, "rb") as audio_file:
+                # Copy file to BytesIO для async operation
+                audio_data = io.BytesIO(audio_file.read())
+                audio_data.name = audio_path.name
 
-            # Execute transcription через OpenAI client
-            return await asyncio.wait_for(
-                self.client.audio.transcriptions.create(
-                    file=audio_data,
-                    **params
-                ),
-                timeout=self.timeout
-            )
+                # Execute transcription через OpenAI client
+                return await asyncio.wait_for(
+                    self.client.audio.transcriptions.create(
+                        file=audio_data,
+                        **params
+                    ),
+                    timeout=self.timeout
+                )
+
+        # Используем стандартную retry логику
+        return await self._standard_transcribe_with_retry(
+            transcription_func=transcription_operation,
+            error_handlers=self._get_openai_error_handler(),
+            provider_name=self.provider_name
+        )
 
     async def _transcribe_with_retry(self, audio_path: Path, params: Dict[str, Any]) -> Any:
         """
-        Legacy retry method for backward compatibility.
+        Legacy retry method replaced with STTRetryMixin - устранение дублирования.
 
-        NOTE: This method is deprecated and should be removed after full ConnectionManager migration.
-        Use _perform_transcription with ConnectionManager instead.
+        Phase 1.3 Deduplication: Использует стандартную retry логику через mixin.
         """
-        if hasattr(self, 'max_retries'):
-            max_retries = self.max_retries
-            retry_delay = getattr(self, 'retry_delay', 1.0)
-        else:
-            max_retries = 3
-            retry_delay = 1.0
+        # Создаем операцию транскрипции через mixin
+        async def transcription_operation():
+            with open(audio_path, "rb") as audio_file:
+                # Copy file to BytesIO для повторных попыток
+                audio_data = io.BytesIO(audio_file.read())
+                audio_data.name = audio_path.name
 
-        last_exception = None
-
-        for attempt in range(max_retries + 1):
-            try:
-                with open(audio_path, "rb") as audio_file:
-                    # Copy file to BytesIO для повторных попыток
-                    audio_data = io.BytesIO(audio_file.read())
-                    audio_data.name = audio_path.name
-
-                    # Async transcription с timeout
-                    return await asyncio.wait_for(
-                        self.client.audio.transcriptions.create(
-                            file=audio_data,
-                            **params
-                        ),
-                        timeout=self.timeout
-                    )
-
-            except asyncio.TimeoutError:
-                raise VoiceServiceTimeout(
-                    operation="STT transcription",
-                    timeout_seconds=float(self.timeout),
-                    provider="openai"
+                # Async transcription с timeout
+                return await asyncio.wait_for(
+                    self.client.audio.transcriptions.create(
+                        file=audio_data,
+                        **params
+                    ),
+                    timeout=self.timeout
                 )
-            except (AuthenticationError, RateLimitError) as e:
-                # Non-retryable errors - reraise immediately
-                logger.error("Non-retryable OpenAI error: %s", e)
-                raise
-            except (APIConnectionError, APIError) as e:
-                last_exception = e
-                if attempt < max_retries:
-                    delay = retry_delay * (2 ** attempt)  # Exponential backoff
-                    logger.warning(
-                        "OpenAI API error (attempt %s), retrying in %ss: %s",
-                        attempt + 1,
-                        delay,
-                        e)
-                    await asyncio.sleep(delay)
-                else:
-                    break
-            except Exception as e:
-                # Non-retryable errors
-                logger.error("Non-retryable OpenAI error: %s", e)
-                raise
 
-        raise AudioProcessingError(
-            f"OpenAI transcription failed after {max_retries + 1} attempts: {last_exception}")
+        # Используем стандартную retry логику
+        return await self._standard_transcribe_with_retry(
+            transcription_func=transcription_operation,
+            error_handlers=self._get_openai_error_handler(),
+            provider_name=self.provider_name
+        )
 
     async def _initial_health_check(self) -> bool:
         """Non-blocking health check при инициализации."""
@@ -413,7 +416,7 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
             # Simple API availability check без реальных запросов
             if self.client:
                 return True
-        except Exception as e:
+        except OSError as e:
             logger.warning("Initial health check failed: %s", e)
         return False
 
@@ -442,7 +445,7 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
                         confidences.append(confidence)
 
                 return sum(confidences) / len(confidences) if confidences else 0.95
-        except Exception as e:
+        except (AttributeError, TypeError) as e:
             logger.debug("Could not extract confidence from segments: %s", e)
 
         return 0.95  # Default high confidence for Whisper
@@ -479,9 +482,9 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
             )
 
             logger.debug(
-                f"OpenAI STT session created - "
-                f"pool_size={getattr(self, 'connection_pool_size', 100)}, "
-                f"keepalive={getattr(self, 'keepalive_timeout', 30)}s"
+                "OpenAI STT session created - pool_size=%s, keepalive=%ss",
+                getattr(self, 'connection_pool_size', 100),
+                getattr(self, 'keepalive_timeout', 30)
             )
 
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -496,7 +499,7 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
 
         try:
             return await self._initial_health_check()
-        except Exception as e:
+        except (OSError, asyncio.TimeoutError) as e:
             logger.warning("OpenAI STT health check failed: %s", e)
             return False
 
@@ -525,3 +528,51 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin):
         normalized = language_mapping.get(language, language)
         logger.debug("Language normalized: %s -> %s", language, normalized)
         return normalized
+
+    def _get_openai_error_handler(self) -> Dict[Type[Exception], Callable[[Exception, int], bool]]:
+        """
+        Создает OpenAI-specific error handlers для STTRetryMixin.
+
+        Phase 1.3 Deduplication: Стандартизация обработки ошибок.
+        """
+        def handle_api_connection_error(error: APIConnectionError,
+                                         attempt: int) -> bool:
+            """Обработка ошибок соединения - retry возможен"""
+            logger.warning(
+                "OpenAI API connection error (attempt %s): %s",
+                attempt + 1,
+                error
+            )
+            return True  # retry
+
+        def handle_api_error(error: APIError, attempt: int) -> bool:
+            """Обработка общих API ошибок - retry возможен"""
+            logger.warning(
+                "OpenAI API error (attempt %s): %s",
+                attempt + 1,
+                error
+            )
+            return True  # retry
+
+        def handle_non_retryable_error(error: Exception,
+                                       _attempt: int) -> bool:
+            """Обработка non-retryable ошибок"""
+            logger.error("Non-retryable OpenAI error: %s", error)
+            return False  # no retry
+
+        return {
+            APIConnectionError: handle_api_connection_error,
+            APIError: handle_api_error,
+            RateLimitError: handle_non_retryable_error,
+            AuthenticationError: handle_non_retryable_error,
+            asyncio.TimeoutError: self._handle_timeout_error
+        }
+
+    def _handle_timeout_error(self, _error: asyncio.TimeoutError,
+                               _attempt: int) -> bool:
+        """Обработка timeout ошибок с конвертацией в VoiceServiceTimeout"""
+        raise VoiceServiceTimeout(
+            operation="STT transcription",
+            timeout_seconds=float(self.timeout),
+            provider="openai"
+        )

@@ -7,7 +7,11 @@ from typing import Any, Dict, List
 
 from app.services.voice_v2.core.schemas import STTRequest
 from .models import STTResult, STTCapabilities
-from ...core.exceptions import VoiceServiceError, ProviderNotAvailableError
+from ...core.exceptions import (
+    VoiceServiceError, 
+    ProviderNotAvailableError,
+    AudioProcessingError
+)
 from ..retry_mixin import RetryMixin
 
 logger = logging.getLogger(__name__)
@@ -40,7 +44,11 @@ class BaseSTTProvider(ABC, RetryMixin):
 
         # Initialize retry configuration через RetryMixin
         self._retry_config = self._get_retry_config(config)
-        logger.debug("STT provider %s with retry config: %s attempts", provider_name, self._retry_config.max_attempts)
+        logger.debug(
+            "STT provider %s with retry config: %s attempts",
+            provider_name, 
+            self._retry_config.max_attempts
+        )
 
         # Quick config validation
         missing = [f for f in self.get_required_config_fields() if f not in config]
@@ -94,7 +102,7 @@ class BaseSTTProvider(ABC, RetryMixin):
             # Post-process result
             return self._enrich_transcription_result(result, start_time)
 
-        except Exception as e:
+        except (ProviderNotAvailableError, AudioProcessingError) as e:
             self._handle_transcription_error(e)
 
     async def _ensure_provider_ready(self) -> None:
@@ -195,7 +203,9 @@ class BaseSTTProvider(ABC, RetryMixin):
             }
 
         if not isinstance(audio_data, bytes):
-            self.logger.error(f"Неверный тип аудио данных: {type(audio_data)}")
+            self.logger.error(
+                "Неверный тип аудио данных: %s", type(audio_data)
+            )
             return {
                 "valid": False,
                 "error": "Неверный тип аудио данных",
@@ -210,12 +220,25 @@ class BaseSTTProvider(ABC, RetryMixin):
             self.logger.warning("Формат аудио не указан, используем автоопределение")
             return {"valid": True}
 
+        # Исправлено: обрабатываем входной параметр тоже как enum или строку
+        audio_format_str = audio_format
+        if hasattr(audio_format, 'value'):  # Это enum
+            audio_format_str = audio_format.value
+        
         supported_formats = self.get_supported_formats()
-        if audio_format.lower() not in [fmt.lower() for fmt in supported_formats]:
-            self.logger.error(f"Неподдерживаемый формат: {audio_format}")
+        # Исправлено: обрабатываем как строки, так и enum объекты
+        supported_format_strings = []
+        for fmt in supported_formats:
+            if hasattr(fmt, 'value'):  # Это enum
+                supported_format_strings.append(fmt.value.lower())
+            else:  # Это строка
+                supported_format_strings.append(fmt.lower())
+        
+        if audio_format_str.lower() not in supported_format_strings:
+            self.logger.error("Неподдерживаемый формат: %s", audio_format_str)
             return {
                 "valid": False,
-                "error": f"Формат {audio_format} не поддерживается",
+                "error": f"Формат {audio_format_str} не поддерживается",
                 "error_code": "UNSUPPORTED_FORMAT",
                 "supported_formats": supported_formats
             }
@@ -230,7 +253,7 @@ class BaseSTTProvider(ABC, RetryMixin):
 
         supported_languages = self.get_supported_languages()
         if language not in supported_languages:
-            self.logger.warning(f"Язык {language} может быть не поддержан")
+            self.logger.warning("Язык %s может быть не поддержан", language)
             # Не блокируем запрос, просто предупреждаем
 
         return {"valid": True}
@@ -241,7 +264,10 @@ class BaseSTTProvider(ABC, RetryMixin):
         max_size_mb = getattr(self, 'max_file_size_mb', 25)  # По умолчанию 25MB
 
         if file_size_mb > max_size_mb:
-            self.logger.error(f"Файл слишком большой: {file_size_mb:.2f}MB > {max_size_mb}MB")
+            self.logger.error(
+                "Файл слишком большой: %.2fMB > %sMB", 
+                file_size_mb, max_size_mb
+            )
             return {
                 "valid": False,
                 "error": f"Размер файла превышает лимит ({file_size_mb:.2f}MB > {max_size_mb}MB)",
@@ -254,9 +280,9 @@ class BaseSTTProvider(ABC, RetryMixin):
 
     def _validate_provider_specific_constraints(
         self,
-        audio_data: bytes,
-        audio_format: str,
-        language: str
+        _audio_data: bytes,
+        _audio_format: str,
+        _language: str
     ) -> Dict[str, Any]:
         """
         Валидирует специфичные для провайдера ограничения.
@@ -277,7 +303,7 @@ class BaseSTTProvider(ABC, RetryMixin):
             caps = await self.get_capabilities()
             return len(caps.supported_formats) > 0
 
-        except Exception:
+        except (OSError, ConnectionError):
             return False
 
     def get_status_info(self) -> Dict[str, Any]:
@@ -291,4 +317,5 @@ class BaseSTTProvider(ABC, RetryMixin):
 
     def __str__(self) -> str:
         """String representation for logging."""
-        return f"STTProvider({self.provider_name}, enabled={self.enabled}, priority={self.priority})"
+        return (f"STTProvider({self.provider_name}, "
+                f"enabled={self.enabled}, priority={self.priority})")

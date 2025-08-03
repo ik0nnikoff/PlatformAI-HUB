@@ -62,9 +62,10 @@ class SimplifiedSTTProviderFactory:
         """Register STT provider class."""
         self._provider_classes[name] = provider_class
         self._provider_configs[name] = config or {}
-        self._logger.info(f"Registered STT provider: {name}")
+        self._logger.info("Registered STT provider: %s", name)
 
-    def create_provider(self, name: str, config: Optional[Dict[str, Any]] = None) -> BaseSTTProvider:
+    def create_provider(self, name: str, 
+                       config: Optional[Dict[str, Any]] = None) -> BaseSTTProvider:
         """Create STT provider instance."""
         if name not in self._provider_classes:
             raise ValueError(f"Unknown STT provider: {name}")
@@ -80,11 +81,11 @@ class SimplifiedSTTProviderFactory:
                 provider_name=name,
                 config=provider_config
             )
-            self._logger.info(f"Created STT provider: {name}")
+            self._logger.info("Created STT provider: %s", name)
             return provider
 
         except Exception as e:
-            self._logger.error(f"Failed to create STT provider {name}: {e}")
+            self._logger.error("Failed to create STT provider %s: %s", name, e)
             raise
 
     def get_available_providers(self) -> list[str]:
@@ -100,7 +101,7 @@ class SimplifiedSTTProviderFactory:
 
 # Backward compatibility aliases
 STTProviderManager = SimplifiedSTTProviderFactory
-LazySTTProviderProxy = None  # Removed enterprise pattern
+LAZY_STT_PROVIDER_PROXY = None  # Removed enterprise pattern
 
 
 __all__ = [

@@ -36,8 +36,7 @@ from app.services.voice_v2.providers.tts.models import (
 )
 from app.services.voice_v2.core.interfaces import ProviderType, AudioFormat
 from app.services.voice_v2.providers.retry_mixin import provider_operation
-from ...infrastructure.minio_manager import MinioFileManager
-from ...core.config import get_config
+
 logger = logging.getLogger(__name__)
 
 
@@ -97,7 +96,12 @@ class OpenAITTSProvider(BaseTTSProvider):
 
     def get_required_config_fields(self) -> List[str]:
         """Required configuration fields for OpenAI TTS."""
-        return ["api_key"] if not self._openai_config["api_key"] else []
+        # Check if we have OpenAI API key from settings or config
+        has_api_key = (
+            hasattr(self, '_openai_config') and self._openai_config.get("api_key") or
+            (settings.OPENAI_API_KEY and settings.OPENAI_API_KEY.get_secret_value())
+        )
+        return [] if has_api_key else ["api_key"]
 
     async def get_capabilities(self) -> TTSCapabilities:
         """
@@ -187,15 +191,34 @@ class OpenAITTSProvider(BaseTTSProvider):
 
         processing_time = time.time() - start_time
 
-        # Upload to MinIO and get URL (following reference system pattern)
-        audio_url = await self._upload_audio_to_storage(audio_data, request)
+        # Upload audio to storage using TTSStorageMixin
+        from .storage_mixin import AudioUploadParams
+
+        upload_params = AudioUploadParams(
+            audio_data=audio_data,
+            provider_name="openai",
+            agent_id=getattr(request, 'agent_id', 'default'),
+            user_id=getattr(request, 'user_id', 'default'),
+            voice=synthesis_params.get("voice", self._openai_config["voice"]),
+            language=request.language or "en-US",
+            audio_format="mp3",
+            additional_metadata={
+                "model": synthesis_params["model"],
+                "speed": synthesis_params.get("speed", 1.0),
+                "response_format": synthesis_params["response_format"],
+                "text_hash": hashlib.sha256(request.text.encode()).hexdigest()
+            },
+            filename_prefix="openai_tts"
+        )
+
+        audio_url = await self._upload_audio_to_storage(upload_params)
 
         # Create result with both audio_data and URL for compatibility
         return TTSResult(
             audio_data=audio_data,  # Include raw audio data
             audio_url=audio_url,    # Keep URL for storage reference
             text_length=len(request.text),
-            audio_duration=await self.estimate_audio_duration(request.text),
+            audio_duration=self._estimate_audio_duration(request.text),
             processing_time=processing_time,
             voice_used=synthesis_params.get("voice", self._openai_config["voice"]),
             language_used=request.language,
@@ -337,83 +360,6 @@ class OpenAITTSProvider(BaseTTSProvider):
         raise AudioProcessingError(
             f"Synthesis failed after {max_retries} retries: {error}"
         )
-
-    async def _upload_audio_to_storage(self, audio_data: bytes, request: TTSRequest) -> str:
-        """
-        Upload generated audio to MinIO storage and return presigned URL.
-
-        Args:
-            audio_data: Synthesized audio bytes
-            request: Original TTS request
-
-        Returns:
-            Presigned URL for audio file access
-
-        Raises:
-            AudioProcessingError: If upload fails
-        """
-        try:
-            # Get voice configuration
-            voice_config = get_config()
-            storage_config = voice_config.file_storage
-            
-            # Initialize MinIO manager
-            minio_manager = MinioFileManager(
-                endpoint=storage_config.minio_endpoint or "127.0.0.1:9000",
-                access_key=storage_config.minio_access_key or "minioadmin", 
-                secret_key=storage_config.minio_secret_key or "minioadmin",
-                bucket_name=storage_config.minio_bucket or "voice-files",
-                secure=storage_config.minio_secure or False
-            )
-            
-            # Ensure MinIO manager is initialized
-            await minio_manager.initialize()
-
-            # Generate unique filename and object key
-            text_hash = hashlib.sha256(request.text.encode()).hexdigest()[:8]
-            timestamp = int(time.time() * 1000)
-            format_ext = "mp3"  # OpenAI TTS default format
-            filename = f"tts_openai_{text_hash}_{timestamp}.{format_ext}"
-            
-            agent_id = getattr(request, 'agent_id', 'default')
-            user_id = getattr(request, 'user_id', 'default')
-            object_key = f"tts/openai/{agent_id}/{user_id}/{filename}"
-
-            # Upload file to MinIO
-            await minio_manager.upload_file(
-                file_data=audio_data,
-                object_key=object_key,
-                content_type="audio/mpeg",
-                metadata={
-                    "provider": "openai",
-                    "agent_id": agent_id,
-                    "user_id": user_id,
-                    "voice": getattr(request, 'voice', 'alloy'),
-                    "language": getattr(request, 'language', 'en-US'),
-                    "format": format_ext,
-                    "text_hash": text_hash,
-                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-            )
-
-            # Generate presigned URL (expires in 24 hours)
-            presigned_url = await minio_manager.generate_presigned_url(
-                object_key=object_key,
-                expires_hours=24,
-                method="GET"
-            )
-
-            # Cleanup MinIO manager
-            await minio_manager.cleanup()
-
-            logger.debug("Audio uploaded to MinIO: %s (size: %d bytes)", 
-                        object_key, len(audio_data))
-
-            return presigned_url
-
-        except Exception as e:
-            logger.error("Failed to upload audio to MinIO storage: %s", e, exc_info=True)
-            raise AudioProcessingError(f"Audio storage upload failed: {e}") from e
 
     async def synthesize_long_text(self, text: str, **kwargs) -> List[TTSResult]:
         """
