@@ -56,15 +56,15 @@ class MetricsBackendInterface(Protocol):
 
     def store_metric(self, record: MetricRecord) -> None:
         """Store single metric record"""
-        ...
+        raise NotImplementedError
 
     def get_metrics(self, name: Optional[str] = None, limit: int = 100) -> List[MetricRecord]:
         """Get stored metrics"""
-        ...
+        raise NotImplementedError
 
     def clear_metrics(self) -> None:
         """Clear all stored metrics"""
-        ...
+        raise NotImplementedError
 
 
 class MemoryMetricsBackend:
@@ -73,7 +73,9 @@ class MemoryMetricsBackend:
     def __init__(self, max_records: int = 1000):
         self.max_records = max_records
         self.metrics: deque[MetricRecord] = deque(maxlen=max_records)
-        self.metrics_by_name: Dict[str, deque[MetricRecord]] = defaultdict(lambda: deque(maxlen=100))
+        self.metrics_by_name: Dict[str, deque[MetricRecord]] = defaultdict(
+            lambda: deque(maxlen=100)
+        )
 
     def store_metric(self, record: MetricRecord) -> None:
         """Store metric in memory"""
@@ -107,8 +109,11 @@ class VoiceMetricsCollector:
         self.enabled = True
         logger.info("VoiceMetricsCollector initialized with simplified architecture")
 
-    def collect_metric(self, name: str, value: float, metric_type: MetricType = MetricType.GAUGE,
-                      labels: Optional[Dict[str, str]] = None, priority: MetricPriority = MetricPriority.NORMAL) -> None:
+    def collect_metric(
+        self, name: str, value: float, metric_type: MetricType = MetricType.GAUGE,
+        labels: Optional[Dict[str, str]] = None,
+        priority: MetricPriority = MetricPriority.NORMAL
+    ) -> None:
         """Collect single metric"""
         if not self.enabled:
             return
@@ -123,9 +128,9 @@ class VoiceMetricsCollector:
 
         try:
             self.backend.store_metric(record)
-            logger.debug(f"Collected metric: {name}={value}")
+            logger.debug("Collected metric: %s=%s", name, value)
         except Exception as e:
-            logger.error(f"Failed to store metric {name}: {e}")
+            logger.error("Failed to store metric %s: %s", name, e)
 
     def collect_counter(self, name: str, value: float = 1.0, labels: Optional[Dict[str, str]] = None) -> None:
         """Collect counter metric"""
@@ -151,7 +156,7 @@ class VoiceMetricsCollector:
     def set_enabled(self, enabled: bool) -> None:
         """Enable/disable metrics collection"""
         self.enabled = enabled
-        logger.info(f"Metrics collection {'enabled' if enabled else 'disabled'}")
+        logger.info("Metrics collection %s", 'enabled' if enabled else 'disabled')
 
 
 def create_metrics_collector(backend: Optional[MetricsBackendInterface] = None) -> VoiceMetricsCollector:

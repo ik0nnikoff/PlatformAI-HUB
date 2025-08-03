@@ -122,7 +122,7 @@ class MetricsHelpers:
     @staticmethod
     def _calculate_provider_metrics(metrics_list: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Calculate provider-specific metrics"""
-        providers = {}
+        providers: Dict[str, Dict[str, Any]] = {}
 
         for metric in metrics_list:
             provider = metric.get('provider')

@@ -66,7 +66,7 @@ class TTSCapabilities:
     supports_speed_control: bool = False
     supports_pitch_control: bool = False
     supports_custom_voices: bool = False
-    quality_levels: List[TTSQuality] = None
+    quality_levels: Optional[List[TTSQuality]] = None
 
     def __post_init__(self):
         if self.quality_levels is None:

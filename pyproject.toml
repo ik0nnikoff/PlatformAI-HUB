@@ -61,6 +61,7 @@ dependencies = [
     "urllib3>=2.5.0",
     "lizard>=1.17.31",
     "pylint>=3.3.7",
+    "radon>=6.0.1",
 ]
 
 [tool.uv.sources]
@@ -71,6 +72,11 @@ dependencies = [
 [build-system]
 requires = ["setuptools>=65.5.1"]
 build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.17.1",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]  # Look in the root directory

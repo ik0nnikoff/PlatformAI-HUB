@@ -33,7 +33,8 @@ from .base_tts import BaseTTSProvider
 from .models import TTSRequest, TTSResult, TTSCapabilities, TTSQuality
 from ...core.exceptions import VoiceServiceError, AudioProcessingError, ProviderNotAvailableError
 from ...core.interfaces import ProviderType, AudioFormat
-
+from ...infrastructure.minio_manager import MinioFileManager
+from ...core.config import get_config
 logger = logging.getLogger(__name__)
 
 
@@ -487,30 +488,89 @@ class YandexTTSProvider(BaseTTSProvider):
 
     async def _upload_audio_to_storage(
         self,
-        _: bytes,
+        audio_data: bytes,
         agent_id: str,
         user_id: str
     ) -> str:
         """
-        Upload synthesized audio to storage and return URL.
+        Upload synthesized audio to MinIO storage and return presigned URL.
 
-        Follows the same pattern as Google TTS for consistency.
         Args:
-            _: Audio data (unused in base implementation)
+            audio_data: Synthesized audio bytes
+            agent_id: Agent identifier
+            user_id: User identifier
+
+        Returns:
+            Presigned URL for audio file access
+
+        Raises:
+            AudioProcessingError: If upload fails
         """
         try:
-            # Generate unique filename
-            timestamp = int(time.time() * 1000)  # milliseconds
-            filename = (f"tts_yandex_{agent_id}_{user_id}_{timestamp}."
-                       f"{self._yandex_config['audio_format']}")
+            # Get voice configuration
+            voice_config = get_config()
+            storage_config = voice_config.file_storage
+            
+            # Initialize MinIO manager
+            minio_manager = MinioFileManager(
+                endpoint=storage_config.minio_endpoint or "127.0.0.1:9000",
+                access_key=storage_config.minio_access_key or "minioadmin", 
+                secret_key=storage_config.minio_secret_key or "minioadmin",
+                bucket_name=storage_config.minio_bucket or "voice-files",
+                secure=storage_config.minio_secure or False
+            )
+            
+            # Ensure MinIO manager is initialized
+            await minio_manager.initialize()
 
-            # TODO: Implement MinIO upload when MinIO manager is available
-            # For now, return a placeholder URL
-            # In production, this would upload to MinIO and return presigned URL
-            return f"https://storage.example.com/tts/{filename}"
+            # Generate unique object key
+            timestamp = int(time.time() * 1000)  # milliseconds for uniqueness
+            audio_format = self._yandex_config['audio_format']
+            object_key = (f"tts/yandex/{agent_id}/{user_id}/"
+                         f"tts_yandex_{timestamp}.{audio_format}")
+
+            # Determine content type based on format
+            content_type_mapping = {
+                "mp3": "audio/mpeg",
+                "wav": "audio/wav", 
+                "ogg": "audio/ogg",
+                "oggopus": "audio/ogg"
+            }
+            content_type = content_type_mapping.get(audio_format, "audio/mpeg")
+
+            # Upload file to MinIO
+            await minio_manager.upload_file(
+                file_data=audio_data,
+                object_key=object_key,
+                content_type=content_type,
+                metadata={
+                    "provider": "yandex",
+                    "agent_id": agent_id,
+                    "user_id": user_id,
+                    "voice": self._yandex_config["voice_name"],
+                    "language": self._yandex_config["language_code"],
+                    "format": audio_format,
+                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+            )
+
+            # Generate presigned URL (expires in 24 hours)
+            presigned_url = await minio_manager.generate_presigned_url(
+                object_key=object_key,
+                expires_hours=24,
+                method="GET"
+            )
+
+            # Cleanup MinIO manager
+            await minio_manager.cleanup()
+
+            logger.debug("Audio uploaded to MinIO: %s (size: %d bytes)", 
+                        object_key, len(audio_data))
+
+            return presigned_url
 
         except Exception as e:
-            logger.error("Failed to upload audio to storage: %s", e)
+            logger.error("Failed to upload audio to MinIO storage: %s", e, exc_info=True)
             raise AudioProcessingError(f"Audio storage upload failed: {e}") from e
 
     def _generate_metadata(

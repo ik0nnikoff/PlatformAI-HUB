@@ -82,11 +82,11 @@ class VoiceProviderFactory:
 
             # Cache and return
             self._stt_cache[provider_type] = provider
-            logger.info(f"Created STT provider: {provider_type}")
+            logger.info("Created STT provider: %s", provider_type)
             return provider
 
         except Exception as e:
-            logger.error(f"Failed to create STT provider {provider_type}: {e}")
+            logger.error("Failed to create STT provider %s: %s", provider_type, e)
             raise
 
     async def create_tts_provider(
@@ -123,11 +123,11 @@ class VoiceProviderFactory:
 
             # Cache and return
             self._tts_cache[provider_type] = provider
-            logger.info(f"Created TTS provider: {provider_type}")
+            logger.info("Created TTS provider: %s", provider_type)
             return provider
 
         except Exception as e:
-            logger.error(f"Failed to create TTS provider {provider_type}: {e}")
+            logger.error("Failed to create TTS provider %s: %s", provider_type, e)
             raise
 
     def get_available_stt_providers(self) -> list[ProviderType]:
@@ -148,7 +148,7 @@ class VoiceProviderFactory:
                 try:
                     await provider.cleanup()
                 except Exception as e:
-                    logger.warning(f"Error cleaning up STT provider: {e}")
+                    logger.warning("Error cleaning up STT provider: %s", e)
 
         # Cleanup TTS providers
         for provider in self._tts_cache.values():
@@ -156,7 +156,7 @@ class VoiceProviderFactory:
                 try:
                     await provider.cleanup()
                 except Exception as e:
-                    logger.warning(f"Error cleaning up TTS provider: {e}")
+                    logger.warning("Error cleaning up TTS provider: %s", e)
 
         self._stt_cache.clear()
         self._tts_cache.clear()

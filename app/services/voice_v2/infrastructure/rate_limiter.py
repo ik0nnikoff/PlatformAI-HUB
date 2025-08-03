@@ -52,7 +52,10 @@ class SimpleRateLimiter(RateLimiterInterface):
     async def initialize(self) -> None:
         """Initialize rate limiter"""
         self._initialized = True
-        logger.info(f"SimpleRateLimiter initialized - limit: {self.max_requests}/{self.window_seconds}s")
+        logger.info(
+            "SimpleRateLimiter initialized - limit: %s/%ss",
+            self.max_requests, self.window_seconds
+        )
 
     async def cleanup(self) -> None:
         """Cleanup resources"""
@@ -66,7 +69,7 @@ class SimpleRateLimiter(RateLimiterInterface):
             info = await self.check_rate_limit(user_id, operation)
             return info.allowed
         except Exception as e:
-            logger.error(f"Error checking rate limit for {user_id}: {e}")
+            logger.error("Error checking rate limit for %s: %s", user_id, e)
             return self.fail_open
 
     async def check_rate_limit(self, user_id: str, operation: str = "default") -> RateLimitInfo:
@@ -75,7 +78,8 @@ class SimpleRateLimiter(RateLimiterInterface):
         now = time.time()
 
         # Initialize or reset window if needed
-        if key not in self._window_starts or (now - self._window_starts[key]) >= self.window_seconds:
+        if (key not in self._window_starts or
+            (now - self._window_starts[key]) >= self.window_seconds):
             self._window_starts[key] = now
             self._request_counts[key] = 0
 

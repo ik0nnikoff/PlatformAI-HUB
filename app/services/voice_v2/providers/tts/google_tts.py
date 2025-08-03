@@ -27,11 +27,12 @@ from app.services.voice_v2.providers.tts.base_tts import BaseTTSProvider
 from app.services.voice_v2.providers.tts.models import TTSRequest, TTSQuality, TTSCapabilities
 from app.services.voice_v2.core.exceptions import (
     AudioProcessingError,
-    ConfigurationError
+    VoiceConfigurationError
 )
 from app.services.voice_v2.core.interfaces import ProviderType, AudioFormat
 from app.services.voice_v2.providers.retry_mixin import provider_operation
-
+from ...infrastructure.minio_manager import MinioFileManager
+from ...core.config import get_config
 logger = logging.getLogger(__name__)
 
 
@@ -145,10 +146,16 @@ class GoogleTTSProvider(BaseTTSProvider):
         from Phase 1.2.3 performance optimization.
         """
         if not self._google_config["credentials_path"]:
-            raise ConfigurationError("Google Cloud credentials path not configured")
+            raise VoiceConfigurationError(
+                config_field="credentials_path",
+                reason="Google Cloud credentials path not configured"
+            )
 
         if not self._google_config["project_id"]:
-            raise ConfigurationError("Google Cloud project ID not configured")
+            raise VoiceConfigurationError(
+                config_field="project_id",
+                reason="Google Cloud project ID not configured"
+            )
 
         try:
             # Initialize Google Cloud TTS client
@@ -429,18 +436,77 @@ class GoogleTTSProvider(BaseTTSProvider):
         request: TTSRequest
     ) -> str:
         """
-        Upload generated audio to storage and return URL.
+        Upload generated audio to MinIO storage and return presigned URL.
 
-        Follows the same pattern as OpenAI TTS for consistency.
+        Args:
+            audio_data: Synthesized audio bytes
+            filename: Generated filename for the audio file
+            request: Original TTS request
+
+        Returns:
+            Presigned URL for audio file access
+
+        Raises:
+            AudioProcessingError: If upload fails
         """
         try:
-            # TODO: Implement MinIO upload when MinIO manager is available
-            # For now, return a placeholder URL
-            # In production, this would upload to MinIO and return presigned URL
-            return f"https://storage.example.com/tts/{filename}"
+            # Get voice configuration
+            voice_config = get_config()
+            storage_config = voice_config.file_storage
+            
+            # Initialize MinIO manager
+            minio_manager = MinioFileManager(
+                endpoint=storage_config.minio_endpoint or "127.0.0.1:9000",
+                access_key=storage_config.minio_access_key or "minioadmin", 
+                secret_key=storage_config.minio_secret_key or "minioadmin",
+                bucket_name=storage_config.minio_bucket or "voice-files",
+                secure=storage_config.minio_secure or False
+            )
+            
+            # Ensure MinIO manager is initialized
+            await minio_manager.initialize()
+
+            # Generate object key from filename  
+            agent_id = getattr(request, 'agent_id', 'default')
+            user_id = getattr(request, 'user_id', 'default')
+            object_key = f"tts/google/{agent_id}/{user_id}/{filename}"
+
+            # Determine content type (Google TTS typically outputs MP3)
+            content_type = "audio/mpeg"  # Google TTS default format
+
+            # Upload file to MinIO
+            await minio_manager.upload_file(
+                file_data=audio_data,
+                object_key=object_key,
+                content_type=content_type,
+                metadata={
+                    "provider": "google",
+                    "agent_id": agent_id,
+                    "user_id": user_id,
+                    "voice": getattr(request, 'voice', 'default'),
+                    "language": getattr(request, 'language', 'en-US'),
+                    "format": "mp3",
+                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+            )
+
+            # Generate presigned URL (expires in 24 hours)
+            presigned_url = await minio_manager.generate_presigned_url(
+                object_key=object_key,
+                expires_hours=24,
+                method="GET"
+            )
+
+            # Cleanup MinIO manager
+            await minio_manager.cleanup()
+
+            logger.debug("Audio uploaded to MinIO: %s (size: %d bytes)", 
+                        object_key, len(audio_data))
+
+            return presigned_url
 
         except Exception as e:
-            logger.error("Failed to upload audio to storage: %s", e)
+            logger.error("Failed to upload audio to MinIO storage: %s", e, exc_info=True)
             raise AudioProcessingError(f"Audio storage upload failed: {e}") from e
 
     def _estimate_audio_duration(self, text: str, speaking_rate: float = 1.0) -> float:

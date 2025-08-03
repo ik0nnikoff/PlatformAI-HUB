@@ -185,8 +185,9 @@ def sanitize_filename(filename: str) -> str:
 
 def format_bytes(size_bytes: int) -> str:
     """Форматирует размер в байтах в человеко-читаемый формат."""
+    size_float = float(size_bytes)
     for unit in ['B', 'KB', 'MB', 'GB']:
-        if size_bytes < 1024:
-            return f"{size_bytes:.1f} {unit}"
-        size_bytes /= 1024
-    return f"{size_bytes:.1f} TB"
+        if size_float < 1024:
+            return f"{size_float:.1f} {unit}"
+        size_float /= 1024
+    return f"{size_float:.1f} TB"

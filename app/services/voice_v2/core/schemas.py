@@ -128,11 +128,12 @@ class STTRequest(BaseModel):
 
     audio_data: bytes = Field(..., description="Audio file data")
     language: Optional[str] = Field(default="auto", description="Audio language code")
-    format: Optional[AudioFormat] = Field(default=None, description="Audio format")
+    audio_format: Optional[AudioFormat] = Field(default=None, description="Audio format")
 
     @field_validator('audio_data')
     @classmethod
     def validate_audio_data(cls, v):
+        """Validate that audio data is not empty"""
         if len(v) == 0:
             raise ValueError('Audio data cannot be empty')
         return v
@@ -141,7 +142,7 @@ class STTRequest(BaseModel):
         """Generate cache key for STT request"""
         content = base64.b64encode(self.audio_data).decode()[
             :100]  # First 100 chars of encoded data
-        key_data = f"{content}_{self.format}_{self.language}"
+        key_data = f"{content}_{self.audio_format}_{self.language}"
         return hashlib.sha256(key_data.encode()).hexdigest()
 
     model_config = ConfigDict(extra="forbid")
@@ -166,10 +167,12 @@ class TTSRequest(BaseModel):
     language: Optional[str] = Field(default="ru", description="Target language")
     voice: Optional[str] = Field(default=None, description="Voice ID or name")
     speed: Optional[float] = Field(default=1.0, ge=0.25, le=4.0, description="Speech speed")
+    format: AudioFormat = Field(default=AudioFormat.OGG, description="Output audio format")
 
     @field_validator('text')
     @classmethod
     def validate_text(cls, v):
+        """Validate that text is not empty or whitespace only"""
         if not v.strip():
             raise ValueError('Text cannot be empty or whitespace only')
         return v
@@ -195,6 +198,7 @@ class TTSResponse(BaseModel):
     @field_validator('audio_data')
     @classmethod
     def validate_audio_data(cls, v):
+        """Validate that audio data is not empty"""
         if len(v) == 0:
             raise ValueError('Audio data cannot be empty')
         return v

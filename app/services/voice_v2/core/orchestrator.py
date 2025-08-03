@@ -151,8 +151,8 @@ class VoiceServiceOrchestrator:
         if self._enhanced_factory:
             logger.info("Using Enhanced Factory - providers will be created on demand")
         else:
-            stt_count = len(self._stt_providers)
-            tts_count = len(self._tts_providers)
+            stt_count = len(self._stt_providers) if isinstance(self._stt_providers, dict) else 0
+            tts_count = len(self._tts_providers) if isinstance(self._tts_providers, dict) else 0
             if stt_count == 0 and tts_count == 0:
                 logger.warning("No providers configured - operations may fail")
             else:

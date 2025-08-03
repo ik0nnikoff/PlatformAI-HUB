@@ -30,6 +30,11 @@ class RetryConfig:
         self.max_delay = max_delay
         self.backoff_factor = backoff_factor
 
+    @property
+    def max_retries(self) -> int:
+        """Alias for max_attempts for backward compatibility."""
+        return self.max_attempts
+
 
 class RetryMixin:
     """
@@ -96,7 +101,10 @@ class RetryMixin:
 
         # All attempts failed
         logger.error(f"All {retry_config.max_attempts} attempts failed")
-        raise last_exception
+        if last_exception is not None:
+            raise last_exception
+        else:
+            raise RuntimeError("All retry attempts failed with no exception")
 
     def _retry_sync_operation(
         self,
@@ -134,7 +142,10 @@ class RetryMixin:
 
         # All attempts failed
         logger.error(f"All {retry_config.max_attempts} attempts failed")
-        raise last_exception
+        if last_exception is not None:
+            raise last_exception
+        else:
+            raise RuntimeError("All retry attempts failed with no exception")
 
 
 def provider_operation(operation_name: str):

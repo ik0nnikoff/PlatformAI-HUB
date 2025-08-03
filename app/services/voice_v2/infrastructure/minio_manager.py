@@ -55,38 +55,36 @@ class MinioFileManager(FileManagerInterface):
             region: MinIO region
             max_pool_size: Maximum connection pool size
         """
-        # MinIO configuration consolidated into single dictionary
-        self._minio_config = {
-            "endpoint": endpoint,
-            "access_key": access_key,
-            "secret_key": secret_key,
-            "bucket_name": bucket_name,
-            "secure": secure,
-            "region": region,
-            "max_pool_size": max_pool_size
-        }
+        # MinIO configuration with proper typing
+        self._endpoint = endpoint
+        self._access_key = access_key
+        self._secret_key = secret_key
+        self._bucket_name = bucket_name
+        self._secure = secure
+        self._region = region
+        self._max_pool_size = max_pool_size
 
         # Internal state - lazy initialization pattern
         self._client: Optional[Minio] = None
         self._initialized = False
-        self._executor = None
+        self._executor: Optional[ThreadPoolExecutor] = None
 
     async def initialize(self) -> None:
         """Initialize MinIO client with connection pooling"""
         try:
             # Create thread pool executor for blocking I/O
             self._executor = ThreadPoolExecutor(
-                max_workers=self._minio_config["max_pool_size"],
+                max_workers=self._max_pool_size,
                 thread_name_prefix="minio-"
             )
 
             # Create MinIO client
             self._client = Minio(
-                endpoint=self._minio_config["endpoint"],
-                access_key=self._minio_config["access_key"],
-                secret_key=self._minio_config["secret_key"],
-                secure=self._minio_config["secure"],
-                region=self._minio_config["region"]
+                endpoint=self._endpoint,
+                access_key=self._access_key,
+                secret_key=self._secret_key,
+                secure=self._secure,
+                region=self._region
             )
 
             # Ensure bucket exists
@@ -94,7 +92,7 @@ class MinioFileManager(FileManagerInterface):
 
             self._initialized = True
             logger.info("MinioFileManager initialized - bucket: %s",
-                       self._minio_config["bucket_name"])
+                       self._bucket_name)
 
         except Exception as e:
             logger.error("Failed to initialize MinioFileManager: %s", e, exc_info=True)
@@ -121,17 +119,19 @@ class MinioFileManager(FileManagerInterface):
         Upload file to MinIO storage
 
         Args:
-            file_data: Binary file data
-            object_key: Unique object key for the file
-            content_type: MIME content type
-            metadata: Additional file metadata
+            file_data: File binary data
+            object_key: Object key in bucket
+            content_type: MIME type of the file
+            metadata: Optional metadata dictionary
 
         Returns:
-            VoiceFileInfo with upload details
+            VoiceFileInfo: Information about uploaded file
 
         Raises:
             VoiceServiceError: If upload fails
         """
+        if self._client is None:
+            raise VoiceServiceError("MinIO client not initialized")
         await self._ensure_initialized()
 
         try:
@@ -155,12 +155,14 @@ class MinioFileManager(FileManagerInterface):
             logger.debug("File uploaded: %s (%s bytes)", object_key, len(file_data))
 
             return VoiceFileInfo(
-                object_key=object_key,
-                bucket_name=self._minio_config["bucket_name"],
-                file_size=len(file_data),
-                content_type=content_type,
-                upload_time=datetime.utcnow(),
-                metadata=upload_metadata
+                file_id=str(uuid.uuid4()),
+                original_filename=metadata.get("original_filename", object_key),
+                mime_type=content_type,
+                size_bytes=len(file_data),
+                format=content_type.split('/')[-1] if '/' in content_type else 'unknown',
+                created_at=datetime.utcnow().isoformat(),
+                minio_bucket=self._bucket_name,
+                minio_key=object_key
             )
 
         except Exception as e:
@@ -184,7 +186,7 @@ class MinioFileManager(FileManagerInterface):
         await self._ensure_initialized()
 
         try:
-            bucket = bucket_name or self._minio_config["bucket_name"]
+            bucket = bucket_name or self._bucket_name
             data = await asyncio.get_event_loop().run_in_executor(
                 self._executor,
                 lambda: self._download_sync_with_bucket(object_key, bucket)
@@ -199,6 +201,9 @@ class MinioFileManager(FileManagerInterface):
 
     def _download_sync_with_bucket(self, object_key: str, bucket_name: str) -> bytes:
         """Synchronous download operation with bucket selection"""
+        if self._client is None:
+            raise VoiceServiceError("MinIO client not initialized")
+
         response = self._client.get_object(
             bucket_name=bucket_name,
             object_name=object_key
@@ -329,7 +334,7 @@ class MinioFileManager(FileManagerInterface):
             await asyncio.get_event_loop().run_in_executor(
                 self._executor,
                 self._client.stat_object,
-                self._minio_config["bucket_name"],
+                self._bucket_name,
                 object_key
             )
             return True
@@ -383,17 +388,17 @@ class MinioFileManager(FileManagerInterface):
             bucket_exists = await asyncio.get_event_loop().run_in_executor(
                 self._executor,
                 self._client.bucket_exists,
-                self._minio_config["bucket_name"]
+                self._bucket_name
             )
 
             if not bucket_exists:
                 await asyncio.get_event_loop().run_in_executor(
                     self._executor,
                     self._client.make_bucket,
-                    self._minio_config["bucket_name"],
-                    self._minio_config["region"]
+                    self._bucket_name,
+                    self._region
                 )
-                logger.info("Created bucket: %s", self._minio_config["bucket_name"])
+                logger.info("Created bucket: %s", self._bucket_name)
 
         except Exception as e:
             logger.error("Bucket creation/check failed: %s", e, exc_info=True)
@@ -408,7 +413,7 @@ class MinioFileManager(FileManagerInterface):
     ) -> None:
         """Synchronous upload operation"""
         self._client.put_object(
-            bucket_name=self._minio_config["bucket_name"],
+            bucket_name=self._bucket_name,
             object_name=object_key,
             data=BytesIO(file_data),
             length=len(file_data),
@@ -419,7 +424,7 @@ class MinioFileManager(FileManagerInterface):
     def _download_sync(self, object_key: str) -> bytes:
         """Synchronous download operation"""
         response = self._client.get_object(
-            bucket_name=self._minio_config["bucket_name"],
+            bucket_name=self._bucket_name,
             object_name=object_key
         )
         try:
@@ -431,7 +436,7 @@ class MinioFileManager(FileManagerInterface):
     def _delete_sync(self, object_key: str) -> None:
         """Synchronous delete operation"""
         self._client.remove_object(
-            bucket_name=self._minio_config["bucket_name"],
+            bucket_name=self._bucket_name,
             object_name=object_key
         )
 
@@ -445,20 +450,20 @@ class MinioFileManager(FileManagerInterface):
         if method.upper() == "GET":
             return self._client.get_presigned_url(
                 "GET",
-                self._minio_config["bucket_name"],
+                self._bucket_name,
                 object_key,
                 expires=expires
             )
         if method.upper() == "PUT":
             return self._client.get_presigned_url(
                 "PUT",
-                self._minio_config["bucket_name"],
+                self._bucket_name,
                 object_key,
                 expires=expires
             )
         return self._client.get_presigned_url(
             method.upper(),
-            self._minio_config["bucket_name"],
+            self._bucket_name,
             object_key,
             expires=expires
         )
@@ -467,7 +472,7 @@ class MinioFileManager(FileManagerInterface):
         """Synchronous object listing"""
         objects = []
         for obj in self._client.list_objects(
-            bucket_name=self._minio_config["bucket_name"],
+            bucket_name=self._bucket_name,
             prefix=prefix,
             recursive=True
         ):
@@ -475,15 +480,17 @@ class MinioFileManager(FileManagerInterface):
                 break
 
             # Get object metadata
-            stat = self._client.stat_object(self._minio_config["bucket_name"], obj.object_name)
+            stat = self._client.stat_object(self._bucket_name, obj.object_name)
 
             objects.append(VoiceFileInfo(
-                object_key=obj.object_name,
-                bucket_name=self._minio_config["bucket_name"],
-                file_size=obj.size,
-                content_type=stat.content_type or "application/octet-stream",
-                upload_time=obj.last_modified,
-                metadata=stat.metadata or {}
+                file_id=obj.object_name.split('/')[-1] if '/' in obj.object_name else obj.object_name,
+                original_filename=obj.object_name.split('/')[-1] if '/' in obj.object_name else obj.object_name,
+                mime_type=stat.content_type or "application/octet-stream",
+                size_bytes=obj.size or 0,
+                format=(stat.content_type or "unknown").split('/')[-1] if '/' in (stat.content_type or "") else "unknown",
+                created_at=obj.last_modified.isoformat() if obj.last_modified else datetime.utcnow().isoformat(),
+                minio_bucket=self._bucket_name,
+                minio_key=obj.object_name
             ))
 
         return objects

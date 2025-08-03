@@ -340,7 +340,6 @@ class VoiceCache:
         """
         # VoiceCache initialization is automatic via RedisCacheManager
         # This method provides compatibility with orchestrator expectations
-        pass
 
     # STTCacheInterface implementation
     async def get_stt_result(
@@ -359,7 +358,7 @@ class VoiceCache:
         provider: ProviderType,
         language: VoiceLanguage,
         result: str,
-        ttl_seconds: int = None
+        ttl_seconds: Optional[int] = None
     ) -> None:
         """Cache STT result"""
         cache_key = self.key_generator.stt_key(audio_file_hash, provider, language)
@@ -385,7 +384,7 @@ class VoiceCache:
         voice: str,
         language: VoiceLanguage,
         audio_url: str,
-        ttl_seconds: int = None
+        ttl_seconds: Optional[int] = None
     ) -> None:
         """Cache TTS result URL"""
         cache_key = self.key_generator.tts_key(text_hash, provider, voice, language)
@@ -409,7 +408,7 @@ class VoiceCache:
         provider: ProviderType,
         language: VoiceLanguage,
         result: str,
-        ttl_seconds: int = None
+        ttl_seconds: Optional[int] = None
     ) -> None:
         """Cache STT result using file path"""
         audio_hash = self.key_generator.file_hash(file_path)
@@ -433,7 +432,7 @@ class VoiceCache:
         voice: str,
         language: VoiceLanguage,
         audio_url: str,
-        ttl_seconds: int = None
+        ttl_seconds: Optional[int] = None
     ) -> None:
         """Cache TTS result using text"""
         text_hash = self.key_generator.text_hash(text)

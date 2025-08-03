@@ -361,9 +361,8 @@ class AudioProcessingError(VoiceServiceError):
         )
 
 
-# Compatibility aliases
-ConfigurationError = VoiceConfigurationError
-ConnectionPoolError = VoiceConnectionError  # Alias for ConnectionManager compatibility
+# Compatibility aliases - Type aliases for backward compatibility
+ConnectionPoolError: type[VoiceConnectionError] = VoiceConnectionError  # Alias for ConnectionManager compatibility
 
 
 # Exception mapping for quick lookup
