@@ -155,19 +155,24 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             from app.services.voice_v2.core.orchestrator import VoiceServiceOrchestrator
             from app.services.voice_v2.infrastructure.cache import VoiceCache
             from app.services.voice_v2.infrastructure.minio_manager import MinioFileManager
-            from app.services.voice_v2.providers.enhanced_factory import \
-                EnhancedVoiceProviderFactory
+            from app.services.voice_v2.providers.unified_factory import VoiceProviderFactory
 
             # Initialize components with enhanced voice_v2 architecture
-            enhanced_factory = EnhancedVoiceProviderFactory()
+            voice_factory = VoiceProviderFactory()
             cache_manager = VoiceCache()
             await cache_manager.initialize()
 
-            file_manager = MinioFileManager()
+            file_manager = MinioFileManager(
+                endpoint=settings.MINIO_ENDPOINT,
+                access_key=settings.MINIO_ACCESS_KEY,
+                secret_key=settings.MINIO_SECRET_KEY,
+                bucket_name=settings.MINIO_VOICE_BUCKET_NAME,
+                secure=settings.MINIO_SECURE
+            )
             await file_manager.initialize()
 
             self.voice_orchestrator = VoiceServiceOrchestrator(
-                enhanced_factory=enhanced_factory,
+                enhanced_factory=voice_factory,
                 cache_manager=cache_manager,
                 file_manager=file_manager,
             )
@@ -466,9 +471,50 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             self.typing_tasks[chat_id].cancel()
         self.typing_tasks[chat_id] = asyncio.create_task(self._send_typing_periodically(chat_id))
 
+    async def _stop_typing_for_chat(self, chat_id: str) -> None:
+        """Stop typing indicator for a specific chat"""
+        if chat_id in self.typing_tasks:
+            self.typing_tasks[chat_id].cancel()
+            del self.typing_tasks[chat_id]
+        
+        # Send stop typing action to WhatsApp
+        try:
+            await self.api_handler.send_typing_action(chat_id, False)
+        except Exception as e:
+            self.logger.error("Failed to stop typing action for chat %s: %s", chat_id, e)
+
     async def stop_typing_for_chat(self, chat_id: str) -> None:
         """Stop typing indicator for chat - public interface for helpers."""
         await self._stop_typing_for_chat(chat_id)
+
+    async def _send_typing_periodically(self, chat_id: str) -> None:
+        """
+        Периодически отправляет индикатор печати в WhatsApp пока агент обрабатывает запрос
+        
+        Args:
+            chat_id: ID чата WhatsApp
+        """
+        try:
+            # Start typing
+            await self.api_handler.send_typing_action(chat_id, True)
+            
+            while True:
+                await asyncio.sleep(3)  # Refresh typing indicator every 3 seconds
+                await self.api_handler.send_typing_action(chat_id, True)
+                
+        except asyncio.CancelledError:
+            self.logger.debug("Typing task cancelled for chat %s", chat_id)
+            # Stop typing when cancelled
+            try:
+                await self.api_handler.send_typing_action(chat_id, False)
+            except Exception as e:
+                self.logger.error("Failed to stop typing action on cancel for chat %s: %s", chat_id, e)
+        except Exception as e:
+            self.logger.error("Error in typing task for chat %s: %s", chat_id, e, exc_info=True)
+        finally:
+            # Clean up typing task
+            if chat_id in self.typing_tasks:
+                del self.typing_tasks[chat_id]
 
     async def publish_to_agent(
         self,

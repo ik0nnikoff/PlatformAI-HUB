@@ -73,12 +73,20 @@ class VoiceProviderFactory:
             raise ValueError(f"Unknown STT provider type: {provider_type}")
 
         try:
-            # Create provider instance
-            provider = provider_class()
+            # Create provider instance with required parameters  
+            provider_name = f"{provider_type.value}_stt"
+            default_config = config or self._get_default_config(provider_type)
+            
+            provider = provider_class(
+                provider_name=provider_name,
+                config=default_config,
+                priority=1,
+                enabled=True
+            )
 
-            # Initialize with config if provided
-            if config and hasattr(provider, 'configure'):
-                await provider.configure(config)
+            # Additional initialization if needed
+            if hasattr(provider, 'initialize'):
+                await provider.initialize()
 
             # Cache and return
             self._stt_cache[provider_type] = provider
@@ -114,12 +122,20 @@ class VoiceProviderFactory:
             raise ValueError(f"Unknown TTS provider type: {provider_type}")
 
         try:
-            # Create provider instance
-            provider = provider_class()
+            # Create provider instance with required parameters
+            provider_name = f"{provider_type.value}_tts"
+            default_config = config or self._get_default_config(provider_type)
+            
+            provider = provider_class(
+                provider_name=provider_name,
+                config=default_config,
+                priority=1,
+                enabled=True
+            )
 
-            # Initialize with config if provided
-            if config and hasattr(provider, 'configure'):
-                await provider.configure(config)
+            # Additional initialization if needed
+            if hasattr(provider, 'initialize'):
+                await provider.initialize()
 
             # Cache and return
             self._tts_cache[provider_type] = provider
@@ -129,6 +145,31 @@ class VoiceProviderFactory:
         except Exception as e:
             logger.error("Failed to create TTS provider %s: %s", provider_type, e)
             raise
+
+    def _get_default_config(self, provider_type: ProviderType) -> Dict[str, Any]:
+        """Get default configuration for a provider type."""
+        from app.core.config import settings
+        
+        if provider_type == ProviderType.OPENAI:
+            return {
+                "api_key": settings.OPENAI_API_KEY.get_secret_value() if settings.OPENAI_API_KEY else None,
+                "model": "tts-1",
+                "voice": "alloy"
+            }
+        elif provider_type == ProviderType.YANDEX:
+            return {
+                "api_key": getattr(settings, 'YANDEX_API_KEY', None),
+                "folder_id": getattr(settings, 'YANDEX_FOLDER_ID', None),
+                "voice": "alena"
+            }
+        elif provider_type == ProviderType.GOOGLE:
+            return {
+                "credentials_path": getattr(settings, 'GOOGLE_APPLICATION_CREDENTIALS', None),
+                "project_id": getattr(settings, 'GOOGLE_CLOUD_PROJECT_ID', None),
+                "voice": "ru-RU-Standard-A"
+            }
+        else:
+            return {}
 
     def get_available_stt_providers(self) -> list[ProviderType]:
         """Get list of available STT provider types."""

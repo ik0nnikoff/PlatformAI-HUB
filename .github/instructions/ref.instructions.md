@@ -5,7 +5,7 @@
 Чеклист работ - MD/11_voice_v2_optimization_checklist.md
 Файлы с анализами созданными в процессе и документация - в папке MD
 Отчеты по проделанным работам - MD/Reports
-Тесты - tests/voice_v2
+Юнит тесты - tests/voice_v2
 
 В проекте используется uv, python запускай через uv run
 

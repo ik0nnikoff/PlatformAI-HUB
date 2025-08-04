@@ -74,3 +74,4 @@ class AgentState(TypedDict):
     voice_response_decision: Optional[Dict[str, Any]] = None
     voice_response_mode: str = "auto"  # auto, enabled, disabled
     voice_provider_config: Optional[Dict[str, Any]] = None
+    audio_url: Optional[str] = None  # TTS-generated audio URL

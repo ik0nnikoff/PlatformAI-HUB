@@ -177,8 +177,9 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin):  # Added AgentConfigM
             self.logger.error(f"Failed to create LangGraph application: {e}", exc_info=True)
             return False
 
-        # Initialize Voice Service Orchestrator if voice settings are present
-        await self._setup_voice_orchestrator()
+        # Note: Voice capabilities are already available through LangGraph tools
+        # VoiceServiceOrchestrator initialization is not required since voice_v2 tools are loaded
+        # await self._setup_voice_orchestrator()
 
         self.logger.info(f"LangGraph application created successfully.")
         return True
@@ -256,7 +257,7 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin):  # Added AgentConfigM
 
             history_db = await self._get_history(thread_id=chat_id)
 
-            response_content, final_message = await self._invoke_agent(
+            response_content, final_message, audio_url = await self._invoke_agent(
                 history_db=history_db,
                 user_input=user_text,
                 user_data=user_data,
@@ -286,7 +287,10 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin):  # Added AgentConfigM
                 "channel": channel,
             }
 
-            # Note: audio_url now comes from LangGraph voice tools if agent decides to use TTS
+            # Add audio_url if TTS tool was used by agent
+            if audio_url:
+                response_payload["audio_url"] = audio_url
+                self.logger.info(f"Including audio_url in response payload: {audio_url}")
 
             await redis_cli.publish(self.response_channel, json.dumps(response_payload))
             self.logger.debug(
@@ -404,7 +408,7 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin):  # Added AgentConfigM
         channel: Optional[str] = None,
         interaction_id: Optional[str] = None,
         image_urls: Optional[List[str]] = None,
-    ) -> Tuple[str, Optional[BaseMessage]]:
+    ) -> Tuple[str, Optional[BaseMessage], Optional[str]]:
         """
         Вызывает агента LangGraph для обработки пользовательского ввода и возвращает ответ.
 
@@ -474,6 +478,7 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin):  # Added AgentConfigM
         )
         response_content = "No response generated."
         final_message = None
+        audio_url = None  # Track audio_url from TTS tool calls
 
         async for output in self.agent_app.astream(graph_input, self.config, stream_mode="updates"):
             if not self._running or self.needs_restart:
@@ -488,10 +493,46 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin):  # Added AgentConfigM
                         if isinstance(last_msg, AIMessage):
                             response_content = last_msg.content
                             final_message = last_msg
+                            
+                            # Check for TTS tool calls in the message
+                            if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
+                                for tool_call in last_msg.tool_calls:
+                                    if tool_call.get('name') == 'generate_voice_response':
+                                        # Tool was called, audio_url will be in final state
+                                        self.logger.debug(f"Found TTS tool call: {tool_call}")
+                
+                # Note: audio_url extraction moved to final state check
+                elif key == "tools" or "tool" in key:
+                    # TTS tool now updates state directly via Command, not tool messages
+                    self.logger.debug(f"Tool node output: {key}")
 
         self.logger.info(f"Graph execution finished. Final response: {response_content[:100]}...")
+        
+        # Extract audio_url from final state if TTS tool was used
+        try:
+            final_state = self.agent_app.get_state(self.config)
+            self.logger.info(f"Final state type: {type(final_state)}")
+            self.logger.info(f"Final state has values: {hasattr(final_state, 'values') if final_state else 'No final_state'}")
+            
+            if final_state and hasattr(final_state, 'values') and final_state.values:
+                self.logger.info(f"Final state values keys: {list(final_state.values.keys())}")
+                self.logger.info(f"Full final state values: {final_state.values}")
+                
+                state_audio_url = final_state.values.get('audio_url')
+                if state_audio_url:
+                    audio_url = state_audio_url
+                    self.logger.info(f"✅ Extracted audio_url from final state: {audio_url}")
+                else:
+                    self.logger.warning("❌ No audio_url found in final state values")
+            else:
+                self.logger.warning("❌ Final state or values not available")
+        except Exception as e:
+            self.logger.error(f"Could not extract audio_url from final state: {e}", exc_info=True)
+        
+        if audio_url:
+            self.logger.info(f"TTS audio URL available: {audio_url}")
 
-        return response_content, final_message
+        return response_content, final_message, audio_url
 
     async def _get_history(self, thread_id: str) -> List[BaseMessage]:
         """
@@ -621,64 +662,28 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin):  # Added AgentConfigM
 
     async def _setup_voice_orchestrator(self) -> None:
         """
-        🎯 PHASE 4.4.3: ARCHITECTURAL FIX - Voice orchestrator for LangGraph tools only
-
-        Sets up voice_v2 orchestrator as pure execution resource for LangGraph voice tools.
-        NO DECISION MAKING - only provides voice processing infrastructure.
-        Voice decisions are now handled by LangGraph agent, not execution layer.
+        Инициализирует Voice Service Orchestrator если в конфигурации агента есть голосовые настройки
         """
         try:
-            # 🎯 PHASE 4.4.3: NO DECISION MAKING - Remove voice settings checks
-            # Voice orchestrator is infrastructure only, decisions made by LangGraph
+            voice_settings = self.get_voice_settings_from_config(self.agent_config)
+            if not voice_settings or not voice_settings.get('enabled', False):
+                self.logger.debug(f"Voice settings not enabled for agent {self._component_id}")
+                return
 
-            # Import voice_v2 dependencies
-            from app.services.voice_v2.infrastructure.cache import VoiceCache
-            from app.services.voice_v2.infrastructure.minio_manager import MinioFileManager
-            from app.services.voice_v2.providers.enhanced_factory import \
-                EnhancedVoiceProviderFactory
-
-            # Create Enhanced Factory for dynamic provider creation
-            enhanced_factory = EnhancedVoiceProviderFactory()
-
-            # Create cache manager (Redis-based) - no initialize() method needed
-            cache_manager = VoiceCache()
-
-            # Create file manager (MinIO-based) with configuration
-            try:
-                file_manager = MinioFileManager(
-                    endpoint=getattr(settings, "MINIO_ENDPOINT", "localhost:9000"),
-                    access_key=getattr(settings, "MINIO_ACCESS_KEY", "minioadmin"),
-                    secret_key=getattr(settings, "MINIO_SECRET_KEY", "minioadmin"),
-                    bucket_name="voice-files",
-                    secure=getattr(settings, "MINIO_SECURE", False),
-                )
-                await file_manager.initialize()
-            except Exception as file_error:
-                self.logger.warning(
-                    f"MinIO file manager initialization failed: {file_error}, using None"
-                )
-                file_manager = None
-
-            # Create voice_v2 orchestrator with Enhanced Factory
-            self.voice_orchestrator = VoiceServiceOrchestrator(
-                enhanced_factory=enhanced_factory,
-                cache_manager=cache_manager,
-                file_manager=file_manager,
-            )
-
+            # Создаем Redis service wrapper для VoiceOrchestrator
+            from app.services.redis_wrapper import RedisService
+            redis_service = RedisService()
+            await redis_service.initialize()
+            
+            # Инициализируем orchestrator
+            self.voice_orchestrator = VoiceServiceOrchestrator()
+            
             await self.voice_orchestrator.initialize()
-
-            # 🎯 PHASE 4.4.3: MINIMAL SETUP - No agent-specific initialization
-            # Voice services will be initialized by LangGraph voice tools when needed
-
-            self.logger.info(
-                f"Voice orchestrator infrastructure initialized for LangGraph voice tools"
-            )
-
+            
+            self.logger.info(f"Voice orchestrator initialized successfully for agent {self._component_id}")
+                
         except Exception as e:
-            self.logger.error(
-                f"Error setting up voice orchestrator infrastructure: {e}", exc_info=True
-            )
+            self.logger.error(f"Error setting up voice orchestrator: {e}", exc_info=True)
             self.voice_orchestrator = None
 
     async def cleanup(self) -> None:

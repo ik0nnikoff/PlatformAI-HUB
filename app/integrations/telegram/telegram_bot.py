@@ -31,6 +31,7 @@ from app.core.base.service_component import ServiceComponentBase
 from app.core.config import settings
 from app.db.crud import user_crud
 from app.services.voice_v2.core.orchestrator import VoiceServiceOrchestrator
+from app.services.voice_v2.providers.unified_factory import VoiceProviderFactory
 
 # Constants
 REDIS_USER_CACHE_TTL = getattr(
@@ -1032,8 +1033,11 @@ class TelegramIntegrationBot(ServiceComponentBase):
                                 chat_id, audio_url
                             )
 
-                        # Always send text response (voice is additional, not replacement)
-                        await self.bot.send_message(chat_id, response)
+                        # Send text response only if voice was not sent successfully
+                        if not voice_sent_successfully:
+                            await self.bot.send_message(chat_id, response)
+                        else:
+                            self.logger.info(f"Voice response sent successfully to chat {chat_id}, skipping text message")
 
                 else:
                     self.logger.warning(
@@ -1075,7 +1079,7 @@ class TelegramIntegrationBot(ServiceComponentBase):
 
         if not self.bot_token:
             self.logger.critical(f"Bot token is not configured. Telegram bot cannot start.")
-            await self.mark_as_error(reason="Bot token missing")
+            await self.mark_as_error(error_message="Bot token missing")
             # self.initiate_shutdown() # Request shutdown
             raise RuntimeError("Bot token is not configured.")
 
@@ -1089,19 +1093,23 @@ class TelegramIntegrationBot(ServiceComponentBase):
         try:
             from app.services.voice_v2.infrastructure.cache import VoiceCache
             from app.services.voice_v2.infrastructure.minio_manager import MinioFileManager
-            from app.services.voice_v2.providers.enhanced_factory import \
-                EnhancedVoiceProviderFactory
 
             # Create voice_v2 dependencies
-            enhanced_factory = EnhancedVoiceProviderFactory()
+            voice_factory = VoiceProviderFactory()
             cache_manager = VoiceCache()
             await cache_manager.initialize()
-            file_manager = MinioFileManager()
+            file_manager = MinioFileManager(
+                endpoint=settings.MINIO_ENDPOINT,
+                access_key=settings.MINIO_ACCESS_KEY,
+                secret_key=settings.MINIO_SECRET_KEY,
+                bucket_name=settings.MINIO_VOICE_BUCKET_NAME,
+                secure=settings.MINIO_SECURE
+            )
             await file_manager.initialize()
 
             # Create voice_v2 orchestrator
             self.voice_orchestrator = VoiceServiceOrchestrator(
-                enhanced_factory=enhanced_factory,
+                enhanced_factory=voice_factory,
                 cache_manager=cache_manager,
                 file_manager=file_manager,
             )

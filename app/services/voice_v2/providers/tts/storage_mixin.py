@@ -122,15 +122,14 @@ class TTSStorageMixin:
 
     async def _create_minio_manager(self) -> MinioFileManager:
         """Create and initialize MinIO manager."""
-        voice_config = get_config()
-        storage_config = voice_config.file_storage
-
+        from app.core.config import settings
+        
         minio_manager = MinioFileManager(
-            endpoint=storage_config.minio_endpoint or "127.0.0.1:9000",
-            access_key=storage_config.minio_access_key or "minioadmin",
-            secret_key=storage_config.minio_secret_key or "minioadmin",
-            bucket_name=storage_config.bucket_name or "voice-files",
-            secure=storage_config.minio_secure or False
+            endpoint=settings.MINIO_ENDPOINT,
+            access_key=settings.MINIO_ACCESS_KEY,
+            secret_key=settings.MINIO_SECRET_KEY,
+            bucket_name=settings.MINIO_VOICE_BUCKET_NAME,
+            secure=settings.MINIO_SECURE
         )
 
         await minio_manager.initialize()

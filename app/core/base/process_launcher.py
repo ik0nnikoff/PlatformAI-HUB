@@ -277,7 +277,16 @@ class ProcessLauncher:
         executable = command_parts[0]
         
         # 1. Проверка на опасные символы в команде
-        dangerous_chars = [';', '&', '|', '`', '$', '<', '>', '(', ')', '{', '}']
+        # Special handling for integration settings JSON arguments
+        is_integration_command = "--integration-settings" in command_parts
+        
+        if is_integration_command:
+            # For integration commands, allow JSON characters but still block dangerous shell operations
+            dangerous_chars = [';', '&', '|', '`', '<', '>']
+        else:
+            # Standard validation for other commands
+            dangerous_chars = [';', '&', '|', '`', '$', '<', '>', '(', ')', '{', '}']
+        
         command_str = ' '.join(command_parts)
         
         for char in dangerous_chars:
@@ -312,8 +321,16 @@ class ProcessLauncher:
             return False
             
         # 4. Проверка аргументов на инъекции
-        for arg in command_parts[1:]:
-            # Проверка на попытки выполнения команд через аргументы
+        for i, arg in enumerate(command_parts[1:], 1):
+            # Skip JSON validation for integration settings
+            if is_integration_command and i > 0 and command_parts[i-1] == "--integration-settings":
+                # This is a JSON argument, allow JSON characters but check for actual shell injection
+                if re.search(r'\$\(|\${|`[^`]*`', arg):
+                    logger.warning(f"Shell command substitution detected in integration settings: {arg}")
+                    return False
+                continue
+                
+            # Standard argument validation for non-JSON arguments
             if re.search(r'[\$`]|\$\(|\${', arg):
                 logger.warning(f"Command substitution detected in argument: {arg}")
                 return False
