@@ -75,7 +75,7 @@ class VoiceProviderFactory:
         try:
             # Create provider instance with required parameters  
             provider_name = f"{provider_type.value}_stt"
-            default_config = config or self._get_default_config(provider_type)
+            default_config = config or self._get_default_stt_config(provider_type)
             
             provider = provider_class(
                 provider_name=provider_name,
@@ -124,7 +124,7 @@ class VoiceProviderFactory:
         try:
             # Create provider instance with required parameters
             provider_name = f"{provider_type.value}_tts"
-            default_config = config or self._get_default_config(provider_type)
+            default_config = config or self._get_default_tts_config(provider_type)
             
             provider = provider_class(
                 provider_name=provider_name,
@@ -146,8 +146,30 @@ class VoiceProviderFactory:
             logger.error("Failed to create TTS provider %s: %s", provider_type, e)
             raise
 
-    def _get_default_config(self, provider_type: ProviderType) -> Dict[str, Any]:
-        """Get default configuration for a provider type."""
+    def _get_default_stt_config(self, provider_type: ProviderType) -> Dict[str, Any]:
+        """Get default configuration for STT provider type."""
+        from app.core.config import settings
+        
+        if provider_type == ProviderType.OPENAI:
+            return {
+                "api_key": settings.OPENAI_API_KEY.get_secret_value() if settings.OPENAI_API_KEY else None,
+                "model": "whisper-1"
+            }
+        elif provider_type == ProviderType.YANDEX:
+            return {
+                "api_key": settings.YANDEX_API_KEY.get_secret_value() if settings.YANDEX_API_KEY else None,
+                "folder_id": settings.YANDEX_FOLDER_ID if hasattr(settings, 'YANDEX_FOLDER_ID') else None
+            }
+        elif provider_type == ProviderType.GOOGLE:
+            return {
+                "credentials_path": settings.GOOGLE_APPLICATION_CREDENTIALS if hasattr(settings, 'GOOGLE_APPLICATION_CREDENTIALS') else None,
+                "project_id": settings.GOOGLE_CLOUD_PROJECT_ID if hasattr(settings, 'GOOGLE_CLOUD_PROJECT_ID') else None
+            }
+        else:
+            return {}
+
+    def _get_default_tts_config(self, provider_type: ProviderType) -> Dict[str, Any]:
+        """Get default configuration for TTS provider type."""
         from app.core.config import settings
         
         if provider_type == ProviderType.OPENAI:
@@ -158,14 +180,14 @@ class VoiceProviderFactory:
             }
         elif provider_type == ProviderType.YANDEX:
             return {
-                "api_key": getattr(settings, 'YANDEX_API_KEY', None),
-                "folder_id": getattr(settings, 'YANDEX_FOLDER_ID', None),
+                "api_key": settings.YANDEX_API_KEY.get_secret_value() if settings.YANDEX_API_KEY else None,
+                "folder_id": settings.YANDEX_FOLDER_ID if hasattr(settings, 'YANDEX_FOLDER_ID') else None,
                 "voice": "alena"
             }
         elif provider_type == ProviderType.GOOGLE:
             return {
-                "credentials_path": getattr(settings, 'GOOGLE_APPLICATION_CREDENTIALS', None),
-                "project_id": getattr(settings, 'GOOGLE_CLOUD_PROJECT_ID', None),
+                "credentials_path": settings.GOOGLE_APPLICATION_CREDENTIALS if hasattr(settings, 'GOOGLE_APPLICATION_CREDENTIALS') else None,
+                "project_id": settings.GOOGLE_CLOUD_PROJECT_ID if hasattr(settings, 'GOOGLE_CLOUD_PROJECT_ID') else None,
                 "voice": "ru-RU-Standard-A"
             }
         else:

@@ -428,6 +428,7 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
 
         # Handle different message types
         if message_type in ["ptt", "audio"]:
+            self.logger.debug(f"Voice message detected. Full response structure: {response}")
             await self._handle_voice_message(response, chat_id, sender_info)
         elif message_type == "image":
             await self._handle_image_message(response, chat_id, sender_info)

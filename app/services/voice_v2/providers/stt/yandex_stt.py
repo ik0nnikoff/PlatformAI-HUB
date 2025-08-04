@@ -81,6 +81,16 @@ class YandexSTTProvider(BaseSTTProvider, STTInitializationMixin, STTRetryMixin):
         # Performance tracking
         self._stats = {'request_count': 0}
 
+    @property
+    def api_key(self) -> Optional[str]:
+        """Get API key for validation."""
+        return self._config.get('api_key')
+
+    @property
+    def folder_id(self) -> Optional[str]:
+        """Get folder ID for validation."""
+        return self._config.get('folder_id')
+
     def get_required_config_fields(self) -> List[str]:
         """Required configuration fields."""
         return []

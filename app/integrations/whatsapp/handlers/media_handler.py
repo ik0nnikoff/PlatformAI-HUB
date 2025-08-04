@@ -20,8 +20,19 @@ class MediaHandler:
     ) -> None:
         """Handle image message processing."""
         try:
-            message_id = response.get("id", {}).get("id", "")
-            media_data = response.get("body", {})
+            # Safely extract message_id handling both string and dict formats
+            id_field = response.get("id", {})
+            if isinstance(id_field, dict):
+                message_id = id_field.get("id", "")
+            else:
+                message_id = str(id_field)
+            
+            # Safely extract media_data
+            body_field = response.get("body", {})
+            if isinstance(body_field, dict):
+                media_data = body_field
+            else:
+                media_data = {}
             media_key = media_data.get("mediaKey", "")
             mimetype = media_data.get("mimetype", "")
 
@@ -93,14 +104,48 @@ class MediaHandler:
     ) -> None:
         """Handle voice message processing."""
         try:
-            message_id = response.get("id", {}).get("id", "")
+            # Extract message_id - it can be either a string or nested object
+            id_field = response.get("id", "")
+            if isinstance(id_field, dict):
+                message_id = id_field.get("id", "")
+            else:
+                message_id = str(id_field) if id_field else ""
+            
+            # DEBUG: Log full response structure for voice message analysis
+            self.logger.debug(f"Voice message full response structure: {response}")
+            
             media_data = response.get("body", {})
-            media_key = media_data.get("mediaKey", "")
-            mimetype = media_data.get("mimetype", "")
+            self.logger.debug(f"Voice message body data: {media_data}, type: {type(media_data)}")
+            
+            # Handle both dict and direct string cases for media_key extraction
+            if isinstance(media_data, dict):
+                media_key = media_data.get("mediaKey", "")
+                mimetype = media_data.get("mimetype", "")
+            else:
+                # For string body, look for mediaKey elsewhere in response
+                media_key = response.get("mediaKey", "")
+                mimetype = response.get("mimetype", "")
+                
+            self.logger.debug(f"Extracted media_key: '{media_key}', mimetype: '{mimetype}'")
 
             if not media_key:
+                # Try alternative locations for media key
+                alt_locations = [
+                    response.get("quotedMsg", {}).get("mediaKey", ""),
+                    response.get("message", {}).get("mediaKey", ""), 
+                    response.get("mediaData", {}).get("mediaKey", ""),
+                    response.get("media", {}).get("mediaKey", "")
+                ]
+                for alt_key in alt_locations:
+                    if alt_key:
+                        media_key = alt_key
+                        self.logger.debug(f"Found media_key in alternative location: {media_key}")
+                        break
+                        
+            if not media_key:
                 self.logger.warning(
-                    "No media key found for voice message: %s", message_id
+                    "No media key found for voice message: %s. Available keys: %s", 
+                    message_id, list(response.keys())
                 )
                 return
 
@@ -153,32 +198,61 @@ class MediaHandler:
         Consistent with Telegram pattern: STT → Agent → voice tools → TTS
         """
         try:
-            # 🎯 PHASE 4.4.2: DYNAMIC CONFIG - Get current agent configuration
-            agent_config = await self.bot._get_agent_config()
-            
             # Use global voice orchestrator if available, otherwise create temporary one
             orchestrator = await self._get_voice_orchestrator()
+            if not orchestrator:
+                await self._handle_voice_processing_error(chat_id, Exception("Voice orchestrator not available"))
+                return
 
-            # Initialize voice services for this agent if needed
-            await orchestrator.initialize_voice_services_for_agent(
-                agent_config=agent_config
-            )
-
-            # Create filename for voice message
-            filename = f"whatsapp_voice_{message_id}_{self.bot.agent_id}.ogg"
-
-            # Process STT
-            result = await orchestrator.process_voice_message(
-                agent_id=self.bot.agent_id,
-                user_id=user_context["platform_user_id"],
-                audio_data=voice_data,
-                original_filename=filename,
-                agent_config=agent_config
-            )
+            # Process STT using the voice_v2 orchestrator
+            from app.services.voice_v2.core.schemas import STTRequest
+            from app.services.voice_v2.core.interfaces import AudioFormat
+            from app.services.voice_v2.core.exceptions import VoiceServiceError
+            
+            try:
+                # Create STT request
+                stt_request = STTRequest(
+                    audio_data=voice_data,
+                    language="ru",  # Default to Russian for WhatsApp
+                    audio_format=AudioFormat.OGG  # WhatsApp voice messages are typically OGG
+                )
+                
+                # Process STT
+                stt_response = await orchestrator.transcribe_audio(stt_request)
+                
+                # Convert to legacy result format for backward compatibility
+                result = type('VoiceProcessingResult', (), {
+                    'success': True,
+                    'text': stt_response.text,
+                    'error_message': None,
+                    'provider_used': stt_response.provider,
+                    'processing_time': stt_response.processing_time
+                })()
+                
+            except VoiceServiceError as e:
+                # Handle voice service errors
+                result = type('VoiceProcessingResult', (), {
+                    'success': False,
+                    'text': None,
+                    'error_message': str(e),
+                    'provider_used': None,
+                    'processing_time': 0.0
+                })()
+                
+            except Exception as e:
+                # Handle unexpected errors
+                self.logger.error(f"Unexpected error in voice_v2 STT: {e}", exc_info=True)
+                result = type('VoiceProcessingResult', (), {
+                    'success': False,
+                    'text': None,
+                    'error_message': f"Unexpected STT error: {str(e)}",
+                    'provider_used': None,
+                    'processing_time': 0.0
+                })()
 
             if result.success and result.text:
                 await self._handle_successful_stt(
-                    chat_id, user_context["platform_user_id"], result.text, user_context["user_data"]
+                    chat_id, user_context["platform_user_id"], result.text, user_context
                 )
             else:
                 await self._handle_failed_stt(chat_id, result)
@@ -189,18 +263,19 @@ class MediaHandler:
     async def _detect_audio_format(self, audio_data: bytes, filename: str):
         """Detect audio format from data and filename."""
         try:
-            from app.services.voice_v2.utils.audio import AudioUtils
-            detected_format = AudioUtils.detect_format(audio_data, filename)
-            mime_type = AudioUtils.get_mime_type(detected_format)
-            self.logger.info(
-                "Detected audio format: %s -> %s", 
-                detected_format.value, mime_type
-            )
-            return detected_format
+            # Try to detect format from filename extension
+            if filename.lower().endswith('.ogg'):
+                return 'ogg'
+            elif filename.lower().endswith('.wav'):
+                return 'wav'
+            elif filename.lower().endswith('.mp3'):
+                return 'mp3'
+            else:
+                # Default for WhatsApp voice messages
+                return 'ogg'
         except Exception as e:
             self.logger.warning("Could not detect audio format: %s, using default", e)
-            from app.services.voice_v2.core.interfaces import AudioFormat
-            return AudioFormat.OGG
+            return 'ogg'
 
     async def _get_voice_orchestrator(self):
         """Get voice orchestrator instance."""
@@ -208,28 +283,41 @@ class MediaHandler:
             return self.bot.voice_orchestrator
 
         self.logger.warning(
-            ("Global voice orchestrator not available, creating temporary "
-             "voice_v2 orchestrator")
+            "Global voice orchestrator not available, creating temporary voice_v2 orchestrator"
         )
-        from app.services.voice_v2.providers.enhanced_factory import (
-            EnhancedVoiceProviderFactory
-        )
+        
+        # Use the voice_v2 orchestrator 
+        from app.services.voice_v2.core.orchestrator import VoiceServiceOrchestrator
         from app.services.voice_v2.infrastructure.cache import VoiceCache
-        from app.services.voice_v2.core.orchestrator import (
-            VoiceServiceOrchestrator
-        )
+        from app.services.voice_v2.infrastructure.minio_manager import MinioFileManager
+        from app.services.voice_v2.providers.unified_factory import VoiceProviderFactory
+        from app.core.config import settings
 
-        enhanced_factory = EnhancedVoiceProviderFactory()
-        cache_manager = VoiceCache()
-        await cache_manager.initialize()
+        try:
+            # Initialize components with enhanced voice_v2 architecture
+            voice_factory = VoiceProviderFactory()
+            cache_manager = VoiceCache()
+            await cache_manager.initialize()
 
-        orchestrator = VoiceServiceOrchestrator(
-            enhanced_factory=enhanced_factory,
-            cache_manager=cache_manager,
-            file_manager=None  # Use basic setup
-        )
-        await orchestrator.initialize()
-        return orchestrator
+            file_manager = MinioFileManager(
+                endpoint=settings.MINIO_ENDPOINT,
+                access_key=settings.MINIO_ACCESS_KEY,
+                secret_key=settings.MINIO_SECRET_KEY,
+                bucket_name=settings.MINIO_VOICE_BUCKET_NAME,
+                secure=settings.MINIO_SECURE
+            )
+            await file_manager.initialize()
+
+            orchestrator = VoiceServiceOrchestrator(
+                enhanced_factory=voice_factory,
+                cache_manager=cache_manager,
+                file_manager=file_manager,
+            )
+            await orchestrator.initialize()
+            return orchestrator
+        except Exception as e:
+            self.logger.error(f"Failed to create temporary orchestrator: {e}")
+            return None
 
     async def _handle_successful_stt(
         self, 

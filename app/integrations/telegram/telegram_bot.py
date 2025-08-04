@@ -638,22 +638,8 @@ class TelegramIntegrationBot(ServiceComponentBase):
             # Process voice message
 
             # Initialize voice services for this agent if not already done
-            try:
-                init_result = await self.voice_orchestrator.initialize_voice_services_for_agent(
-                    agent_config=agent_config
-                )
-                if init_result.get("success", False):
-                    self.logger.debug(f"Voice_v2 services initialized for agent {self.agent_id}")
-                else:
-                    errors = init_result.get("errors", [])
-                    self.logger.warning(
-                        f"Voice_v2 services initialization warnings: {'; '.join(errors)}"
-                    )
-            except Exception as e:
-                self.logger.warning(
-                    f"Failed to initialize voice_v2 services for agent {self.agent_id}: {e}"
-                )
-                # Continue anyway, maybe services are already initialized
+            # Note: voice_v2 orchestrator doesn't require explicit agent initialization
+            # STT is done directly via transcribe_audio method
 
             # Determine filename based on file type
             filename = (
@@ -662,21 +648,27 @@ class TelegramIntegrationBot(ServiceComponentBase):
                 else f"audio_{int(time.time())}.mp3"
             )
 
-            # Process the voice message with orchestrator
-            result = await self.voice_orchestrator.process_voice_message(
-                agent_id=self.agent_id,
-                user_id=platform_user_id,
+            # Process the voice message with voice_v2 orchestrator
+            from app.services.voice_v2.core.schemas import STTRequest
+            from app.services.voice_v2.core.interfaces import AudioFormat
+            
+            # Create STT request
+            audio_format = AudioFormat.OGG if file_type == "voice" else AudioFormat.MP3
+            stt_request = STTRequest(
                 audio_data=audio_data.read(),
-                original_filename=filename,
-                agent_config=agent_config,
+                language="auto",  # Auto-detect language
+                audio_format=audio_format
             )
+            
+            # Transcribe audio
+            stt_response = await self.voice_orchestrator.transcribe_audio(stt_request)
 
-            if result.success and result.text:
+            if stt_response.text:
                 # Send recognized text to agent as a regular message
-                self.logger.info(f"Voice transcription successful: '{result.text[:100]}...'")
-                await self._publish_to_agent(chat_id, platform_user_id, result.text, user_data)
+                self.logger.info(f"Voice transcription successful: '{stt_response.text[:100]}...'")
+                await self._publish_to_agent(chat_id, platform_user_id, stt_response.text, user_data)
             else:
-                error_msg = result.error_message or "Не удалось распознать речь"
+                error_msg = "Не удалось распознать речь"
                 await message.answer(f"🔇 {error_msg}")
                 self.logger.warning(f"Voice processing failed: {error_msg}")
 

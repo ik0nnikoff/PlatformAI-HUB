@@ -516,7 +516,7 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin):  # Added AgentConfigM
             
             if final_state and hasattr(final_state, 'values') and final_state.values:
                 self.logger.info(f"Final state values keys: {list(final_state.values.keys())}")
-                self.logger.info(f"Full final state values: {final_state.values}")
+                self.logger.debug(f"Full final state values: {final_state.values}")
                 
                 state_audio_url = final_state.values.get('audio_url')
                 if state_audio_url:
@@ -537,9 +537,9 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin):  # Added AgentConfigM
                     except Exception as clear_error:
                         self.logger.error(f"Failed to clear audio_url from state: {clear_error}", exc_info=True)
                 else:
-                    self.logger.warning("❌ No audio_url found in final state values")
+                    self.logger.debug("❌ No audio_url found in final state values")
             else:
-                self.logger.warning("❌ Final state or values not available")
+                self.logger.debug("❌ Final state or values not available")
         except Exception as e:
             self.logger.error(f"Could not extract audio_url from final state: {e}", exc_info=True)
         
