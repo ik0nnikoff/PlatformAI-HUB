@@ -4,7 +4,7 @@ import logging
 import os
 import signal
 import time
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime, timezone
 from pathlib import Path
 from redis import exceptions as redis_exceptions # Added import
@@ -301,111 +301,513 @@ class ProcessManager(RedisClientManager):
 
         status_key = self.integration_status_key_template.format(agent_id, integration_type_for_redis_key)
         await self._delete_status_key_from_redis(status_key)
-        logger.info(f"Completely deleted status for integration {integration_type} of agent {agent_id} from Redis.")
+        logger.info("Completely deleted status for integration %s of agent %s from Redis.", integration_type, agent_id)
+
+    async def _validate_stop_prerequisites(self, agent_id: str) -> Dict[str, Any]:
+        """
+        Проверяет предварительные условия для остановки процесса агента.
+        
+        Returns:
+            Dict с полями: should_stop (bool), current_status (str), pid (int), status_key (str)
+        """
+        status_info = await self.get_agent_status(agent_id)
+        current_status = status_info.get("status", "unknown")
+        pid_to_stop = status_info.get("pid")
+        status_key = self.agent_status_key_template.format(agent_id)
+        
+        should_stop = current_status not in ("stopped", "not_found")
+        
+        if not should_stop:
+            logger.info("Agent %s is already stopped or not found.", agent_id)
+            
+        return {
+            "should_stop": should_stop,
+            "current_status": current_status,
+            "pid": pid_to_stop,
+            "status_key": status_key
+        }
+    
+    async def _send_graceful_stop_signal(self, pid: int, agent_id: str, timeout: float) -> bool:
+        """
+        Отправляет SIGTERM процессу и ждет его завершения.
+        
+        Returns:
+            bool: True если процесс завершился, False если нужно принудительное завершение
+        """
+        try:
+            os.kill(pid, signal.SIGTERM)
+            logger.info("SIGTERM sent to agent %s (PID: %s)", agent_id, pid)
+            
+            for _ in range(int(timeout / 0.1)):
+                await asyncio.sleep(0.1)
+                try:
+                    os.kill(pid, 0)  # Check if process exists
+                except ProcessLookupError:
+                    logger.info("Agent %s (PID: %s) terminated gracefully after SIGTERM.", agent_id, pid)
+                    return True
+            
+            logger.warning("Agent %s (PID: %s) did not terminate after SIGTERM within %.1fs.", agent_id, pid, timeout)
+            return False
+            
+        except ProcessLookupError:
+            logger.warning("Agent process %s (PID: %s) not found (already stopped?).", agent_id, pid)
+            return True
+        except OSError as e:
+            logger.error("Error stopping agent %s (PID: %s): %s", agent_id, pid, e, exc_info=True)
+            return False
+    
+    async def _force_kill_process(self, pid: int, agent_id: str) -> bool:
+        """
+        Принудительно завершает процесс через SIGKILL.
+        
+        Returns:
+            bool: True если процесс успешно завершен
+        """
+        try:
+            logger.info("Forcing kill (SIGKILL) for agent %s (PID: %s).", agent_id, pid)
+            os.kill(pid, signal.SIGKILL)
+            await asyncio.sleep(0.1)  # Brief moment for SIGKILL to take effect
+            
+            try:
+                os.kill(pid, 0)  # Check if truly gone
+                logger.warning("Agent %s (PID: %s) still exists after SIGKILL attempt.", agent_id, pid)
+                return False
+            except ProcessLookupError:
+                logger.info("Agent %s (PID: %s) confirmed terminated after SIGKILL.", agent_id, pid)
+                return True
+                
+        except ProcessLookupError:
+            logger.info("Agent %s (PID: %s) was already gone before SIGKILL could be sent.", agent_id, pid)
+            return True
+        except OSError as e:
+            logger.error("Error sending SIGKILL to agent %s (PID: %s): %s", agent_id, pid, e, exc_info=True)
+            return False
+    
+    async def _cleanup_stopped_agent_status(self, agent_id: str, status_key: str) -> None:
+        """
+        Очищает статус остановленного агента в Redis.
+        """
+        final_status_update = {"status": "stopped", "agent_id": agent_id}
+        await self._update_status_in_redis(status_key, final_status_update)
+        
+        # Clean up dynamic fields after confirming stop
+        await self._delete_fields_from_redis_status(
+            status_key, 
+            ["pid", "last_active", "error_detail", "start_attempt_utc"]
+        )
+        
+        # Re-set status to ensure only "stopped" and "agent_id" (and last_updated_utc) remain
+        await self._update_status_in_redis(status_key, {"status": "stopped", "agent_id": agent_id})
+        logger.info("Agent %s marked as stopped in Redis.", agent_id)
+
+    async def _execute_agent_stop_procedure(self, agent_id: str, pid: int, status_key: str, force: bool) -> bool:
+        """
+        Выполняет процедуру остановки агента с указанным PID.
+        
+        Returns:
+            bool: True если процесс успешно остановлен
+        """
+        logger.info("Stopping agent process %s (PID: %s). Force: %s", agent_id, pid, force)
+        
+        # Try graceful stop first
+        wait_time = getattr(settings, 'PROCESS_GRACEFUL_SHUTDOWN_TIMEOUT', DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT)
+        stopped_gracefully = await self._send_graceful_stop_signal(pid, agent_id, wait_time)
+        
+        if not stopped_gracefully and force:
+            # Force kill if graceful stop failed and force=True
+            stopped_gracefully = await self._force_kill_process(pid, agent_id)
+        
+        if stopped_gracefully:
+            await self._cleanup_stopped_agent_status(agent_id, status_key)
+            return True
+        else:
+            # Handle failed stop
+            current_redis_status_map = await self._get_status_from_redis(status_key)
+            if current_redis_status_map.get("status") == "stopping":
+                await self._update_status_in_redis(
+                    status_key, 
+                    {"status": "error_stop_failed", "error_detail": "Failed to confirm stop."}
+                )
+            return False
+
+    async def _handle_already_stopped_agent(self, agent_id: str, status_key: str) -> bool:
+        """
+        Обрабатывает случай, когда агент уже остановлен.
+        
+        Returns:
+            bool: Always True (агент уже остановлен)
+        """
+        redis_cli = await self.redis_client
+        if await redis_cli.exists(status_key):
+            await self._update_status_in_redis(
+                status_key, 
+                {"status": "stopped", "agent_id": agent_id}
+            )
+            await self._delete_fields_from_redis_status(
+                status_key, 
+                ["pid", "last_active", "error_detail", "start_attempt_utc"]
+            )
+        return True
+
+    # Integration Stop Helper Methods
+    async def _validate_integration_stop_prerequisites(self, agent_id: str, integration_type: str, status_info: Dict[str, Any]) -> Tuple[bool, Optional[int]]:
+        """Проверяет предварительные условия для остановки интеграции."""
+        current_status = status_info.get("status", "unknown")
+        pid_to_stop = status_info.get("pid")
+        
+        if current_status in ["stopped", "not_found"]:
+            self.logger.info(f"Integration {integration_type} for agent {agent_id} is already stopped or not found.")
+            return True, None
+            
+        return False, pid_to_stop
+
+    async def _send_graceful_stop_signal_integration(self, integration_type: str, agent_id: str, pid: int) -> bool:
+        """Отправляет graceful stop сигнал процессу интеграции."""
+        try:
+            os.kill(pid, signal.SIGTERM)
+            self.logger.info(f"SIGTERM sent to integration {integration_type} (PID: {pid}) for agent {agent_id}")
+            
+            wait_time = getattr(settings, 'PROCESS_GRACEFUL_SHUTDOWN_TIMEOUT', DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT)
+            for _ in range(int(wait_time / 0.1)):
+                await asyncio.sleep(0.1)
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    self.logger.info(f"Integration {integration_type} (PID: {pid}) for agent {agent_id} terminated gracefully after SIGTERM.")
+                    return True
+            
+            self.logger.warning(f"Integration {integration_type} (PID: {pid}) for agent {agent_id} did not terminate after SIGTERM within {wait_time}s.")
+            return False
+            
+        except ProcessLookupError:
+            self.logger.warning(f"Integration process {integration_type} for agent {agent_id} (PID: {pid}) not found (already stopped?).")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error stopping integration {integration_type} for agent {agent_id} (PID: {pid}): {e}", exc_info=True)
+            return False
+
+    async def _force_kill_integration_process(self, integration_type: str, agent_id: str, pid: int) -> bool:
+        """Принудительно завершает процесс интеграции."""
+        try:
+            self.logger.info(f"Forcing kill (SIGKILL) for integration {integration_type} (PID: {pid}) for agent {agent_id}.")
+            os.kill(pid, signal.SIGKILL)
+            await asyncio.sleep(0.1)
+            
+            try:
+                os.kill(pid, 0)
+                self.logger.warning(f"Integration {integration_type} (PID: {pid}) for agent {agent_id} still exists after SIGKILL attempt.")
+                return False
+            except ProcessLookupError:
+                self.logger.info(f"Integration {integration_type} (PID: {pid}) for agent {agent_id} confirmed terminated after SIGKILL.")
+                return True
+                
+        except ProcessLookupError:
+            self.logger.info(f"Integration {integration_type} (PID: {pid}) for agent {agent_id} was already gone before SIGKILL could be sent or confirmed.")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error sending SIGKILL to integration {integration_type} (PID: {pid}) for agent {agent_id}: {e}", exc_info=True)
+            return False
+
+    async def _cleanup_stopped_integration_status(self, status_key: str, agent_id: str, integration_type: str) -> None:
+        """Очищает статус остановленной интеграции в Redis."""
+        final_status_update = {
+            "status": "stopped",
+            "agent_id": agent_id,
+            "integration_type": integration_type
+        }
+        await self._update_status_in_redis(status_key, final_status_update)
+        await self._delete_fields_from_redis_status(status_key, ["pid", "last_active", "error_detail", "start_attempt_utc"])
+        self.logger.info(f"Integration {integration_type} for agent {agent_id} marked as stopped in Redis.")
+
+    async def _execute_integration_stop_procedure(self, integration_type: str, agent_id: str, pid: Optional[int], force: bool) -> bool:
+        """Выполняет процедуру остановки интеграции."""
+        if pid is None:
+            self.logger.warning(f"Cannot actively stop integration {integration_type} for agent {agent_id}: PID is None. Marking as stopped.")
+            return True
+            
+        # Попытка graceful stop
+        graceful_success = await self._send_graceful_stop_signal_integration(integration_type, agent_id, pid)
+        if graceful_success:
+            return True
+            
+        # Force kill если требуется
+        if force:
+            return await self._force_kill_integration_process(integration_type, agent_id, pid)
+            
+        return False
+
+    async def _handle_already_stopped_integration(self, agent_id: str, integration_type: str, status_key: str) -> bool:
+        """Обрабатывает ситуацию, когда интеграция уже остановлена."""
+        self.logger.info(f"Integration {integration_type} for agent {agent_id} is already stopped or not found.")
+        redis_cli = await self.redis_client
+        if await redis_cli.exists(status_key):
+            await self._update_status_in_redis(status_key, {
+                "status": "stopped",
+                "agent_id": agent_id,
+                "integration_type": integration_type
+            })
+            await self._delete_fields_from_redis_status(status_key, ["pid", "last_active", "error_detail", "start_attempt_utc"])
+        return True
+
+    # Integration Start Helper Methods
+    async def _validate_integration_start_prerequisites(self, agent_id: str, integration_type: str) -> bool:
+        """Проверяет предварительные условия для запуска интеграции."""
+        try:
+            current_integration_status_info = await self.get_integration_status(agent_id, integration_type)
+            current_status = current_integration_status_info.get("status")
+            
+            if current_status == "running":
+                self.logger.warning(f"Integration {integration_type} for agent {agent_id} already reported as running. Skipping start.")
+                return False
+            if current_status == "starting":
+                self.logger.warning(f"Integration {integration_type} for agent {agent_id} is already starting. Skipping duplicate start request.")
+                return False
+                
+            return True
+        except Exception as e:
+            self.logger.error(f"Error checking integration status before start for {agent_id}/{integration_type}: {e}", exc_info=True)
+            return True  # Продолжаем попытку запуска даже при ошибке проверки статуса
+
+    async def _validate_integration_script_paths(self, integration_type: str, status_key: str, agent_id: str) -> bool:
+        """Проверяет наличие скрипта интеграции."""
+        module_path = self.integration_module_paths.get(integration_type.upper())
+        script_full_path = self.integration_script_full_paths.get(integration_type.upper())
+
+        if not module_path or not script_full_path or not os.path.exists(script_full_path):
+            self.logger.error(f"Integration script/module not found for type: {integration_type}. Path: {script_full_path}")
+            await self._update_status_in_redis(status_key, {
+                "status": "error_script_not_found",
+                "error_detail": f"Script not found for {integration_type}",
+                "agent_id": agent_id,
+                "integration_type": integration_type
+            })
+            return False
+        return True
+
+    async def _build_integration_command(self, integration_type: str, agent_id: str, integration_settings: Optional[Dict[str, Any]]) -> List[str]:
+        """Формирует команду для запуска интеграции."""
+        module_path = self.integration_module_paths.get(integration_type.upper())
+        
+        cmd = [
+            self.python_executable,
+            "-m", module_path,
+            "--agent-id", agent_id,
+        ]
+        
+        if integration_settings:
+            cmd.extend(["--integration-settings", json.dumps(integration_settings)])
+            
+        return cmd
+
+    async def _launch_integration_process(self, cmd: List[str], integration_type: str, agent_id: str, status_key: str) -> bool:
+        """Запускает процесс интеграции."""
+        try:
+            self.logger.debug(f"Starting integration {integration_type} for agent {agent_id}. Command: {' '.join(cmd)}")
+            
+            process_obj, _, _ = await self.launcher.launch_process(
+                command=cmd,
+                process_id=f"integration_start_{agent_id}_{integration_type}",
+                cwd=self.project_root,
+                env_vars=self.process_env,
+                capture_output=False
+            )
+
+            if process_obj and process_obj.pid is not None:
+                self.logger.info(f"Integration process {integration_type} for agent {agent_id} initiated start with PID {process_obj.pid}")
+                await self._update_status_in_redis(status_key, {
+                    "pid": str(process_obj.pid), 
+                    "integration_type": integration_type
+                })
+                return True
+            else:
+                err_msg = f"Failed to launch integration process {integration_type} for agent {agent_id} (process_obj or pid is None)."
+                self.logger.error(err_msg)
+                await self._update_status_in_redis(status_key, {
+                    "status": "error_start_failed",
+                    "error_detail": err_msg,
+                    "agent_id": agent_id,
+                    "integration_type": integration_type
+                })
+                return False
+                
+        except FileNotFoundError as fnf_e:
+            self.logger.error(f"Failed to start integration {integration_type} for {agent_id} due to FileNotFoundError: {fnf_e}", exc_info=True)
+            await self._update_status_in_redis(status_key, {
+                "status": "error_script_not_found",
+                "error_detail": str(fnf_e),
+                "integration_type": integration_type
+            })
+            return False
+        except Exception as e:
+            self.logger.error(f"Failed to start integration {integration_type} for {agent_id}: {e}", exc_info=True)
+            await self._update_status_in_redis(status_key, {
+                "status": "error_start_failed",
+                "error_detail": str(e),
+                "integration_type": integration_type
+            })
+            return False
+
+    # Status Helper Methods
+    async def _parse_pid_from_status(self, pid_val: Any) -> Optional[int]:
+        """Парсит PID из данных статуса."""
+        if pid_val and str(pid_val).isdigit():
+            return int(pid_val)
+        return None
+
+    async def _parse_last_active_from_status(self, last_active_val: Any) -> Optional[float]:
+        """Парсит last_active из данных статуса."""
+        try:
+            return float(last_active_val) if last_active_val else None
+        except (ValueError, TypeError):
+            return None
+
+    async def _validate_process_existence(self, pid: int, agent_id: str, integration_type: str, current_status: str, status_key: str) -> Tuple[str, Optional[int]]:
+        """Проверяет существование процесса для интеграции."""
+        if pid and current_status in ["running", "starting", "initializing"]:
+            try:
+                os.kill(pid, 0)
+                return current_status, pid
+            except ProcessLookupError:
+                self.logger.warning(f"Integration {integration_type} for agent {agent_id} status is '{current_status}' in Redis, but PID {pid} not found. Updating status.")
+                new_status = "error_process_lost"
+                await self._update_status_in_redis(status_key, {
+                    "status": new_status, 
+                    "pid": "", 
+                    "integration_type": integration_type
+                })
+                return new_status, None
+            except OSError as e:
+                self.logger.error(f"Error checking PID {pid} for integration {integration_type} of agent {agent_id}: {e}. Status remains '{current_status}'.")
+                return current_status, pid
+        return current_status, pid
+
+    async def _validate_agent_process_existence(self, pid: int, agent_id: str, current_status: str, status_key: str) -> Tuple[str, Optional[int]]:
+        """Проверяет существование процесса для агента."""
+        if pid and current_status in ["running", "starting", "initializing"]:
+            try:
+                os.kill(pid, 0)  # Check if process exists
+                return current_status, pid
+            except ProcessLookupError:
+                self.logger.warning(f"Agent {agent_id} status is '{current_status}' in Redis, but PID {pid} not found. Updating status.")
+                new_status = "error_process_lost"
+                await self._update_status_in_redis(status_key, {
+                    "status": new_status, 
+                    "pid": ""
+                })
+                return new_status, None
+            except OSError as e:
+                self.logger.error(f"Error checking PID {pid} for agent {agent_id}: {e}. Status remains '{current_status}'.")
+                return current_status, pid
+        return current_status, pid
+
+    # Agent Start Helper Methods
+    async def _validate_agent_start_prerequisites(self, agent_id: str) -> bool:
+        """Проверяет предварительные условия для запуска агента."""
+        try:
+            current_agent_status_info = await self.get_agent_status(agent_id)
+            current_status = current_agent_status_info.get("status")
+            
+            if current_status == "running":
+                self.logger.warning(f"Agent {agent_id} already reported as running. Skipping start.")
+                return False
+            if current_status == "starting":
+                self.logger.warning(f"Agent {agent_id} is already starting. Skipping duplicate start request.")
+                return False
+                
+            return True
+        except Exception as e:
+            self.logger.error(f"Error checking agent status before start for {agent_id}: {e}", exc_info=True)
+            return True  # Продолжаем попытку запуска даже при ошибке проверки статуса
+
+    async def _build_agent_command(self, agent_id: str, agent_settings: Optional[Dict[str, Any]]) -> List[str]:
+        """Формирует команду для запуска агента."""
+        cmd = [
+            self.python_executable,
+            "-m", self.agent_runner_module_path,
+            "--agent-id", agent_id,
+        ]
+        
+        if agent_settings:
+            cmd.extend(["--agent-settings", json.dumps(agent_settings)])
+            
+        return cmd
+
+    async def _launch_agent_process(self, cmd: List[str], agent_id: str, status_key: str) -> bool:
+        """Запускает процесс агента."""
+        try:
+            process_obj, _, _ = await self.launcher.launch_process(
+                command=cmd,
+                process_id=f"agent_start_{agent_id}",
+                cwd=self.project_root,
+                env_vars=self.process_env,
+                capture_output=False
+            )
+
+            if process_obj and process_obj.pid is not None:
+                self.logger.info(f"Agent process {agent_id} initiated start with PID {process_obj.pid}")
+                await self._update_status_in_redis(status_key, {"pid": str(process_obj.pid)})
+                return True
+            else:
+                err_msg = f"Failed to launch agent process {agent_id} (process_obj or pid is None)."
+                self.logger.error(err_msg)
+                await self._update_status_in_redis(status_key, {
+                    "status": "error_start_failed", 
+                    "error_detail": err_msg
+                })
+                return False
+                
+        except FileNotFoundError as fnf_e:
+            self.logger.error(f"Failed to start agent {agent_id} due to FileNotFoundError: {fnf_e}", exc_info=True)
+            await self._update_status_in_redis(status_key, {
+                "status": "error_script_not_found", 
+                "error_detail": str(fnf_e)
+            })
+            return False
+        except Exception as e:
+            self.logger.error(f"Failed to start agent {agent_id}: {e}", exc_info=True)
+            await self._update_status_in_redis(status_key, {
+                "status": "error_start_failed", 
+                "error_detail": str(e)
+            })
+            return False
 
     async def stop_agent_process(self, agent_id: str, force: bool = False) -> bool:
         """
         Останавливает локальный процесс агента.
 
-        Получает текущий статус агента. Если агент уже остановлен, ничего не делает.
-        Обновляет статус в Redis на "stopping".
-        Для локальных агентов отправляет SIGTERM, затем SIGKILL (при `force=True`), если процесс не завершился.
-        После успешной остановки обновляет статус в Redis на "stopped" и удаляет динамические поля (pid и т.д.).
-
         Args:
             agent_id (str): Идентификатор агента.
             force (bool): Если True, применяет принудительные методы остановки (SIGKILL для локальных).
-                          По умолчанию False.
 
         Returns:
             bool: True, если процесс успешно остановлен (или уже был остановлен), иначе False.
         """
-        status_key = self.agent_status_key_template.format(agent_id)
-        status_info = await self.get_agent_status(agent_id)
+        # Validate prerequisites
+        prerequisites = await self._validate_stop_prerequisites(agent_id)
+        if not prerequisites["should_stop"]:
+            return await self._handle_already_stopped_agent(agent_id, prerequisites["status_key"])
 
-        current_status = status_info.get("status", "unknown")
-        pid_to_stop = status_info.get("pid")
-
-        if current_status == "stopped" or current_status == "not_found":
-            logger.info(f"Agent {agent_id} is already stopped or not found.")
-            redis_cli = await self.redis_client
-            if await redis_cli.exists(status_key):
-                 await self._update_status_in_redis(status_key, {"status": "stopped", "agent_id": agent_id})
-                 await self._delete_fields_from_redis_status(status_key, ["pid", "last_active", "error_detail", "start_attempt_utc"])
-            return True
-
-        await self._update_status_in_redis(status_key, {"status": "stopping"})
-        stopped_successfully = False
-
-        try:
-            if pid_to_stop:
-                logger.info(f"Stopping agent process {agent_id} (PID: {pid_to_stop}). Force: {force}")
-                try:
-                    os.kill(pid_to_stop, signal.SIGTERM)
-                    logger.info(f"SIGTERM sent to agent {agent_id} (PID: {pid_to_stop})")
-                    
-                    wait_time = getattr(settings, 'PROCESS_GRACEFUL_SHUTDOWN_TIMEOUT', DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT)
-                    for _ in range(int(wait_time / 0.1)): 
-                        await asyncio.sleep(0.1)
-                        try:
-                            os.kill(pid_to_stop, 0) # Check if process exists
-                        except ProcessLookupError:
-                            stopped_successfully = True 
-                            logger.info(f"Agent {agent_id} (PID: {pid_to_stop}) terminated gracefully after SIGTERM.")
-                            break 
-                    else: # Loop completed without break
-                        logger.warning(f"Agent {agent_id} (PID: {pid_to_stop}) did not terminate after SIGTERM within {wait_time}s.")
-                        if force:
-                            logger.info(f"Forcing kill (SIGKILL) for agent {agent_id} (PID: {pid_to_stop}).")
-                            try:
-                                os.kill(pid_to_stop, signal.SIGKILL)
-                                await asyncio.sleep(0.1) # Brief moment for SIGKILL to take effect
-                                try:
-                                    os.kill(pid_to_stop, 0) # Check if truly gone
-                                    logger.warning(f"Agent {agent_id} (PID: {pid_to_stop}) still exists after SIGKILL attempt.")
-                                    # stopped_successfully remains False
-                                except ProcessLookupError:
-                                    logger.info(f"Agent {agent_id} (PID: {pid_to_stop}) confirmed terminated after SIGKILL.")
-                                    stopped_successfully = True
-                            except ProcessLookupError: 
-                                logger.info(f"Agent {agent_id} (PID: {pid_to_stop}) was already gone before SIGKILL could be sent or checked.")
-                                stopped_successfully = True
-                            except Exception as e_sigkill:
-                                logger.error(f"Error sending SIGKILL to agent {agent_id} (PID: {pid_to_stop}): {e_sigkill}", exc_info=True)
-                        # else (not force): stopped_successfully remains False if SIGTERM failed
-                
-                except ProcessLookupError:
-                    logger.warning(f"Agent process {agent_id} (PID: {pid_to_stop}) not found (already stopped?).")
-                    stopped_successfully = True # Effectively stopped
-                except Exception as e_kill: 
-                    logger.error(f"Error stopping agent {agent_id} (PID: {pid_to_stop}): {e_kill}", exc_info=True)
-
-            else: 
-                logger.warning(f"Cannot actively stop agent {agent_id}: PID is '{pid_to_stop}'. Marking as stopped if no PID.")
-                if not pid_to_stop: # Simplified condition
-                    stopped_successfully = True # No specific process to target, assume it's effectively stopped.
+        status_key = prerequisites["status_key"]
+        pid_to_stop = prerequisites["pid"]
         
-        except Exception as e: 
-            logger.error(f"Unexpected error during stop_agent_process for {agent_id}: {e}", exc_info=True)
-            await self._update_status_in_redis(status_key, {"status": "error_stop_failed", "error_detail": str(e)})
-            return False
-
-        # Final status update based on outcome
-        if stopped_successfully:
-            final_status_update = {"status": "stopped", "agent_id": agent_id}
-            await self._update_status_in_redis(status_key, final_status_update)
-            # Clean up dynamic fields after confirming stop
-            await self._delete_fields_from_redis_status(status_key, ["pid", "last_active", "error_detail", "start_attempt_utc"])
-            # Re-set status to ensure only "stopped" and "agent_id" (and last_updated_utc) remain.
-            await self._update_status_in_redis(status_key, {"status": "stopped", "agent_id": agent_id}) # This ensures last_updated_utc is fresh
-            logger.info(f"Agent {agent_id} marked as stopped in Redis.")
-            return True
-        else:
-            logger.warning(f"Failed to stop agent {agent_id}. Current Redis status might be 'stopping' or original status if stop attempt failed early.")
-            # Revert to a more accurate error status if still "stopping"
-            current_redis_status_map = await self._get_status_from_redis(status_key)
-            if current_redis_status_map.get("status") == "stopping":
-                 await self._update_status_in_redis(status_key, {"status": "error_stop_failed", "error_detail": "Failed to confirm stop."})
+        # Mark as stopping
+        await self._update_status_in_redis(status_key, {"status": "stopping"})
+        
+        try:
+            if not pid_to_stop:
+                logger.warning("Cannot actively stop agent %s: no PID available. Marking as stopped.", agent_id)
+                await self._cleanup_stopped_agent_status(agent_id, status_key)
+                return True
+            
+            # Execute stop procedure
+            return await self._execute_agent_stop_procedure(agent_id, pid_to_stop, status_key, force)
+                
+        except Exception as e:
+            logger.error("Unexpected error during stop_agent_process for %s: %s", agent_id, e, exc_info=True)
+            await self._update_status_in_redis(
+                status_key, 
+                {"status": "error_stop_failed", "error_detail": str(e)}
+            )
             return False
 
     async def restart_agent_process(self, agent_id: str) -> bool:
@@ -457,61 +859,43 @@ class ProcessManager(RedisClientManager):
         """
         Получает информацию о статусе для указанной интеграции агента.
 
-        Извлекает данные из Redis. Если статус в Redis указывает на запущенный локальный процесс,
-        проверяет его существование с помощью `os.kill(pid, 0)`.
-        Если процесс не найден, обновляет статус в Redis на "error_process_lost".
-
         Args:
             agent_id (str): Идентификатор агента.
             integration_type (IntegrationTypeStr): Тип интеграции (например, "TELEGRAM").
 
         Returns:
-            IntegrationStatusInfo: Словарь с информацией о статусе интеграции, включая:
-                `agent_id`, `integration_type`, `status`, `pid`, `last_active`,
-                `error_detail`.
-                Если статус не найден, возвращает статус "not_found".
+            IntegrationStatusInfo: Словарь с информацией о статусе интеграции.
         """
         integration_type_for_redis_key = integration_type.lower()
-
         status_key = self.integration_status_key_template.format(agent_id, integration_type_for_redis_key)
+        
+        # Получаем данные из Redis
         status_data = await self._get_status_from_redis(status_key)
-
         if not status_data:
             return {
-                "agent_id": agent_id, 
+                "agent_id": agent_id,
                 "integration_type": integration_type,
-                "status": "not_found", 
-                "pid": None, 
+                "status": "not_found",
+                "pid": None,
                 "last_active": None,
                 "error_detail": None
             }
 
+        # Парсим данные статуса
         current_status = status_data.get("status", "unknown")
-        pid_val = status_data.get("pid")
-        pid = int(pid_val) if pid_val and pid_val.isdigit() else None
-        last_active_val = status_data.get("last_active")
-        try:
-            last_active = float(last_active_val) if last_active_val else None
-        except (ValueError, TypeError):
-            last_active = None
-        
-        # Validate process existence if status suggests it should be running
-        if pid and current_status in ["running", "starting", "initializing"]:
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                logger.warning(f"Integration {integration_type} for agent {agent_id} status is '{current_status}' in Redis, but PID {pid} not found. Updating status.")
-                current_status = "error_process_lost"
-                await self._update_status_in_redis(status_key, {"status": current_status, "pid": "", "integration_type": integration_type})
-                pid = None 
-            except OSError as e:
-                logger.error(f"Error checking PID {pid} for integration {integration_type} of agent {agent_id}: {e}. Status remains '{current_status}'.")
+        pid = await self._parse_pid_from_status(status_data.get("pid"))
+        last_active = await self._parse_last_active_from_status(status_data.get("last_active"))
+
+        # Валидируем существование процесса
+        validated_status, validated_pid = await self._validate_process_existence(
+            pid, agent_id, integration_type, current_status, status_key
+        )
 
         return {
             "agent_id": agent_id,
             "integration_type": integration_type,
-            "status": current_status,
-            "pid": pid,
+            "status": validated_status,
+            "pid": validated_pid,
             "last_active": last_active,
             "error_detail": status_data.get("error_detail")
         }
@@ -520,237 +904,101 @@ class ProcessManager(RedisClientManager):
         """
         Запускает процесс интеграции для указанного агента.
 
-        Проверяет, не запущен ли уже процесс или не находится ли он в процессе запуска.
-        Определяет путь к скрипту интеграции на основе `integration_type`.
-        Если скрипт не найден, устанавливает статус "error_script_not_found".
-        Формирует команду для запуска скрипта интеграции Python (`python -m module_path ...`)
-        с передачей `agent_id`, `integration_settings` (в JSON) и `redis_url`.
-        Запускает процесс с помощью `ProcessLauncher` без захвата вывода.
-        Обновляет статус в Redis ("starting", затем PID после успешного запуска, или "error_start_failed" при ошибке).
-
         Args:
             agent_id (str): Идентификатор агента.
             integration_type (IntegrationTypeStr): Тип интеграции (например, "TELEGRAM").
-            integration_settings (Optional[Dict[str, Any]]): Настройки для интеграции, передаваемые в процесс.
-                                                              По умолчанию None.
+            integration_settings (Optional[Dict[str, Any]]): Настройки для интеграции.
 
         Returns:
             bool: True, если процесс интеграции успешно инициирован, иначе False.
         """
         integration_type_for_redis_key = integration_type.lower()
-
         status_key = self.integration_status_key_template.format(agent_id, integration_type_for_redis_key)
         
-        try:
-            current_integration_status_info = await self.get_integration_status(agent_id, integration_type)
-            if current_integration_status_info["status"] == "running":
-                logger.warning(f"Integration {integration_type} for agent {agent_id} already reported as running. Skipping start.")
-                return True
-            if current_integration_status_info["status"] == "starting":
-                logger.warning(f"Integration {integration_type} for agent {agent_id} is already starting. Skipping duplicate start request.")
-                return True
-        except Exception as e:
-            logger.error(f"Error checking integration status before start for {agent_id}/{integration_type}: {e}", exc_info=True)
+        self.logger.info(f"Attempting to start integration process for {agent_id}/{integration_type}...")
 
-        logger.info(f"Attempting to start integration process for {agent_id}/{integration_type}...")
+        # Проверяем предварительные условия
+        if not await self._validate_integration_start_prerequisites(agent_id, integration_type):
+            return True  # Уже запущен или в процессе запуска
 
-        module_path = self.integration_module_paths.get(integration_type.upper())
-        script_full_path = self.integration_script_full_paths.get(integration_type.upper())
-
-        if not module_path or not script_full_path or not os.path.exists(script_full_path):
-            logger.error(f"Integration script/module not found for type: {integration_type}. Path: {script_full_path}")
-            await self._update_status_in_redis(status_key, {
-                "status": "error_script_not_found", 
-                "error_detail": f"Script not found for {integration_type}",
-                "agent_id": agent_id,
-                "integration_type": integration_type
-            })
+        # Проверяем наличие скриптов
+        if not await self._validate_integration_script_paths(integration_type, status_key, agent_id):
             return False
 
-        initial_status_data: Dict[str, Any] = {
+        # Устанавливаем начальный статус
+        initial_status_data = {
             "status": "starting",
             "agent_id": agent_id,
             "integration_type": integration_type,
             "start_attempt_utc": datetime.now(timezone.utc).isoformat(),
             "last_active": str(time.time())
         }
+        await self._update_status_in_redis(status_key, initial_status_data)
+
+        # Формируем команду запуска
+        cmd = await self._build_integration_command(integration_type, agent_id, integration_settings)
         
-        try:
-            cmd = [
-                self.python_executable,
-                "-m", module_path,
-                "--agent-id", agent_id,
-            ]
-            if integration_settings:
-                cmd.extend(["--integration-settings", json.dumps(integration_settings)])
-            
-            # cmd.extend(["--redis-url", str(settings.REDIS_URL)])
-
-            logger.debug(f"Starting integration {integration_type} for agent {agent_id}. Command: {' '.join(cmd)}")
-            await self._update_status_in_redis(status_key, initial_status_data)
-
-            process_obj, _, _ = await self.launcher.launch_process(
-                command=cmd,
-                process_id=f"integration_start_{agent_id}_{integration_type}",
-                cwd=self.project_root,
-                env_vars=self.process_env,
-                capture_output=False
-            )
-
-            if process_obj and process_obj.pid is not None:
-                logger.info(f"Integration process {integration_type} for agent {agent_id} initiated start with PID {process_obj.pid}")
-                await self._update_status_in_redis(status_key, {"pid": str(process_obj.pid), "integration_type": integration_type})
-                return True
-            else:
-                err_msg = f"Failed to launch integration process {integration_type} for agent {agent_id} (process_obj or pid is None)."
-                logger.error(err_msg)
-                await self._update_status_in_redis(status_key, {
-                    "status": "error_start_failed", 
-                    "error_detail": err_msg, 
-                    "agent_id": agent_id, 
-                    "integration_type": integration_type
-                })
-                return False
-        
-        except FileNotFoundError as fnf_e:
-            logger.error(f"Failed to start integration {integration_type} for {agent_id} due to FileNotFoundError: {fnf_e}", exc_info=True)
-            await self._update_status_in_redis(status_key, {
-                "status": "error_script_not_found", 
-                "error_detail": str(fnf_e), 
-                "integration_type": integration_type
-            })
-            return False
-        except Exception as e:
-            logger.error(f"Failed to start integration {integration_type} for {agent_id}: {e}", exc_info=True)
-            await self._update_status_in_redis(status_key, {
-                "status": "error_start_failed", 
-                "error_detail": str(e), 
-                "integration_type": integration_type
-            })
-            return False
+        # Запускаем процесс
+        return await self._launch_integration_process(cmd, integration_type, agent_id, status_key)
 
     async def stop_integration_process(self, agent_id: str, integration_type: IntegrationTypeStr, force: bool = False) -> bool:
         """
         Останавливает локальный процесс интеграции для указанного агента.
 
-        Получает текущий статус интеграции. Если уже остановлена, ничего не делает.
-        Обновляет статус в Redis на "stopping".
-        Для локальных процессов отправляет SIGTERM, затем SIGKILL (при `force=True`), если процесс не завершился.
-        После успешной остановки обновляет статус в Redis на "stopped" и удаляет динамические поля.
-
         Args:
             agent_id (str): Идентификатор агента.
             integration_type (IntegrationTypeStr): Тип интеграции (например, "TELEGRAM").
             force (bool): Если True, применяет принудительные методы остановки (SIGКILL для локальных).
-                          По умолчанию False.
 
         Returns:
             bool: True, если процесс успешно остановлен (или уже был остановлен), иначе False.
         """
         integration_type_for_redis_key = integration_type.lower()
-
         status_key = self.integration_status_key_template.format(agent_id, integration_type_for_redis_key)
         self.logger.info(f"Attempting to stop integration {agent_id}/{integration_type}. Force: {force}")
 
-        status_info = await self.get_integration_status(agent_id, integration_type)
-
-        current_status = status_info.get("status", "unknown")
-        pid_to_stop = status_info.get("pid")
-
-        if current_status == "stopped" or current_status == "not_found":
-            logger.info(f"Integration {integration_type} for agent {agent_id} is already stopped or not found.")
-            redis_cli = await self.redis_client
-            if await redis_cli.exists(status_key):
-                 await self._update_status_in_redis(status_key, {
-                     "status": "stopped", 
-                     "agent_id": agent_id, 
-                     "integration_type": integration_type
-                 })
-                 await self._delete_fields_from_redis_status(status_key, ["pid", "last_active", "error_detail", "start_attempt_utc"])
-            return True
-
-        await self._update_status_in_redis(status_key, {"status": "stopping", "integration_type": integration_type})
-        stopped_successfully = False
-
         try:
-            if pid_to_stop is not None:
-                logger.info(f"Stopping integration {integration_type} for agent {agent_id} (PID: {pid_to_stop}). Force: {force}")
-                try:
-                    os.kill(pid_to_stop, signal.SIGTERM) 
-                    logger.info(f"SIGTERM sent to integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id}")
-                    
-                    wait_time = getattr(settings, 'PROCESS_GRACEFUL_SHUTDOWN_TIMEOUT', DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT)
-                    for _ in range(int(wait_time / 0.1)): 
-                        await asyncio.sleep(0.1)
-                        try:
-                            os.kill(pid_to_stop, 0)
-                        except ProcessLookupError:
-                            stopped_successfully = True 
-                            logger.info(f"Integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id} terminated gracefully after SIGTERM.")
-                            break 
-                    else: 
-                        logger.warning(f"Integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id} did not terminate after SIGTERM within {wait_time}s.")
-                        if force:
-                            logger.info(f"Forcing kill (SIGKILL) for integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id}.")
-                            try:
-                                os.kill(pid_to_stop, signal.SIGKILL)
-                                await asyncio.sleep(0.1) 
-                                try:
-                                    os.kill(pid_to_stop, 0)
-                                    logger.warning(f"Integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id} still exists after SIGKILL attempt.")
-                                except ProcessLookupError:
-                                    logger.info(f"Integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id} confirmed terminated after SIGKILL.")
-                                    stopped_successfully = True
-                            except ProcessLookupError: 
-                                logger.info(f"Integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id} was already gone before SIGKILL could be sent or confirmed.")
-                                stopped_successfully = True
-                            except Exception as e_sigkill:
-                                logger.error(f"Error sending SIGKILL to integration {integration_type} (PID: {pid_to_stop}) for agent {agent_id}: {e_sigkill}", exc_info=True)
-                
-                except ProcessLookupError: 
-                    logger.warning(f"Integration process {integration_type} for agent {agent_id} (PID: {pid_to_stop}) not found (already stopped?).")
-                    stopped_successfully = True 
-                except Exception as e_kill: 
-                    logger.error(f"Error stopping integration {integration_type} for agent {agent_id} (PID: {pid_to_stop}): {e_kill}", exc_info=True)
+            # Получаем статус интеграции
+            status_info = await self.get_integration_status(agent_id, integration_type)
             
-            else: 
-                logger.warning(f"Cannot actively stop integration {integration_type} for agent {agent_id}: PID is '{pid_to_stop}'. Marking as stopped if no PID.")
-                if not pid_to_stop : # Simplified condition
-                    stopped_successfully = True 
-        
-        except Exception as e: 
-            logger.error(f"Unexpected error during stop_integration_process for {agent_id}/{integration_type}: {e}", exc_info=True)
+            # Проверяем предварительные условия
+            already_stopped, pid_to_stop = await self._validate_integration_stop_prerequisites(
+                agent_id, integration_type, status_info
+            )
+            
+            if already_stopped:
+                return await self._handle_already_stopped_integration(agent_id, integration_type, status_key)
+
+            # Обновляем статус на "stopping"
             await self._update_status_in_redis(status_key, {
-                "status": "error_stop_failed", 
-                "error_detail": str(e), 
+                "status": "stopping", 
                 "integration_type": integration_type
             })
-            return False
 
-        if stopped_successfully:
-            final_status_update = {
-                "status": "stopped", 
-                "agent_id": agent_id, 
-                "integration_type": integration_type
-            }
-            await self._update_status_in_redis(status_key, final_status_update)
-            await self._delete_fields_from_redis_status(status_key, ["pid", "last_active", "error_detail", "start_attempt_utc"])
+            # Выполняем процедуру остановки
+            stopped_successfully = await self._execute_integration_stop_procedure(
+                integration_type, agent_id, pid_to_stop, force
+            )
+
+            # Обрабатываем результат
+            if stopped_successfully:
+                await self._cleanup_stopped_integration_status(status_key, agent_id, integration_type)
+                return True
+            else:
+                await self._update_status_in_redis(status_key, {
+                    "status": "error_stop_failed",
+                    "error_detail": "Failed to confirm stop.",
+                    "integration_type": integration_type
+                })
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Unexpected error during stop_integration_process for {agent_id}/{integration_type}: {e}", exc_info=True)
             await self._update_status_in_redis(status_key, {
-                "status": "stopped", 
-                "agent_id": agent_id, 
+                "status": "error_stop_failed",
+                "error_detail": str(e),
                 "integration_type": integration_type
-            }) 
-            logger.info(f"Integration {integration_type} for agent {agent_id} marked as stopped in Redis.")
-            return True
-        else:
-            logger.warning(f"Failed to stop integration {integration_type} for agent {agent_id}. Current Redis status might be 'stopping'.")
-            current_redis_status_map = await self._get_status_from_redis(status_key)
-            if current_redis_status_map.get("status") == "stopping": 
-                 await self._update_status_in_redis(status_key, {
-                     "status": "error_stop_failed", 
-                     "error_detail": "Failed to confirm stop.", 
-                     "integration_type": integration_type
-                 })
+            })
             return False
 
     async def restart_integration_process(self, agent_id: str, integration_type: IntegrationTypeStr, integration_settings: Optional[Dict[str, Any]] = None) -> bool:
@@ -792,56 +1040,39 @@ class ProcessManager(RedisClientManager):
         """
         Получает информацию о статусе для указанного агента.
 
-        Извлекает данные из Redis. Если статус в Redis указывает на запущенный локальный процесс,
-        проверяет его существование с помощью `os.kill(pid, 0)`.
-        Если процесс не найден, обновляет статус в Redis на "error_process_lost".
-
         Args:
             agent_id (str): Идентификатор агента.
 
         Returns:
-            AgentStatusInfo: Словарь с информацией о статусе агента, включая:
-                `agent_id`, `status`, `pid`, `last_active`,
-                `error_detail`.
-                Если статус не найден, возвращает статус "not_found".
+            AgentStatusInfo: Словарь с информацией о статусе агента.
         """
         status_key = self.agent_status_key_template.format(agent_id)
+        
+        # Получаем данные из Redis
         status_data = await self._get_status_from_redis(status_key)
-
         if not status_data:
             return {
-                "agent_id": agent_id, 
-                "status": "not_found", 
-                "pid": None, 
+                "agent_id": agent_id,
+                "status": "not_found",
+                "pid": None,
                 "last_active": None,
                 "error_detail": None
             }
 
+        # Парсим данные статуса
         current_status = status_data.get("status", "unknown")
-        pid_val = status_data.get("pid")
-        pid = int(pid_val) if pid_val and pid_val.isdigit() else None
-        last_active_val = status_data.get("last_active")
-        try:
-            last_active = float(last_active_val) if last_active_val else None
-        except (ValueError, TypeError):
-            last_active = None
-        
-        # Validate process existence if status suggests it should be running
-        if pid and current_status in ["running", "starting", "initializing"]:
-            try:
-                os.kill(pid, 0) # Check if process exists
-            except ProcessLookupError:
-                logger.warning(f"Agent {agent_id} status is '{current_status}' in Redis, but PID {pid} not found. Updating status.")
-                current_status = "error_process_lost"
-                await self._update_status_in_redis(status_key, {"status": current_status, "pid": ""})
-                pid = None # Clear pid as it's no longer valid
-            except OSError as e: # Other OS errors, e.g., permission denied
-                logger.error(f"Error checking PID {pid} for agent {agent_id}: {e}. Status remains '{current_status}'.")
+        pid = await self._parse_pid_from_status(status_data.get("pid"))
+        last_active = await self._parse_last_active_from_status(status_data.get("last_active"))
+
+        # Валидируем существование процесса
+        validated_status, validated_pid = await self._validate_agent_process_existence(
+            pid, agent_id, current_status, status_key
+        )
 
         return {
             "agent_id": agent_id,
-            "status": current_status,
-            "pid": pid,
+            "status": validated_status,
+            "pid": validated_pid,
             "last_active": last_active,
             "error_detail": status_data.get("error_detail")
         }
@@ -850,85 +1081,34 @@ class ProcessManager(RedisClientManager):
         """
         Запускает локальный процесс агента.
 
-        Проверяет, не запущен ли уже процесс или не находится ли он в процессе запуска.
-        Формирует команду для запуска скрипта агента Python (`python -m module_path ...`)
-        с передачей `agent_id`, `agent_settings` (в JSON) и `redis_url`.
-        Запускает процесс с помощью `ProcessLauncher` без захвата вывода.
-        Обновляет статус в Redis ("starting", затем PID после успешного запуска, или "error_start_failed" при ошибке).
-
         Args:
             agent_id (str): Идентификатор агента.
-            agent_settings (Optional[Dict[str, Any]]): Настройки для агента, передаваемые в процесс.
-                                                        По умолчанию None.
+            agent_settings (Optional[Dict[str, Any]]): Настройки для агента.
 
         Returns:
             bool: True, если процесс агента успешно инициирован, иначе False.
         """
         status_key = self.agent_status_key_template.format(agent_id)
-        
-        try:
-            current_agent_status_info = await self.get_agent_status(agent_id)
-            if current_agent_status_info["status"] == "running":
-                logger.warning(f"Agent {agent_id} already reported as running. Skipping start.")
-                return True
-            if current_agent_status_info["status"] == "starting":
-                logger.warning(f"Agent {agent_id} is already starting. Skipping duplicate start request.")
-                return True
-        except Exception as e: # Catch any error during status check
-            logger.error(f"Error checking agent status before start for {agent_id}: {e}", exc_info=True)
-            # Proceed with start, assuming it might be a transient Redis issue or first start
+        self.logger.info(f"Attempting to start agent process for {agent_id}...")
 
-        logger.info(f"Attempting to start agent process for {agent_id}...")
+        # Проверяем предварительные условия
+        if not await self._validate_agent_start_prerequisites(agent_id):
+            return True  # Уже запущен или в процессе запуска
 
-        initial_status_data: Dict[str, Any] = {
+        # Устанавливаем начальный статус
+        initial_status_data = {
             "status": "starting",
             "agent_id": agent_id,
             "start_attempt_utc": datetime.now(timezone.utc).isoformat(),
             "last_active": str(time.time())
         }
+        await self._update_status_in_redis(status_key, initial_status_data)
+
+        # Формируем команду запуска
+        cmd = await self._build_agent_command(agent_id, agent_settings)
         
-        try:
-            # Always use process start
-            cmd = [
-                self.python_executable,
-                "-m", self.agent_runner_module_path,
-                "--agent-id", agent_id,
-            ]
-            if agent_settings:
-                cmd.extend(["--agent-settings", json.dumps(agent_settings)])
-            
-            # cmd.extend(["--redis-url", str(settings.REDIS_URL)])
-
-            # logger.info(f"Starting agent {agent_id}. Command: {' '.join(cmd)}")
-            await self._update_status_in_redis(status_key, initial_status_data)
-
-            process_obj, _, _ = await self.launcher.launch_process(
-                command=cmd,
-                process_id=f"agent_start_{agent_id}", # Unique ID for launcher
-                cwd=self.project_root,
-                env_vars=self.process_env,
-                capture_output=False # Agent runner handles its own logging
-            )
-
-            if process_obj and process_obj.pid is not None:
-                logger.info(f"Agent process {agent_id} initiated start with PID {process_obj.pid}")
-                await self._update_status_in_redis(status_key, {"pid": str(process_obj.pid)})
-                # Status will be updated to "running" by the agent runner itself via StatusUpdater
-                return True
-            else:
-                err_msg = f"Failed to launch agent process {agent_id} (process_obj or pid is None)."
-                logger.error(err_msg)
-                await self._update_status_in_redis(status_key, {"status": "error_start_failed", "error_detail": err_msg})
-                return False
-        
-        except FileNotFoundError as fnf_e: # e.g. python executable not found
-            logger.error(f"Failed to start agent {agent_id} due to FileNotFoundError: {fnf_e}", exc_info=True)
-            await self._update_status_in_redis(status_key, {"status": "error_script_not_found", "error_detail": str(fnf_e)})
-            return False
-        except Exception as e:
-            logger.error(f"Failed to start agent {agent_id}: {e}", exc_info=True)
-            await self._update_status_in_redis(status_key, {"status": "error_start_failed", "error_detail": str(e)})
-            return False
+        # Запускаем процесс
+        return await self._launch_agent_process(cmd, agent_id, status_key)
 
     async def _start_agent_process(self, agent_id: str, config_url: str, agent_settings: Dict[str, Any]) -> Optional[int]:
         """Helper to start a agent process."""
@@ -954,32 +1134,6 @@ class ProcessManager(RedisClientManager):
         else:
             logger.error(f"Failed to start agent process for {agent_id}. Command: {' '.join(cmd)}")
             return None
-
-# Example of how to use the ProcessManager (e.g., in an API router or a main service script)
-async def example_usage():
-    manager = ProcessManager()
-    await manager.setup_manager()
-
-    test_agent_id = "test_agent_001"
-    
-    # Start an agent
-    # You'd need to have the agent runner script and its dependencies set up.
-    # print(f"Attempting to start agent: {test_agent_id}")
-    # success_start = await manager.start_agent_process(test_agent_id)
-    # print(f"Agent start success: {success_start}")
-    # await asyncio.sleep(5) # Give it time to start and potentially update its own status
-    
-    # status = await manager.get_agent_status(test_agent_id)
-    # print(f"Agent status: {status}")
-
-    # print(f"Attempting to stop agent: {test_agent_id}")
-    # success_stop = await manager.stop_agent_process(test_agent_id, force=True)
-    # print(f"Agent stop success: {success_stop}")
-    
-    # status_after_stop = await manager.get_agent_status(test_agent_id)
-    # print(f"Agent status after stop: {status_after_stop}")
-
-    await manager.cleanup_manager()
 
 if __name__ == "__main__":
     # This example requires a running Redis instance and appropriate settings.
