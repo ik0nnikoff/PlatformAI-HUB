@@ -182,6 +182,193 @@ class ProcessManager(RedisClientManager):
         await self.close_redis_resources()
         logger.info("ProcessManager cleaned up Redis connection.")
 
+    # --- Process Management Utilities (Phase 3: Деduplication) ---
+    async def _check_process_exists(self, pid: int) -> bool:
+        """
+        Проверяет существование процесса по PID.
+
+        Args:
+            pid (int): PID процесса для проверки
+
+        Returns:
+            bool: True если процесс существует, False если нет
+        """
+        try:
+            os.kill(pid, 0)  # Check if process exists
+            return True
+        except ProcessLookupError:
+            return False
+        except OSError:
+            return False
+
+    async def _send_graceful_termination_signal(
+        self,
+        pid: int,
+        process_type: str,
+        process_id: str,
+        timeout: float
+    ) -> bool:
+        """
+        Отправляет SIGTERM процессу и ждет его завершения.
+
+        Args:
+            pid (int): PID процесса
+            process_type (str): Тип процесса ("agent" или "integration")
+            process_id (str): Идентификатор процесса для логирования
+            timeout (float): Время ожидания завершения процесса
+
+        Returns:
+            bool: True если процесс завершился, False если нужно принудительное завершение
+        """
+        try:
+            os.kill(pid, signal.SIGTERM)
+            self.logger.info("SIGTERM sent to %s %s (PID: %s)", process_type, process_id, pid)
+
+            for _ in range(int(timeout / 0.1)):
+                await asyncio.sleep(0.1)
+                if not await self._check_process_exists(pid):
+                    self.logger.info(
+                        "%s %s (PID: %s) terminated gracefully after SIGTERM.",
+                        process_type.capitalize(),
+                        process_id,
+                        pid,
+                    )
+                    return True
+
+            self.logger.warning(
+                "%s %s (PID: %s) did not terminate after SIGTERM within %.1fs.",
+                process_type.capitalize(),
+                process_id,
+                pid,
+                timeout,
+            )
+            return False
+
+        except ProcessLookupError:
+            self.logger.warning(
+                "%s process %s (PID: %s) not found (already stopped?).",
+                process_type.capitalize(),
+                process_id,
+                pid,
+            )
+            return True
+        except OSError as e:
+            self.logger.error(
+                "Error stopping %s %s (PID: %s): %s",
+                process_type,
+                process_id,
+                pid,
+                e,
+                exc_info=True,
+            )
+            return False
+
+    async def _force_kill_process_unified(
+        self,
+        pid: int,
+        process_type: str,
+        process_id: str
+    ) -> bool:
+        """
+        Принудительно завершает процесс через SIGKILL.
+
+        Args:
+            pid (int): PID процесса
+            process_type (str): Тип процесса ("agent" или "integration")
+            process_id (str): Идентификатор процесса для логирования
+
+        Returns:
+            bool: True если процесс успешно завершен
+        """
+        try:
+            self.logger.info(
+                "Forcing kill (SIGKILL) for %s %s (PID: %s).", process_type, process_id, pid
+            )
+            os.kill(pid, signal.SIGKILL)
+            await asyncio.sleep(0.1)  # Brief moment for SIGKILL to take effect
+
+            if await self._check_process_exists(pid):
+                self.logger.warning(
+                    "%s %s (PID: %s) still exists after SIGKILL attempt.",
+                    process_type.capitalize(),
+                    process_id,
+                    pid,
+                )
+                return False
+
+            self.logger.info(
+                "%s %s (PID: %s) confirmed terminated after SIGKILL.",
+                process_type.capitalize(),
+                process_id,
+                pid,
+            )
+            return True
+
+        except ProcessLookupError:
+            self.logger.info(
+                "%s %s (PID: %s) was already gone before SIGKILL could be sent.",
+                process_type.capitalize(),
+                process_id,
+                pid,
+            )
+            return True
+        except OSError as e:
+            self.logger.error(
+                "Error sending SIGKILL to %s %s (PID: %s): %s",
+                process_type,
+                process_id,
+                pid,
+                e,
+                exc_info=True,
+            )
+            return False
+
+    async def _validate_process_status_unified(
+        self,
+        pid: Optional[int],
+        current_status: str,
+        status_key: str,
+        process_type: str,
+        process_id: str,
+    ) -> Tuple[str, Optional[int]]:
+        """
+        Унифицированная проверка существования процесса для агентов и интеграций.
+
+        Args:
+            pid: PID процесса (может быть None)
+            current_status: Текущий статус из Redis
+            status_key: Ключ статуса в Redis
+            process_type: Тип процесса ("agent" или "integration")
+            process_id: Идентификатор процесса
+
+        Returns:
+            Tuple[str, Optional[int]]: Валидированный статус и PID
+        """
+        if pid and current_status in ["running", "starting", "initializing"]:
+            if await self._check_process_exists(pid):
+                return current_status, pid
+
+            # Process lost
+            self.logger.warning(
+                "%s %s status is '%s' in Redis, but PID %s not found. Updating status.",
+                process_type.capitalize(),
+                process_id,
+                current_status,
+                pid,
+            )
+            new_status = "error_process_lost"
+
+            update_data = {"status": new_status, "pid": ""}
+            if process_type == "integration":
+                update_data["integration_type"] = (
+                    process_id.split("_")[-1] if "_" in process_id else process_id
+                )
+
+            await self._update_status_in_redis(status_key, update_data)
+            return new_status, None
+
+        return current_status, pid
+
     # --- Helper methods for Redis Hash operations (compatible with original service) ---
     async def _update_status_in_redis(self, key: str, status_dict: Dict[str, Any]):
         """
@@ -371,46 +558,7 @@ class ProcessManager(RedisClientManager):
         Returns:
             bool: True если процесс завершился, False если нужно принудительное завершение
         """
-        try:
-            os.kill(pid, signal.SIGTERM)
-            logger.info("SIGTERM sent to agent %s (PID: %s)", agent_id, pid)
-
-            for _ in range(int(timeout / 0.1)):
-                await asyncio.sleep(0.1)
-                try:
-                    os.kill(pid, 0)  # Check if process exists
-                except ProcessLookupError:
-                    logger.info(
-                        "Agent %s (PID: %s) terminated gracefully after SIGTERM.",
-                        agent_id,
-                        pid,
-                    )
-                    return True
-
-            logger.warning(
-                "Agent %s (PID: %s) did not terminate after SIGTERM within %.1fs.",
-                agent_id,
-                pid,
-                timeout,
-            )
-            return False
-
-        except ProcessLookupError:
-            logger.warning(
-                "Agent process %s (PID: %s) not found (already stopped?).",
-                agent_id,
-                pid,
-            )
-            return True
-        except OSError as e:
-            logger.error(
-                "Error stopping agent %s (PID: %s): %s",
-                agent_id,
-                pid,
-                e,
-                exc_info=True,
-            )
-            return False
+        return await self._send_graceful_termination_signal(pid, "agent", agent_id, timeout)
 
     async def _force_kill_process(self, pid: int, agent_id: str) -> bool:
         """
@@ -419,43 +567,7 @@ class ProcessManager(RedisClientManager):
         Returns:
             bool: True если процесс успешно завершен
         """
-        try:
-            logger.info("Forcing kill (SIGKILL) for agent %s (PID: %s).", agent_id, pid)
-            os.kill(pid, signal.SIGKILL)
-            await asyncio.sleep(0.1)  # Brief moment for SIGKILL to take effect
-
-            try:
-                os.kill(pid, 0)  # Check if truly gone
-                logger.warning(
-                    "Agent %s (PID: %s) still exists after SIGKILL attempt.",
-                    agent_id,
-                    pid,
-                )
-                return False
-            except ProcessLookupError:
-                logger.info(
-                    "Agent %s (PID: %s) confirmed terminated after SIGKILL.",
-                    agent_id,
-                    pid,
-                )
-                return True
-
-        except ProcessLookupError:
-            logger.info(
-                "Agent %s (PID: %s) was already gone before SIGKILL could be sent.",
-                agent_id,
-                pid,
-            )
-            return True
-        except OSError as e:
-            logger.error(
-                "Error sending SIGKILL to agent %s (PID: %s): %s",
-                agent_id,
-                pid,
-                e,
-                exc_info=True,
-            )
-            return False
+        return await self._force_kill_process_unified(pid, "agent", agent_id)
 
     async def _cleanup_stopped_agent_status(self, agent_id: str, status_key: str) -> None:
         """
@@ -558,113 +670,22 @@ class ProcessManager(RedisClientManager):
         self, integration_type: str, agent_id: str, pid: int
     ) -> bool:
         """Отправляет graceful stop сигнал процессу интеграции."""
-        try:
-            os.kill(pid, signal.SIGTERM)
-            self.logger.info(
-                "SIGTERM sent to integration %s (PID: %s) for agent %s",
-                integration_type,
-                pid,
-                agent_id,
-            )
-
-            wait_time = getattr(
-                settings,
-                "PROCESS_GRACEFUL_SHUTDOWN_TIMEOUT",
-                DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT,
-            )
-            for _ in range(int(wait_time / 0.1)):
-                await asyncio.sleep(0.1)
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
-                    self.logger.info(
-                        "Integration %s (PID: %s) for agent %s terminated gracefully "
-                        "after SIGTERM.",
-                        integration_type,
-                        pid,
-                        agent_id,
-                    )
-                    return True
-
-            self.logger.warning(
-                "Integration %s (PID: %s) for agent %s did not terminate after SIGTERM within %ss.",
-                integration_type,
-                pid,
-                agent_id,
-                wait_time,
-            )
-            return False
-
-        except ProcessLookupError:
-            self.logger.warning(
-                "Integration process %s for agent %s (PID: %s) not found (already stopped?).",
-                integration_type,
-                agent_id,
-                pid,
-            )
-            return True
-        except Exception as e:
-            self.logger.error(
-                "Error stopping integration %s for agent %s (PID: %s): %s",
-                integration_type,
-                agent_id,
-                pid,
-                e,
-                exc_info=True,
-            )
-            return False
+        process_id = f"{integration_type} for agent {agent_id}"
+        wait_time = getattr(
+            settings,
+            "PROCESS_GRACEFUL_SHUTDOWN_TIMEOUT",
+            DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT,
+        )
+        return await self._send_graceful_termination_signal(
+            pid, "integration", process_id, wait_time
+        )
 
     async def _force_kill_integration_process(
         self, integration_type: str, agent_id: str, pid: int
     ) -> bool:
         """Принудительно завершает процесс интеграции."""
-        try:
-            self.logger.info(
-                "Forcing kill (SIGKILL) for integration %s (PID: %s) for agent %s.",
-                integration_type,
-                pid,
-                agent_id,
-            )
-            os.kill(pid, signal.SIGKILL)
-            await asyncio.sleep(0.1)
-
-            try:
-                os.kill(pid, 0)
-                self.logger.warning(
-                    "Integration %s (PID: %s) for agent %s still exists after SIGKILL attempt.",
-                    integration_type,
-                    pid,
-                    agent_id,
-                )
-                return False
-            except ProcessLookupError:
-                self.logger.info(
-                    "Integration %s (PID: %s) for agent %s confirmed terminated after SIGKILL.",
-                    integration_type,
-                    pid,
-                    agent_id,
-                )
-                return True
-
-        except ProcessLookupError:
-            self.logger.info(
-                "Integration %s (PID: %s) for agent %s was already gone before "
-                "SIGKILL could be sent or confirmed.",
-                integration_type,
-                pid,
-                agent_id,
-            )
-            return True
-        except Exception as e:
-            self.logger.error(
-                "Error sending SIGKILL to integration %s (PID: %s) for agent %s: %s",
-                integration_type,
-                pid,
-                agent_id,
-                e,
-                exc_info=True,
-            )
-            return False
+        process_id = f"{integration_type} for agent {agent_id}"
+        return await self._force_kill_process_unified(pid, "integration", process_id)
 
     async def _cleanup_stopped_integration_status(
         self, status_key: str, agent_id: str, integration_type: str
@@ -938,70 +959,18 @@ class ProcessManager(RedisClientManager):
         status_key: str,
     ) -> Tuple[str, Optional[int]]:
         """Проверяет существование процесса для интеграции."""
-        if pid and current_status in ["running", "starting", "initializing"]:
-            try:
-                os.kill(pid, 0)
-                return current_status, pid
-            except ProcessLookupError:
-                self.logger.warning(
-                    "Integration %s for agent %s status is '%s' in Redis, "
-                    "but PID %s not found. Updating status.",
-                    integration_type,
-                    agent_id,
-                    current_status,
-                    pid,
-                )
-                new_status = "error_process_lost"
-                await self._update_status_in_redis(
-                    status_key,
-                    {
-                        "status": new_status,
-                        "pid": "",
-                        "integration_type": integration_type,
-                    },
-                )
-                return new_status, None
-            except OSError as e:
-                self.logger.error(
-                    "Error checking PID %s for integration %s of agent %s: %s. "
-                    "Status remains '%s'.",
-                    pid,
-                    integration_type,
-                    agent_id,
-                    e,
-                    current_status,
-                )
-                return current_status, pid
-        return current_status, pid
+        process_id = f"{agent_id}_{integration_type}"
+        return await self._validate_process_status_unified(
+            pid, current_status, status_key, "integration", process_id
+        )
 
     async def _validate_agent_process_existence(
         self, pid: int, agent_id: str, current_status: str, status_key: str
     ) -> Tuple[str, Optional[int]]:
         """Проверяет существование процесса для агента."""
-        if pid and current_status in ["running", "starting", "initializing"]:
-            try:
-                os.kill(pid, 0)  # Check if process exists
-                return current_status, pid
-            except ProcessLookupError:
-                self.logger.warning(
-                    "Agent %s status is '%s' in Redis, but PID %s not found. Updating status.",
-                    agent_id,
-                    current_status,
-                    pid,
-                )
-                new_status = "error_process_lost"
-                await self._update_status_in_redis(status_key, {"status": new_status, "pid": ""})
-                return new_status, None
-            except OSError as e:
-                self.logger.error(
-                    "Error checking PID %s for agent %s: %s. Status remains '%s'.",
-                    pid,
-                    agent_id,
-                    e,
-                    current_status,
-                )
-                return current_status, pid
-        return current_status, pid
+        return await self._validate_process_status_unified(
+            pid, current_status, status_key, "agent", agent_id
+        )
 
     # Agent Start Helper Methods
     async def _validate_agent_start_prerequisites(self, agent_id: str) -> bool:
