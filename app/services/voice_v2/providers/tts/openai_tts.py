@@ -19,7 +19,6 @@ SOLID Principles Implementation:
 import asyncio
 import hashlib
 import re
-import time
 from typing import Dict, List, Optional, Any
 import logging
 from openai import AsyncOpenAI, APIError, APIConnectionError, RateLimitError, AuthenticationError
@@ -180,8 +179,6 @@ class OpenAITTSProvider(BaseTTSProvider):
         # Prepare synthesis parameters
         synthesis_params = self._prepare_synthesis_params(request)
 
-        start_time = time.time()
-
         # Use ConnectionManager if available, fallback to legacy retry
         if self._has_connection_manager():
             audio_data = await self._perform_synthesis(synthesis_params)
@@ -189,9 +186,7 @@ class OpenAITTSProvider(BaseTTSProvider):
             # Legacy fallback for backward compatibility
             audio_data = await self._synthesize_with_retry(synthesis_params)
 
-        processing_time = time.time() - start_time
-
-        # Upload audio to storage using TTSStorageMixin
+        # Upload audio to storage using TTSStorageMixin (processing_time будет установлено в базовом классе)
         from .storage_mixin import AudioUploadParams
 
         upload_params = AudioUploadParams(
@@ -219,7 +214,7 @@ class OpenAITTSProvider(BaseTTSProvider):
             audio_url=audio_url,    # Keep URL for storage reference
             text_length=len(request.text),
             audio_duration=self._estimate_audio_duration(request.text),
-            processing_time=processing_time,
+            processing_time=None,  # Will be set by base class
             voice_used=synthesis_params.get("voice", self._openai_config["voice"]),
             language_used=request.language,
             provider_metadata={

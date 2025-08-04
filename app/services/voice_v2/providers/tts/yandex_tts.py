@@ -240,7 +240,7 @@ class YandexTTSProvider(BaseTTSProvider):
         except AudioProcessingError:
             raise
         except Exception as e:
-            return self._create_error_result(request, e, start_time)
+            return self._create_error_result(request, e)
 
     def _validate_synthesis_request(self, request: TTSRequest) -> None:
         """Validate TTS request parameters."""
@@ -283,31 +283,29 @@ class YandexTTSProvider(BaseTTSProvider):
 
         file_path = await self._upload_audio_to_storage(upload_params)
 
-        processing_time = time.time() - start_time
-        metadata = self._generate_metadata(synthesis_params, len(audio_data), processing_time)
+        metadata = self._generate_metadata(synthesis_params, len(audio_data))
 
         return TTSResult(
             audio_data=audio_data,  # Include raw audio data
             audio_url=file_path,    # Keep URL for storage reference
             text_length=len(request.text),
             audio_duration=self._estimate_audio_duration(request.text, request.speed or 1.0),
-            processing_time=processing_time,
+            processing_time=None,  # Will be set by base class
             voice_used=self._yandex_config["voice_name"],
             language_used=synthesis_params.get("lang"),
             provider_metadata=metadata
         )
 
     def _create_error_result(
-            self, request: TTSRequest, error: Exception, start_time: float) -> TTSResult:
+            self, request: TTSRequest, error: Exception) -> TTSResult:
         """Create error result for failed synthesis."""
-        processing_time = time.time() - start_time
         logger.error("Yandex TTS synthesis failed: %s", error, exc_info=True)
 
         return TTSResult(
             audio_url="",  # Empty URL for failed synthesis
             text_length=len(request.text),
             audio_duration=None,
-            processing_time=processing_time,
+            processing_time=None,  # Will be set by base class
             voice_used=self._yandex_config["voice_name"],
             language_used=request.language or self._yandex_config["language_code"],
             provider_metadata={
@@ -502,8 +500,7 @@ class YandexTTSProvider(BaseTTSProvider):
     def _generate_metadata(
         self,
         params: Dict[str, Any],
-        audio_size: int,
-        processing_time: float
+        audio_size: int
     ) -> Dict[str, Any]:
         """Generate comprehensive metadata for monitoring and debugging."""
         voice_config = self.VOICE_MAPPING.get(self._yandex_config["voice_name"], {})
@@ -520,7 +517,6 @@ class YandexTTSProvider(BaseTTSProvider):
             "voice_gender": voice_config.get("gender", "unknown"),
             "text_length": len(params.get("text", "")),
             "audio_size": audio_size,
-            "processing_time": processing_time,
             "api_endpoint": self.API_BASE_URL,
             "timestamp": time.time()
         }
