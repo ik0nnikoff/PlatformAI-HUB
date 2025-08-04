@@ -15,6 +15,7 @@ import time
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime, timezone
 from pathlib import Path
+from dataclasses import dataclass
 from redis import exceptions as redis_exceptions  # Added import
 
 from app.core.config import settings
@@ -33,6 +34,177 @@ logger = logging.getLogger(__name__)
 
 # Define a default for graceful shutdown if not in settings
 DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT = 10.0
+
+
+# Phase 4: SOLID Principles - Configuration Classes for reducing arguments
+@dataclass
+class ProcessValidationConfig:
+    """Конфигурация для валидации процессов (следуя принципу SRP)."""
+
+    pid: Optional[int]
+    current_status: str
+    status_key: str
+    process_type: str
+    process_id: str
+
+
+@dataclass
+class ProcessTerminationConfig:
+    """Конфигурация для завершения процессов (следуя принципу SRP)."""
+
+    pid: int
+    process_type: str
+    process_id: str
+    timeout: float = DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT
+
+
+class ProcessStatusManager:
+    """Управляет статусами процессов в Redis (Single Responsibility)."""
+
+    def __init__(self, redis_manager: "RedisClientManager"):
+        self.redis_manager = redis_manager
+        self.logger = logger.getChild("StatusManager")
+
+    async def update_process_status(self, key: str, status_dict: Dict[str, Any]):
+        """Обновляет статус процесса в Redis."""
+        status_dict["last_updated_utc"] = datetime.now(timezone.utc).isoformat()
+        if "last_active" not in status_dict:
+            status_dict["last_active"] = str(time.time())
+
+        mapping = {k: str(v) for k, v in status_dict.items() if v is not None}
+        if not mapping:
+            self.logger.warning("Пустой mapping для ключа %s", key)
+            return
+
+        redis_cli = await self.redis_manager.redis_client
+        await redis_cli.hset(key, mapping=mapping)
+        self.logger.debug("Updated status for key %s", key)
+
+    async def get_process_status(self, key: str) -> Dict[str, str]:
+        """Получает статус процесса из Redis."""
+        if not await self.redis_manager.is_redis_client_available():
+            self.logger.error("Redis client недоступен для получения статуса %s", key)
+            return {}
+
+        try:
+            redis_cli = await self.redis_manager.redis_client
+            result = await redis_cli.hgetall(key)
+            return {k.decode("utf-8"): v.decode("utf-8") for k, v in result.items()}
+        except redis_exceptions.RedisError as e:
+            self.logger.error("Redis error getting status %s: %s", key, e)
+            return {}
+        except Exception as e:
+            self.logger.error("Unexpected error getting status %s: %s", key, e, exc_info=True)
+            return {}
+
+    async def delete_process_status(self, key: str):
+        """Удаляет статус процесса из Redis."""
+        redis_cli = await self.redis_manager.redis_client
+        await redis_cli.delete(key)
+        self.logger.debug("Deleted status key %s", key)
+
+
+class ProcessLifecycleManager:
+    """Управляет жизненным циклом процессов (Single Responsibility)."""
+
+    def __init__(self):
+        self.logger = logger.getChild("LifecycleManager")
+
+    async def check_process_exists(self, pid: int) -> bool:
+        """Проверяет существование процесса."""
+        if not pid or pid <= 0:
+            return False
+
+        try:
+            os.kill(pid, 0)
+            return True
+        except (OSError, ProcessLookupError):
+            return False
+        except Exception as e:
+            self.logger.error("Unexpected error checking PID %s: %s", pid, e)
+            return False
+
+    async def terminate_process_gracefully(self, process_config: Dict[str, Any]) -> bool:
+        """Graceful завершение процесса (уменьшено количество аргументов)."""
+        pid = process_config["pid"]
+        timeout = process_config["timeout"]
+        process_type = process_config.get("process_type", "unknown")
+        process_id = process_config.get("process_id", "unknown")
+
+        if not await self.check_process_exists(pid):
+            self.logger.debug("Process %s (PID: %s) не существует", process_id, pid)
+            return True
+
+        try:
+            self.logger.debug("Отправка SIGTERM процессу %s (PID: %s)", process_id, pid)
+            os.kill(pid, signal.SIGTERM)
+
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                if not await self.check_process_exists(pid):
+                    self.logger.info(
+                        "Process %s %s (PID: %s) gracefully terminated",
+                        process_type,
+                        process_id,
+                        pid,
+                    )
+                    return True
+                await asyncio.sleep(0.1)
+
+            self.logger.warning(
+                "Process %s %s (PID: %s) не завершился за %ss",
+                process_type,
+                process_id,
+                pid,
+                timeout,
+            )
+            return False
+
+        except (OSError, ProcessLookupError):
+            self.logger.debug("Process %s (PID: %s) уже завершен", process_id, pid)
+            return True
+        except Exception as e:
+            self.logger.error(
+                "Ошибка при graceful termination %s (PID: %s): %s",
+                process_id,
+                pid,
+                e,
+                exc_info=True,
+            )
+            return False
+
+    async def force_kill_process(self, process_config: Dict[str, Any]) -> bool:
+        """Принудительное завершение процесса."""
+        pid = process_config["pid"]
+        process_type = process_config.get("process_type", "unknown")
+        process_id = process_config.get("process_id", "unknown")
+
+        if not await self.check_process_exists(pid):
+            self.logger.debug("Process %s (PID: %s) не существует", process_id, pid)
+            return True
+
+        try:
+            self.logger.warning("Force killing %s %s (PID: %s)", process_type, process_id, pid)
+            os.kill(pid, signal.SIGKILL)
+            await asyncio.sleep(0.5)
+
+            if not await self.check_process_exists(pid):
+                self.logger.info(
+                    "Process %s %s (PID: %s) force killed", process_type, process_id, pid
+                )
+                return True
+
+            self.logger.error("Failed to force kill %s (PID: %s)", process_id, pid)
+            return False
+
+        except (OSError, ProcessLookupError):
+            self.logger.debug("Process %s (PID: %s) уже завершен", process_id, pid)
+            return True
+        except Exception as e:
+            self.logger.error(
+                "Ошибка при force kill %s (PID: %s): %s", process_id, pid, e, exc_info=True
+            )
+            return False
 
 
 class ProcessManager(RedisClientManager):
@@ -61,66 +233,28 @@ class ProcessManager(RedisClientManager):
         self.logger = logger  # Initialize instance logger
         self.launcher = ProcessLauncher()
 
+        self._init_redis_key_templates()
+        self._init_project_root()
+        self._init_executable_paths()
+        self._init_integration_paths()
+        self._init_process_environment()
+
+    def _init_redis_key_templates(self):
+        """Инициализирует шаблоны ключей Redis."""
         self.agent_status_key_template = "agent_status:{}"  # agent_id
         self.integration_status_key_template = (
             "integration_status:{}:{}"  # agent_id, integration_type_str
         )
 
-        # Determine Project Root with pathlib and detailed logging
+    def _init_project_root(self):
+        """Определяет корневой каталог проекта."""
         try:
-            # Assuming this file is in app/services/process_manager.py
-            # Path(__file__) -> /path/to/app/services/process_manager.py
-            # .resolve() -> resolves symlinks, makes absolute
-            # .parent -> /path/to/app/services
-            # .parent -> /path/to/app
-            # .parent -> /path/to/ (project_root)
             resolved_file_path = Path(__file__).resolve()
-            # self.logger.info(
-            #     "ProcessManager.__init__: Path(__file__).resolve() = %s",
-            #     resolved_file_path
-            # )
-
             project_root_path = resolved_file_path.parent.parent.parent
             self.project_root = str(project_root_path)
-            # Convert Path object to string for os.path.join later
 
-            # self.logger.info(
-            #     "ProcessManager.__init__: Calculated PROJECT_ROOT_PATH with pathlib = %s",
-            #     self.project_root
-            # )
-
-            # Validate the calculated project root
-            if not os.path.isdir(self.project_root) or not os.path.exists(
-                os.path.join(self.project_root, "app")
-            ):
-                self.logger.error(
-                    "Calculated project root with pathlib does not seem to be "
-                    "a valid project directory: %s",
-                    self.project_root,
-                )
-                # Fallback logic (consider removing or making more robust if pathlib fails)
-                dev_path = "/Users/jb/Projects/PlatformAI/PlatformAI-HUB"
-                # User's known correct path
-                if os.path.isdir(dev_path) and os.path.exists(
-                    os.path.join(dev_path, "app")
-                ):
-                    self.project_root = dev_path
-                    self.logger.warning(
-                        "Falling back to hardcoded development project_root: %s",
-                        self.project_root,
-                    )
-                else:
-                    # Fallback to os.getcwd() as a last resort if hardcoded path is also invalid
-                    self.project_root = os.getcwd()
-                    self.logger.error(
-                        "CRITICAL: Project root detection failed with pathlib and fallback, "
-                        "using CWD: %s. This will likely cause issues.",
-                        self.project_root,
-                    )
-            # else:
-            # self.logger.info(
-            #     "PROJECT_ROOT_PATH %s (from pathlib) seems valid.", self.project_root
-            # )
+            if not self._validate_project_root():
+                self._apply_project_root_fallback()
 
         except Exception as e:
             self.logger.error(
@@ -128,20 +262,49 @@ class ProcessManager(RedisClientManager):
                 e,
                 exc_info=True,
             )
-            # Fallback to os.getcwd() if any exception occurs during path calculation
             self.project_root = os.getcwd()
             self.logger.warning(
                 "Fell back to using current working directory as project_root due to exception: %s",
                 self.project_root,
             )
 
-        self.python_executable = settings.PYTHON_EXECUTABLE
+    def _validate_project_root(self) -> bool:
+        """Проверяет валидность корневого каталога проекта."""
+        return os.path.isdir(self.project_root) and os.path.exists(
+            os.path.join(self.project_root, "app")
+        )
 
-        # Agent runner paths
+    def _apply_project_root_fallback(self):
+        """Применяет fallback логику для определения project_root."""
+        self.logger.error(
+            "Calculated project root with pathlib does not seem to be "
+            "a valid project directory: %s",
+            self.project_root,
+        )
+
+        dev_path = "/Users/jb/Projects/PlatformAI/PlatformAI-HUB"
+        if os.path.isdir(dev_path) and os.path.exists(os.path.join(dev_path, "app")):
+            self.project_root = dev_path
+            self.logger.warning(
+                "Falling back to hardcoded development project_root: %s",
+                self.project_root,
+            )
+        else:
+            self.project_root = os.getcwd()
+            self.logger.error(
+                "CRITICAL: Project root detection failed with pathlib and fallback, "
+                "using CWD: %s. This will likely cause issues.",
+                self.project_root,
+            )
+
+    def _init_executable_paths(self):
+        """Инициализирует пути к исполняемым файлам."""
+        self.python_executable = settings.PYTHON_EXECUTABLE
         self.agent_runner_module_path = settings.AGENT_RUNNER_MODULE_PATH
         self.agent_runner_script_full_path = settings.AGENT_RUNNER_SCRIPT_FULL_PATH
 
-        # Integration paths (using string keys for integration types)
+    def _init_integration_paths(self):
+        """Инициализирует пути к интеграциям."""
         self.integration_module_paths: Dict[IntegrationTypeStr, str] = {
             "TELEGRAM": "app.integrations.telegram.telegram_bot_main",
             "WHATSAPP": "app.integrations.whatsapp.whatsapp_main",
@@ -152,7 +315,8 @@ class ProcessManager(RedisClientManager):
             for k, v in self.integration_module_paths.items()
         }
 
-        # Ensure PYTHONPATH is correctly set for subprocesses
+    def _init_process_environment(self):
+        """Настраивает переменные окружения для дочерних процессов."""
         self.process_env = os.environ.copy()
         self.process_env["PYTHONPATH"] = self.project_root + (
             os.pathsep + self.process_env.get("PYTHONPATH", "")
@@ -202,11 +366,7 @@ class ProcessManager(RedisClientManager):
             return False
 
     async def _send_graceful_termination_signal(
-        self,
-        pid: int,
-        process_type: str,
-        process_id: str,
-        timeout: float
+        self, pid: int, process_type: str, process_id: str, timeout: float
     ) -> bool:
         """
         Отправляет SIGTERM процессу и ждет его завершения.
@@ -221,28 +381,10 @@ class ProcessManager(RedisClientManager):
             bool: True если процесс завершился, False если нужно принудительное завершение
         """
         try:
-            os.kill(pid, signal.SIGTERM)
-            self.logger.info("SIGTERM sent to %s %s (PID: %s)", process_type, process_id, pid)
+            if not await self._send_sigterm_signal(pid, process_type, process_id):
+                return True  # Process already stopped
 
-            for _ in range(int(timeout / 0.1)):
-                await asyncio.sleep(0.1)
-                if not await self._check_process_exists(pid):
-                    self.logger.info(
-                        "%s %s (PID: %s) terminated gracefully after SIGTERM.",
-                        process_type.capitalize(),
-                        process_id,
-                        pid,
-                    )
-                    return True
-
-            self.logger.warning(
-                "%s %s (PID: %s) did not terminate after SIGTERM within %.1fs.",
-                process_type.capitalize(),
-                process_id,
-                pid,
-                timeout,
-            )
-            return False
+            return await self._wait_for_process_termination(pid, process_type, process_id, timeout)
 
         except ProcessLookupError:
             self.logger.warning(
@@ -263,11 +405,38 @@ class ProcessManager(RedisClientManager):
             )
             return False
 
+    async def _send_sigterm_signal(self, pid: int, process_type: str, process_id: str) -> bool:
+        """Отправляет SIGTERM сигнал процессу. Возвращает True если сигнал отправлен."""
+        os.kill(pid, signal.SIGTERM)
+        self.logger.info("SIGTERM sent to %s %s (PID: %s)", process_type, process_id, pid)
+        return True
+
+    async def _wait_for_process_termination(
+        self, pid: int, process_type: str, process_id: str, timeout: float
+    ) -> bool:
+        """Ожидает завершения процесса в течение timeout."""
+        for _ in range(int(timeout / 0.1)):
+            await asyncio.sleep(0.1)
+            if not await self._check_process_exists(pid):
+                self.logger.info(
+                    "%s %s (PID: %s) terminated gracefully after SIGTERM.",
+                    process_type.capitalize(),
+                    process_id,
+                    pid,
+                )
+                return True
+
+        self.logger.warning(
+            "%s %s (PID: %s) did not terminate after SIGTERM within %.1fs.",
+            process_type.capitalize(),
+            process_id,
+            pid,
+            timeout,
+        )
+        return False
+
     async def _force_kill_process_unified(
-        self,
-        pid: int,
-        process_type: str,
-        process_id: str
+        self, pid: int, process_type: str, process_id: str
     ) -> bool:
         """
         Принудительно завершает процесс через SIGKILL.
@@ -284,25 +453,11 @@ class ProcessManager(RedisClientManager):
             self.logger.info(
                 "Forcing kill (SIGKILL) for %s %s (PID: %s).", process_type, process_id, pid
             )
-            os.kill(pid, signal.SIGKILL)
-            await asyncio.sleep(0.1)  # Brief moment for SIGKILL to take effect
 
-            if await self._check_process_exists(pid):
-                self.logger.warning(
-                    "%s %s (PID: %s) still exists after SIGKILL attempt.",
-                    process_type.capitalize(),
-                    process_id,
-                    pid,
-                )
+            if not await self._execute_sigkill(pid):
                 return False
 
-            self.logger.info(
-                "%s %s (PID: %s) confirmed terminated after SIGKILL.",
-                process_type.capitalize(),
-                process_id,
-                pid,
-            )
-            return True
+            return await self._verify_process_killed(pid, process_type, process_id)
 
         except ProcessLookupError:
             self.logger.info(
@@ -323,51 +478,69 @@ class ProcessManager(RedisClientManager):
             )
             return False
 
+    async def _execute_sigkill(self, pid: int) -> bool:
+        """Выполняет SIGKILL и ждет короткое время."""
+        os.kill(pid, signal.SIGKILL)
+        await asyncio.sleep(0.1)  # Brief moment for SIGKILL to take effect
+        return True
+
+    async def _verify_process_killed(self, pid: int, process_type: str, process_id: str) -> bool:
+        """Проверяет, что процесс действительно завершен после SIGKILL."""
+        if await self._check_process_exists(pid):
+            self.logger.warning(
+                "%s %s (PID: %s) still exists after SIGKILL attempt.",
+                process_type.capitalize(),
+                process_id,
+                pid,
+            )
+            return False
+
+        self.logger.info(
+            "%s %s (PID: %s) confirmed terminated after SIGKILL.",
+            process_type.capitalize(),
+            process_id,
+            pid,
+        )
+        return True
+
     async def _validate_process_status_unified(
-        self,
-        pid: Optional[int],
-        current_status: str,
-        status_key: str,
-        process_type: str,
-        process_id: str,
+        self, config: ProcessValidationConfig
     ) -> Tuple[str, Optional[int]]:
         """
         Унифицированная проверка существования процесса для агентов и интеграций.
 
         Args:
-            pid: PID процесса (может быть None)
-            current_status: Текущий статус из Redis
-            status_key: Ключ статуса в Redis
-            process_type: Тип процесса ("agent" или "integration")
-            process_id: Идентификатор процесса
+            config (ProcessValidationConfig): Конфигурация для валидации процесса.
 
         Returns:
             Tuple[str, Optional[int]]: Валидированный статус и PID
         """
-        if pid and current_status in ["running", "starting", "initializing"]:
-            if await self._check_process_exists(pid):
-                return current_status, pid
+        if config.pid and config.current_status in ["running", "starting", "initializing"]:
+            if await self._check_process_exists(config.pid):
+                return config.current_status, config.pid
 
             # Process lost
             self.logger.warning(
                 "%s %s status is '%s' in Redis, but PID %s not found. Updating status.",
-                process_type.capitalize(),
-                process_id,
-                current_status,
-                pid,
+                config.process_type.capitalize(),
+                config.process_id,
+                config.current_status,
+                config.pid,
             )
             new_status = "error_process_lost"
 
             update_data = {"status": new_status, "pid": ""}
-            if process_type == "integration":
+            if config.process_type == "integration":
                 update_data["integration_type"] = (
-                    process_id.split("_")[-1] if "_" in process_id else process_id
+                    config.process_id.split("_")[-1]
+                    if "_" in config.process_id
+                    else config.process_id
                 )
 
-            await self._update_status_in_redis(status_key, update_data)
+            await self._update_status_in_redis(config.status_key, update_data)
             return new_status, None
 
-        return current_status, pid
+        return config.current_status, config.pid
 
     # --- Helper methods for Redis Hash operations (compatible with original service) ---
     async def _update_status_in_redis(self, key: str, status_dict: Dict[str, Any]):
@@ -421,32 +594,15 @@ class ProcessManager(RedisClientManager):
         if not await self.is_redis_client_available():
             logger.warning("Redis client not available when trying to get status for key: %s", key)
             return {}
+
         try:
-            # self.redis_client is from RedisClientManager, an instance of redis.asyncio.Redis
-            # decode_responses=False was used during client creation in RedisClientManager,
-            # so hgetall returns Dict[bytes, bytes].
-            redis_cli = await self.redis_client  # Get the actual client instance
+            redis_cli = await self.redis_client
             raw_status_data = await redis_cli.hgetall(key)  # type: ignore
 
             if not raw_status_data:
                 return {}
 
-            # Decode keys and values from bytes to str
-            decoded_status_data: Dict[str, str] = {}
-            for k_bytes, v_bytes in raw_status_data.items():
-                try:
-                    k_str = k_bytes.decode("utf-8")
-                    v_str = v_bytes.decode("utf-8")
-                    decoded_status_data[k_str] = v_str
-                except UnicodeDecodeError:
-                    logger.warning(
-                        "Could not decode UTF-8 for key or value in Redis hash for key %s. "
-                        "Key bytes: %r. Value bytes: %r. Skipping problematic item.",
-                        key,
-                        k_bytes,
-                        v_bytes,
-                    )
-            return decoded_status_data
+            return self._decode_redis_hash(raw_status_data, key)
 
         except redis_exceptions.RedisError as e:
             logger.error("RedisError getting status from Redis for key %s: %s", key, e)
@@ -459,6 +615,25 @@ class ProcessManager(RedisClientManager):
                 e,
             )
             return {}
+
+    def _decode_redis_hash(self, raw_data: Dict[bytes, bytes], key: str) -> Dict[str, str]:
+        """Декодирует Redis hash из bytes в строки."""
+        decoded_status_data: Dict[str, str] = {}
+
+        for k_bytes, v_bytes in raw_data.items():
+            try:
+                k_str = k_bytes.decode("utf-8")
+                v_str = v_bytes.decode("utf-8")
+                decoded_status_data[k_str] = v_str
+            except UnicodeDecodeError:
+                logger.warning(
+                    "Could not decode UTF-8 for key or value in Redis hash for key %s. "
+                    "Key bytes: %r. Value bytes: %r. Skipping problematic item.",
+                    key,
+                    k_bytes,
+                    v_bytes,
+                )
+        return decoded_status_data
 
     async def _delete_fields_from_redis_status(self, key: str, fields: List[str]):
         """
@@ -570,21 +745,8 @@ class ProcessManager(RedisClientManager):
         return await self._force_kill_process_unified(pid, "agent", agent_id)
 
     async def _cleanup_stopped_agent_status(self, agent_id: str, status_key: str) -> None:
-        """
-        Очищает статус остановленного агента в Redis.
-        """
-        final_status_update = {"status": "stopped", "agent_id": agent_id}
-        await self._update_status_in_redis(status_key, final_status_update)
-
-        # Clean up dynamic fields after confirming stop
-        await self._delete_fields_from_redis_status(
-            status_key,
-            ["pid", "last_active", "error_detail", "start_attempt_utc"],
-        )
-
-        # Re-set status to ensure only "stopped" and "agent_id" (and last_updated_utc) remain
-        await self._update_status_in_redis(status_key, {"status": "stopped", "agent_id": agent_id})
-        logger.info("Agent %s marked as stopped in Redis.", agent_id)
+        """Очищает статус остановленного агента в Redis."""
+        await self._cleanup_stopped_process_status_unified(status_key, "agent", agent_id)
 
     async def _execute_agent_stop_procedure(
         self, agent_id: str, pid: int, status_key: str, force: bool
@@ -631,21 +793,10 @@ class ProcessManager(RedisClientManager):
         return False
 
     async def _handle_already_stopped_agent(self, agent_id: str, status_key: str) -> bool:
-        """
-        Обрабатывает случай, когда агент уже остановлен.
-
-        Returns:
-            bool: Always True (агент уже остановлен)
-        """
+        """Обрабатывает случай, когда агент уже остановлен."""
         redis_cli = await self.redis_client
         if await redis_cli.exists(status_key):
-            await self._update_status_in_redis(
-                status_key, {"status": "stopped", "agent_id": agent_id}
-            )
-            await self._delete_fields_from_redis_status(
-                status_key,
-                ["pid", "last_active", "error_detail", "start_attempt_utc"],
-            )
+            await self._cleanup_stopped_process_status_unified(status_key, "agent", agent_id)
         return True
 
     # Integration Stop Helper Methods
@@ -691,18 +842,8 @@ class ProcessManager(RedisClientManager):
         self, status_key: str, agent_id: str, integration_type: str
     ) -> None:
         """Очищает статус остановленной интеграции в Redis."""
-        final_status_update = {
-            "status": "stopped",
-            "agent_id": agent_id,
-            "integration_type": integration_type,
-        }
-        await self._update_status_in_redis(status_key, final_status_update)
-        await self._delete_fields_from_redis_status(
-            status_key,
-            ["pid", "last_active", "error_detail", "start_attempt_utc"],
-        )
-        self.logger.info(
-            "Integration %s for agent %s marked as stopped in Redis.", integration_type, agent_id
+        await self._cleanup_stopped_process_status_unified(
+            status_key, "integration", agent_id, integration_type
         )
 
     async def _execute_integration_stop_procedure(
@@ -746,17 +887,8 @@ class ProcessManager(RedisClientManager):
         )
         redis_cli = await self.redis_client
         if await redis_cli.exists(status_key):
-            await self._update_status_in_redis(
-                status_key,
-                {
-                    "status": "stopped",
-                    "agent_id": agent_id,
-                    "integration_type": integration_type,
-                },
-            )
-            await self._delete_fields_from_redis_status(
-                status_key,
-                ["pid", "last_active", "error_detail", "start_attempt_utc"],
+            await self._cleanup_stopped_process_status_unified(
+                status_key, "integration", agent_id, integration_type
             )
         return True
 
@@ -771,23 +903,9 @@ class ProcessManager(RedisClientManager):
             )
             current_status = current_integration_status_info.get("status")
 
-            if current_status == "running":
-                self.logger.warning(
-                    "Integration %s for agent %s already reported as running. Skipping start.",
-                    integration_type,
-                    agent_id,
-                )
-                return False
-            if current_status == "starting":
-                self.logger.warning(
-                    "Integration %s for agent %s is already starting. "
-                    "Skipping duplicate start request.",
-                    integration_type,
-                    agent_id,
-                )
-                return False
-
-            return True
+            return await self._validate_start_prerequisites_unified(
+                "integration", f"{agent_id}:{integration_type}", current_status
+            )
         except Exception as e:
             self.logger.error(
                 "Error checking integration status before start for %s/%s: %s",
@@ -830,20 +948,9 @@ class ProcessManager(RedisClientManager):
         integration_settings: Optional[Dict[str, Any]],
     ) -> List[str]:
         """Формирует команду для запуска интеграции."""
-        module_path = self.integration_module_paths.get(integration_type.upper())
-
-        cmd = [
-            self.python_executable,
-            "-m",
-            module_path,
-            "--agent-id",
-            agent_id,
-        ]
-
-        if integration_settings:
-            cmd.extend(["--integration-settings", json.dumps(integration_settings)])
-
-        return cmd
+        return await self._build_process_command_unified(
+            "integration", agent_id, integration_settings, integration_type
+        )
 
     async def _launch_integration_process(
         self,
@@ -861,80 +968,137 @@ class ProcessManager(RedisClientManager):
                 " ".join(cmd),
             )
 
-            process_obj, _, _ = await self.launcher.launch_process(
-                command=cmd,
-                process_id=f"integration_start_{agent_id}_{integration_type}",
-                cwd=self.project_root,
-                env_vars=self.process_env,
-                capture_output=False,
-            )
+            process_obj = await self._execute_integration_launch(cmd, integration_type, agent_id)
 
             if process_obj and process_obj.pid is not None:
-                self.logger.info(
-                    "Integration process %s for agent %s initiated start with PID %s",
-                    integration_type,
-                    agent_id,
-                    process_obj.pid,
+                return await self._handle_successful_integration_launch(
+                    process_obj, integration_type, agent_id, status_key
                 )
-                await self._update_status_in_redis(
-                    status_key,
-                    {
-                        "pid": str(process_obj.pid),
-                        "integration_type": integration_type,
-                    },
-                )
-                return True
 
-            err_msg = (
-                f"Failed to launch integration process {integration_type} "
-                f"for agent {agent_id} (process_obj or pid is None)."
+            return await self._handle_failed_integration_launch(
+                integration_type, agent_id, status_key, "process_obj or pid is None"
             )
-            self.logger.error(err_msg)
-            await self._update_status_in_redis(
-                status_key,
-                {
-                    "status": "error_start_failed",
-                    "error_detail": err_msg,
-                    "agent_id": agent_id,
-                    "integration_type": integration_type,
-                },
-            )
-            return False
 
         except FileNotFoundError as fnf_e:
-            self.logger.error(
-                "Failed to start integration %s for %s due to FileNotFoundError: %s",
-                integration_type,
-                agent_id,
-                fnf_e,
-                exc_info=True,
+            return await self._handle_process_launch_file_error(
+                "integration", f"{integration_type} for agent {agent_id}", status_key, fnf_e
             )
-            await self._update_status_in_redis(
-                status_key,
-                {
-                    "status": "error_script_not_found",
-                    "error_detail": str(fnf_e),
-                    "integration_type": integration_type,
-                },
-            )
-            return False
         except Exception as e:
-            self.logger.error(
-                "Failed to start integration %s for %s: %s",
-                integration_type,
-                agent_id,
-                e,
-                exc_info=True,
+            return await self._handle_process_launch_general_error(
+                "integration", f"{integration_type} for agent {agent_id}", status_key, e
             )
-            await self._update_status_in_redis(
-                status_key,
-                {
-                    "status": "error_start_failed",
-                    "error_detail": str(e),
-                    "integration_type": integration_type,
-                },
-            )
-            return False
+
+    async def _execute_integration_launch(
+        self, cmd: List[str], integration_type: str, agent_id: str
+    ):
+        """Выполняет запуск процесса интеграции."""
+        process_obj, _, _ = await self.launcher.launch_process(
+            command=cmd,
+            process_id=f"integration_start_{agent_id}_{integration_type}",
+            cwd=self.project_root,
+            env_vars=self.process_env,
+            capture_output=False,
+        )
+        return process_obj
+
+    async def _handle_successful_integration_launch(
+        self, process_obj, integration_type: str, agent_id: str, status_key: str
+    ) -> bool:
+        """Обрабатывает успешный запуск интеграции."""
+        return await self._handle_process_launch_success(
+            process_obj,
+            "integration",
+            f"{integration_type} for agent {agent_id}",
+            status_key,
+            integration_type=integration_type,
+        )
+
+    async def _handle_failed_integration_launch(
+        self, integration_type: str, agent_id: str, status_key: str, reason: str
+    ) -> bool:
+        """Обрабатывает неудачный запуск интеграции."""
+        return await self._handle_process_launch_failure(
+            "integration",
+            f"{integration_type} for agent {agent_id}",
+            status_key,
+            reason,
+            agent_id=agent_id,
+            integration_type=integration_type,
+        )
+
+    # Unified Error Handling Methods (Anti-duplication)
+    async def _handle_process_launch_file_error(
+        self, process_type: str, process_id: str, status_key: str, error: FileNotFoundError
+    ) -> bool:
+        """Унифицированная обработка FileNotFoundError при запуске процесса."""
+        self.logger.error(
+            "Failed to start %s %s due to FileNotFoundError: %s",
+            process_type,
+            process_id,
+            error,
+            exc_info=True,
+        )
+        await self._update_status_in_redis(
+            status_key,
+            {
+                "status": "error_script_not_found",
+                "error_detail": str(error),
+            },
+        )
+        return False
+
+    async def _handle_process_launch_general_error(
+        self, process_type: str, process_id: str, status_key: str, error: Exception
+    ) -> bool:
+        """Унифицированная обработка общих ошибок при запуске процесса."""
+        self.logger.error(
+            "Failed to start %s %s: %s",
+            process_type,
+            process_id,
+            error,
+            exc_info=True,
+        )
+        await self._update_status_in_redis(
+            status_key,
+            {
+                "status": "error_start_failed",
+                "error_detail": str(error),
+            },
+        )
+        return False
+
+    async def _handle_process_launch_success(
+        self, process_obj, process_type: str, process_id: str, status_key: str, **extra_fields
+    ) -> bool:
+        """Унифицированная обработка успешного запуска процесса."""
+        self.logger.info(
+            "%s process %s initiated start with PID %s",
+            process_type.capitalize(),
+            process_id,
+            process_obj.pid,
+        )
+
+        status_update = {"pid": str(process_obj.pid)}
+        status_update.update(extra_fields)
+
+        await self._update_status_in_redis(status_key, status_update)
+        return True
+
+    async def _handle_process_launch_failure(
+        self, process_type: str, process_id: str, status_key: str, reason: str, **extra_fields
+    ) -> bool:
+        """Унифицированная обработка неудачного запуска процесса."""
+        err_msg = f"Failed to launch {process_type} process {process_id} ({reason})."
+        self.logger.error(err_msg)
+
+        status_update = {
+            "status": "error_start_failed",
+            "error_detail": err_msg,
+        }
+        status_update.update(extra_fields)
+
+        await self._update_status_in_redis(status_key, status_update)
+        return False
 
     # Status Helper Methods
     async def _parse_pid_from_status(self, pid_val: Any) -> Optional[int]:
@@ -951,26 +1115,131 @@ class ProcessManager(RedisClientManager):
             return None
 
     async def _validate_process_existence(
-        self,
-        pid: int,
-        agent_id: str,
-        integration_type: str,
-        current_status: str,
-        status_key: str,
+        self, config: ProcessValidationConfig
     ) -> Tuple[str, Optional[int]]:
         """Проверяет существование процесса для интеграции."""
-        process_id = f"{agent_id}_{integration_type}"
-        return await self._validate_process_status_unified(
-            pid, current_status, status_key, "integration", process_id
-        )
+        # Config уже содержит все необходимые данные
+        return await self._validate_process_status_unified(config)
 
     async def _validate_agent_process_existence(
         self, pid: int, agent_id: str, current_status: str, status_key: str
     ) -> Tuple[str, Optional[int]]:
         """Проверяет существование процесса для агента."""
-        return await self._validate_process_status_unified(
-            pid, current_status, status_key, "agent", agent_id
+        config = ProcessValidationConfig(
+            pid=pid,
+            current_status=current_status,
+            status_key=status_key,
+            process_type="agent",
+            process_id=agent_id,
         )
+        return await self._validate_process_status_unified(config)
+
+    # Unified Status Initialization Methods (Anti-duplication)
+    async def _initialize_starting_status_unified(
+        self,
+        status_key: str,
+        process_type: str,
+        agent_id: str,
+        integration_type: Optional[str] = None,
+    ) -> None:
+        """Унифицированная инициализация статуса 'starting' для процесса."""
+        initial_status_data = {
+            "status": "starting",
+            "agent_id": agent_id,
+            "start_attempt_utc": datetime.now(timezone.utc).isoformat(),
+            "last_active": str(time.time()),
+        }
+
+        if process_type == "integration" and integration_type:
+            initial_status_data["integration_type"] = integration_type
+
+        await self._update_status_in_redis(status_key, initial_status_data)
+
+    # Unified Command Building Methods (Anti-duplication)
+    async def _build_process_command_unified(
+        self,
+        process_type: str,
+        process_id: str,
+        settings: Optional[Dict[str, Any]] = None,
+        integration_type: Optional[str] = None,
+    ) -> List[str]:
+        """Унифицированная формировка команды для запуска процесса."""
+        if process_type == "agent":
+            cmd = [
+                self.python_executable,
+                "-m",
+                self.agent_runner_module_path,
+                "--agent-id",
+                process_id,
+            ]
+            if settings:
+                cmd.extend(["--agent-settings", json.dumps(settings)])
+        else:  # integration
+            module_path = self.integration_module_paths.get(integration_type.upper())
+            cmd = [
+                self.python_executable,
+                "-m",
+                module_path,
+                "--agent-id",
+                process_id,
+            ]
+            if settings:
+                cmd.extend(["--integration-settings", json.dumps(settings)])
+
+        return cmd
+
+    # Unified Status Cleanup Methods (Anti-duplication)
+    async def _cleanup_stopped_process_status_unified(
+        self,
+        status_key: str,
+        process_type: str,
+        agent_id: str,
+        integration_type: Optional[str] = None,
+    ) -> None:
+        """Унифицированная очистка статуса остановленного процесса в Redis."""
+        if process_type == "agent":
+            final_status_update = {"status": "stopped", "agent_id": agent_id}
+            log_message = f"Agent {agent_id} marked as stopped in Redis."
+        else:  # integration
+            final_status_update = {
+                "status": "stopped",
+                "agent_id": agent_id,
+                "integration_type": integration_type,
+            }
+            log_message = (
+                f"Integration {integration_type} for agent {agent_id} marked as stopped in Redis."
+            )
+
+        await self._update_status_in_redis(status_key, final_status_update)
+        await self._delete_fields_from_redis_status(
+            status_key,
+            ["pid", "last_active", "error_detail", "start_attempt_utc"],
+        )
+
+        # Re-set status to ensure only required fields remain
+        await self._update_status_in_redis(status_key, final_status_update)
+        self.logger.info(log_message)
+
+    # Unified Prerequisites Validation (Anti-duplication)
+    async def _validate_start_prerequisites_unified(
+        self, process_type: str, process_id: str, current_status: Optional[str]
+    ) -> bool:
+        """Унифицированная проверка предварительных условий для запуска процесса."""
+        if current_status == "running":
+            self.logger.warning(
+                "%s %s already reported as running. Skipping start.",
+                process_type.capitalize(),
+                process_id,
+            )
+            return False
+        if current_status == "starting":
+            self.logger.warning(
+                "%s %s is already starting. Skipping duplicate start request.",
+                process_type.capitalize(),
+                process_id,
+            )
+            return False
+        return True
 
     # Agent Start Helper Methods
     async def _validate_agent_start_prerequisites(self, agent_id: str) -> bool:
@@ -979,18 +1248,10 @@ class ProcessManager(RedisClientManager):
             current_agent_status_info = await self.get_agent_status(agent_id)
             current_status = current_agent_status_info.get("status")
 
-            if current_status == "running":
-                self.logger.warning(
-                    "Agent %s already reported as running. Skipping start.", agent_id
-                )
-                return False
-            if current_status == "starting":
-                self.logger.warning(
-                    "Agent %s is already starting. Skipping duplicate start request.", agent_id
-                )
-                return False
+            return await self._validate_start_prerequisites_unified(
+                "agent", agent_id, current_status
+            )
 
-            return True
         except Exception as e:
             self.logger.error(
                 "Error checking agent status before start for %s: %s",
@@ -1004,18 +1265,7 @@ class ProcessManager(RedisClientManager):
         self, agent_id: str, agent_settings: Optional[Dict[str, Any]]
     ) -> List[str]:
         """Формирует команду для запуска агента."""
-        cmd = [
-            self.python_executable,
-            "-m",
-            self.agent_runner_module_path,
-            "--agent-id",
-            agent_id,
-        ]
-
-        if agent_settings:
-            cmd.extend(["--agent-settings", json.dumps(agent_settings)])
-
-        return cmd
+        return await self._build_process_command_unified("agent", agent_id, agent_settings)
 
     async def _launch_agent_process(self, cmd: List[str], agent_id: str, status_key: str) -> bool:
         """Запускает процесс агента."""
@@ -1029,42 +1279,20 @@ class ProcessManager(RedisClientManager):
             )
 
             if process_obj and process_obj.pid is not None:
-                self.logger.info(
-                    "Agent process %s initiated start with PID %s", agent_id, process_obj.pid
+                return await self._handle_process_launch_success(
+                    process_obj, "agent", agent_id, status_key
                 )
-                await self._update_status_in_redis(status_key, {"pid": str(process_obj.pid)})
-                return True
 
-            err_msg = f"Failed to launch agent process {agent_id} (process_obj or pid is None)."
-            self.logger.error(err_msg)
-            await self._update_status_in_redis(
-                status_key,
-                {"status": "error_start_failed", "error_detail": err_msg},
+            return await self._handle_process_launch_failure(
+                "agent", agent_id, status_key, "process_obj or pid is None"
             )
-            return False
 
         except FileNotFoundError as fnf_e:
-            self.logger.error(
-                "Failed to start agent %s due to FileNotFoundError: %s",
-                agent_id,
-                fnf_e,
-                exc_info=True,
+            return await self._handle_process_launch_file_error(
+                "agent", agent_id, status_key, fnf_e
             )
-            await self._update_status_in_redis(
-                status_key,
-                {
-                    "status": "error_script_not_found",
-                    "error_detail": str(fnf_e),
-                },
-            )
-            return False
         except Exception as e:
-            self.logger.error("Failed to start agent {agent_id}: {e}", exc_info=True)
-            await self._update_status_in_redis(
-                status_key,
-                {"status": "error_start_failed", "error_detail": str(e)},
-            )
-            return False
+            return await self._handle_process_launch_general_error("agent", agent_id, status_key, e)
 
     async def stop_agent_process(self, agent_id: str, force: bool = False) -> bool:
         """
@@ -1211,9 +1439,15 @@ class ProcessManager(RedisClientManager):
         last_active = await self._parse_last_active_from_status(status_data.get("last_active"))
 
         # Валидируем существование процесса
-        validated_status, validated_pid = await self._validate_process_existence(
-            pid, agent_id, integration_type, current_status, status_key
+        process_id = f"{agent_id}_{integration_type}"
+        config = ProcessValidationConfig(
+            pid=pid,
+            current_status=current_status,
+            status_key=status_key,
+            process_type="integration",
+            process_id=process_id,
         )
+        validated_status, validated_pid = await self._validate_process_existence(config)
 
         return {
             "agent_id": agent_id,
@@ -1261,14 +1495,9 @@ class ProcessManager(RedisClientManager):
             return False
 
         # Устанавливаем начальный статус
-        initial_status_data = {
-            "status": "starting",
-            "agent_id": agent_id,
-            "integration_type": integration_type,
-            "start_attempt_utc": datetime.now(timezone.utc).isoformat(),
-            "last_active": str(time.time()),
-        }
-        await self._update_status_in_redis(status_key, initial_status_data)
+        await self._initialize_starting_status_unified(
+            status_key, "integration", agent_id, integration_type
+        )
 
         # Формируем команду запуска
         cmd = await self._build_integration_command(
@@ -1515,13 +1744,7 @@ class ProcessManager(RedisClientManager):
             return True  # Уже запущен или в процессе запуска
 
         # Устанавливаем начальный статус
-        initial_status_data = {
-            "status": "starting",
-            "agent_id": agent_id,
-            "start_attempt_utc": datetime.now(timezone.utc).isoformat(),
-            "last_active": str(time.time()),
-        }
-        await self._update_status_in_redis(status_key, initial_status_data)
+        await self._initialize_starting_status_unified(status_key, "agent", agent_id)
 
         # Формируем команду запуска
         cmd = await self._build_agent_command(agent_id, agent_settings)
