@@ -522,6 +522,20 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin):  # Added AgentConfigM
                 if state_audio_url:
                     audio_url = state_audio_url
                     self.logger.info(f"✅ Extracted audio_url from final state: {audio_url}")
+                    
+                    # ✅ CRITICAL FIX: Clear audio_url from state to prevent persistence across messages
+                    # According to LangGraph docs: channels without reducers are completely overwritten
+                    try:
+                        # Clear only the audio_url field by setting it to None
+                        # This is the correct way to remove a field from LangGraph state
+                        self.agent_app.update_state(
+                            config=self.config, 
+                            values={"audio_url": None},
+                            as_node=None  # Don't trigger any subsequent nodes
+                        )
+                        self.logger.info("🧹 Cleared audio_url from LangGraph state to prevent persistence")
+                    except Exception as clear_error:
+                        self.logger.error(f"Failed to clear audio_url from state: {clear_error}", exc_info=True)
                 else:
                     self.logger.warning("❌ No audio_url found in final state values")
             else:

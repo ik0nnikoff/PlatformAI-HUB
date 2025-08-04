@@ -19,11 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.api.schemas.common_schemas import IntegrationType
 from app.core.base.service_component import ServiceComponentBase
 from app.core.config import settings
+from app.db.crud import user_crud
 
 from .handlers.api_handler import WhatsAppAPIHandler
 from .handlers.media_handler import MediaHandler
 from .handlers.socketio_handler import SocketIOEventHandlers
-from .handlers.user_manager import UserManager
 
 # Constants
 REDIS_USER_CACHE_TTL = getattr(settings, "REDIS_USER_CACHE_TTL", 3600)
@@ -81,7 +81,6 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
 
         # Initialize helper components
         self.media_handler = MediaHandler(self)
-        self.user_manager = UserManager(self)
         self.api_handler = WhatsAppAPIHandler(self)
         self.socketio_handler = SocketIOEventHandlers(self)
 
@@ -303,18 +302,53 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
     async def _extract_user_context(
         self, response: Dict[str, Any], chat_id: str, sender_info: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
-        """Extract user context using UserManager helper."""
+        """Extract user context from WhatsApp response."""
         try:
-            # Use user manager helper
-            user_context = self.user_manager.extract_user_context(response, chat_id, sender_info)
-            if not user_context:
+            # Extract platform user ID
+            platform_user_id = sender_info.get("id", "")
+            if not platform_user_id:
+                self.logger.warning("No platform_user_id found in sender_info")
                 return None
 
+            # Extract contact information
+            contact_info = response.get("sender", {})
+            if not contact_info:
+                # Fallback to sender_info
+                contact_info = sender_info
+
+            # Get user names
+            first_name = contact_info.get("pushname") or contact_info.get("name") or ""
+            profile_name = contact_info.get("shortName", "")
+
+            # Use profile name if first_name is empty
+            if not first_name and profile_name:
+                first_name = profile_name
+
+            # Default name if still empty
+            if not first_name:
+                first_name = "WhatsApp User"
+
+            # Get phone number if available
+            phone_number = contact_info.get("formattedName") or ""
+
+            # Check if it looks like a phone number
+            if phone_number and not phone_number.startswith("+"):
+                phone_number = ""  # Reset if invalid format
+
+            # Create user context
+            user_context = {
+                "platform_user_id": platform_user_id,
+                "first_name": first_name,
+                "phone_number": phone_number if phone_number else None,
+                "platform": "whatsapp",
+                "chat_id": chat_id
+            }
+
             # Get or create user in database
-            user_data = await self.user_manager.get_or_create_user(
-                platform_user_id=user_context["platform_user_id"],
-                first_name=user_context["first_name"],
-                phone_number=user_context.get("phone_number"),
+            user_data = await self._get_or_create_user(
+                platform_user_id=platform_user_id,
+                first_name=first_name,
+                phone_number=phone_number if phone_number else None,
             )
 
             if user_data:
@@ -538,13 +572,115 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
         last_name: Optional[str] = None,
         phone_number: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Get or create user using UserManager helper."""
-        return await self.user_manager.get_or_create_user(
-            platform_user_id=platform_user_id,
-            first_name=first_name,
-            last_name=last_name,
-            phone_number=phone_number,
-        )
+        """
+        Получение или создание пользователя в системе с авторизацией
+        
+        Args:
+            platform_user_id: ID пользователя в WhatsApp
+            first_name: Имя пользователя
+            last_name: Фамилия пользователя (опционально)
+            phone_number: Номер телефона пользователя (извлекается из sender.id)
+            
+        Returns:
+            Данные пользователя с флагом авторизации
+        """
+        try:
+            if not self.db_session_factory:
+                self.logger.warning("Database session factory not available")
+                fallback_data = {
+                    "first_name": first_name,
+                    "platform_user_id": platform_user_id,
+                    "is_authenticated": False
+                }
+                # Add last_name only if it exists
+                if last_name:
+                    fallback_data["last_name"] = last_name
+                return fallback_data
+                
+            async with self.db_session_factory() as session:
+                # Try to get existing user
+                user_db = await user_crud.get_user_by_platform_id(
+                    session, "whatsapp", platform_user_id
+                )
+                
+                is_new_user = False
+                if not user_db:
+                    # Create new user
+                    user_details = {
+                        "first_name": first_name,
+                        "username": first_name  # Use first_name as username fallback
+                    }
+                    # Add last_name if available  
+                    if last_name:
+                        user_details["last_name"] = last_name
+                    # Add phone number if available
+                    if phone_number:
+                        user_details["phone_number"] = phone_number
+                    
+                    user_db = await user_crud.create_or_update_user(
+                        session, "whatsapp", platform_user_id, user_details
+                    )
+                    is_new_user = True
+                    self.logger.info(f"Created new WhatsApp user: {platform_user_id}, first_name: {first_name}, last_name: {last_name}, phone: {phone_number}")
+                
+                if not user_db:
+                    fallback_data = {
+                        "first_name": first_name,
+                        "username": first_name,
+                        "platform_user_id": platform_user_id,
+                        "is_authenticated": False
+                    }
+                    # Add last_name only if it exists
+                    if last_name:
+                        fallback_data["last_name"] = last_name
+                    return fallback_data
+                
+                # Check if user is authorized for this agent
+                auth_record = await user_crud.get_agent_user_authorization(
+                    session, self.agent_id, user_db.id  # type: ignore
+                )
+                
+                is_authorized = bool(auth_record and auth_record.is_authorized) if auth_record else False
+                
+                # If new user and has phone number, automatically authorize
+                if is_new_user and phone_number and not is_authorized:
+                    auth_record = await user_crud.update_agent_user_authorization(
+                        session, agent_id=self.agent_id, user_id=user_db.id, is_authorized=True  # type: ignore
+                    )
+                    is_authorized = bool(auth_record and auth_record.is_authorized) if auth_record else False
+                    if is_authorized:
+                        self.logger.info(f"Auto-authorized WhatsApp user {platform_user_id} with phone {phone_number}")
+                
+                user_data_result = {
+                    "user_id": user_db.id,  # type: ignore
+                    "first_name": user_db.first_name,
+                    "username": user_db.username,
+                    "platform_user_id": platform_user_id,
+                    "platform": "whatsapp",
+                    "is_authenticated": is_authorized
+                }
+                
+                # Add last_name only if it's not None or empty
+                if user_db.last_name is not None and user_db.last_name.strip():
+                    user_data_result["last_name"] = user_db.last_name
+                    
+                # Add phone_number only if it's not None or empty  
+                if user_db.phone_number is not None and user_db.phone_number.strip():
+                    user_data_result["phone_number"] = user_db.phone_number
+                
+                return user_data_result
+                
+        except Exception as e:
+            self.logger.error(f"Error getting/creating user {platform_user_id}: {e}", exc_info=True)
+            error_fallback_data = {
+                "first_name": first_name,
+                "platform_user_id": platform_user_id,
+                "is_authenticated": False
+            }
+            # Add last_name only if it exists
+            if last_name:
+                error_fallback_data["last_name"] = last_name
+            return error_fallback_data
 
     async def _publish_to_agent(
         self,
@@ -641,10 +777,13 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
 
             # 🎯 PHASE 4.4.2: UNIFIED TTS RESPONSE - Consistent with Telegram pattern
             # Voice responses from LangGraph agent through voice tools
-            await self._send_voice_response(chat_id, audio_url)
+            voice_sent_successfully = await self._send_voice_response(chat_id, audio_url)
 
-            # Always send text response (voice is additional, not replacement)
-            await self.api_handler.send_message(chat_id, response_text)
+            # Send text response only if voice was not sent successfully
+            if not voice_sent_successfully:
+                await self.api_handler.send_message(chat_id, response_text)
+            else:
+                self.logger.info(f"Voice response sent successfully to chat {chat_id}, skipping text message")
 
         except json.JSONDecodeError as e:
             self.logger.error(f"Failed to decode agent response: {e}")
