@@ -14,7 +14,7 @@ from app.workers.inactivity_monitor_worker import InactivityMonitorWorker
 
 from app.api.schemas.common_schemas import IntegrationType
 from app.db.crud import agent_crud
-from app.services.process_manager import ProcessManager
+from app.services.process_management import ProcessManager
 from app.db.session import get_async_session_factory
 
 logger = logging.getLogger(__name__)

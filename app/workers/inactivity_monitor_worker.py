@@ -1,22 +1,17 @@
 import asyncio
 import logging
-import time # Keep for time.time()
-from datetime import datetime, timezone # Added for datetime.now(timezone.utc)
-import redis.exceptions # Added for RedisError
-import os # Added import os
-# Removed signal, os, json, redis.asyncio, RedisConnectionError as they are handled by base or ProcessManager
+import time
+from datetime import datetime, timezone 
+import redis.exceptions
+import os
 
 from app.core.config import settings
-from app.api.schemas.common_schemas import IntegrationType # Keep for type checking
-from app.services.process_manager import ProcessManager
+from app.api.schemas.common_schemas import IntegrationType
+from app.services.process_management import ProcessManager
 from app.workers.base_worker import ScheduledTaskWorker
-import time # Ensure time is imported
-import redis.exceptions # Ensure redis.exceptions is imported
-import logging # Ensure logging is imported
-import asyncio # Ensure asyncio is imported
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db import crud # This should give access to submodules like agent_crud
-from app.db.crud import agent_crud # Explicit import for agent_crud
+from app.db import crud
+from app.db.crud import agent_crud
 from app.db.session import SessionLocal
 
 # logger is inherited from BaseWorker/ScheduledTaskWorker

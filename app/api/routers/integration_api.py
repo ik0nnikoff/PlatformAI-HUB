@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_db
 from app.db.crud import agent_crud
-from app.services.process_manager import ProcessManager
+from app.services.process_management import ProcessManager
 from app.api.schemas.common_schemas import IntegrationType
 from app.api.schemas.agent_schemas import IntegrationStatus
 

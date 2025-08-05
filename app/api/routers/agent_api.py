@@ -11,7 +11,7 @@ from app.core.dependencies import get_db
 from app.api.schemas.agent_schemas import AgentConfigInput, AgentConfigOutput, AgentStatus, AgentListItem, AgentConfigStructure
 from app.api.schemas.common_schemas import IntegrationType
 from app.db.crud import agent_crud, user_crud
-from app.services.process_manager import ProcessManager
+from app.services.process_management import ProcessManager
 from app.api.schemas.user_schemas import UserOutput
 from app.core.config import settings
 

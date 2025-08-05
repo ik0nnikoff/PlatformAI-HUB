@@ -757,9 +757,11 @@ class AgentRunner(ServiceComponentBase, AgentConfigMixin):  # Added AgentConfigM
             f"Marking component as error. Error Type: {error_type}, Message: {error_message}"
         )
         # Use inherited StatusUpdater methods directly
-        await self.update_status(
-            "error", {"error_message": error_message, "error_type": error_type}
-        )
+        await self.update_status_in_redis({
+            "status": "error", 
+            "error_message": error_message, 
+            "error_type": error_type
+        })
 
     async def _handle_status_update_exception(self, e: Exception, phase: str):
         """Handles exceptions during status updates, logging them and marking the component as error."""
