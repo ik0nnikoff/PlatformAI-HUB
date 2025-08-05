@@ -11,8 +11,3 @@
 
 используй codacy, pylint, flake8, mypy, black, isort для проверки кода
 Проверяй циклическую сложность с помощью lizard
-
-Работаем по чеклисту: MD/36_process_manager_refactoring_checklist.md
-Отчеты после выполнения фаз по шаблону: MD/templates/voice_refactoring_report_template.md
-
-Копия исходного файла: app/services/process_manager.backup.py

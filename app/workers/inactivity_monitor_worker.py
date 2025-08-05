@@ -1,461 +1,809 @@
+"""Модуль для мониторинга неактивных агентов и интеграций."""
+
 import asyncio
 import logging
-import time
-from datetime import datetime, timezone 
-import redis.exceptions
 import os
+import time
 
-from app.core.config import settings
+import redis.exceptions
+
 from app.api.schemas.common_schemas import IntegrationType
-from app.services.process_management import ProcessManager
-from app.workers.base_worker import ScheduledTaskWorker
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.db import crud
+from app.core.config import settings
 from app.db.crud import agent_crud
 from app.db.session import SessionLocal
+from app.services.process_management import ProcessManager
+from app.workers.base_worker import ScheduledTaskWorker
 
 # logger is inherited from BaseWorker/ScheduledTaskWorker
 
 class InactivityMonitorWorker(ScheduledTaskWorker):
     """
-    Периодический воркер, который отслеживает активность и состояние
-    процессов агентов и их интеграций.
+    Периодический воркер для отслеживания активности процессов агентов и интеграций.
 
     Основные задачи:
-    - Проверка неактивных агентов: останавливает агентов, которые не проявляли
-      активность дольше заданного таймаута (`settings.AGENT_INACTIVITY_TIMEOUT`).
-    - Проверка "упавших" или некорректно остановленных процессов: пытается
-      перезапустить процессы агентов или интеграций, которые должны быть запущены,
-      но неактивны (PID не существует) или находятся в ошибочном состоянии.
-
-    Наследует от `ScheduledTaskWorker` для выполнения периодических задач.
-    Использует `ProcessManager` для взаимодействия с процессами и их статусами в Redis.
-
-    Атрибуты:
-        process_manager (ProcessManager): Экземпляр менеджера процессов.
-
-    Методы:
-        __init__(): Инициализирует воркер.
-        setup(): Настраивает воркер, включая `ProcessManager` и начальную проверку процессов.
-        perform_task(): Основная задача, выполняемая периодически (проверка неактивности и падений).
-        _check_inactive_agents(): Проверяет и останавливает неактивные процессы агентов.
-        _check_and_restart_crashed_processes(): Проверяет и перезапускает "упавшие" или некорректно
-                                                 остановленные процессы агентов и интеграций.
-        cleanup(): Выполняет очистку ресурсов при завершении работы воркера.
+    - Проверка неактивных агентов и их остановка
+    - Проверка "упавших" процессов и их перезапуск
     """
-    def __init__(self):
-        """
-        Инициализирует InactivityMonitorWorker.
 
-        Устанавливает `component_id`, интервал выполнения задачи из
-        `settings.AGENT_INACTIVITY_CHECK_INTERVAL` и префикс ключа статуса в Redis.
-        Создает экземпляр `ProcessManager`.
-        """
+    def __init__(self):
+        """Инициализирует InactivityMonitorWorker."""
         super().__init__(
-            component_id="inactivity_monitor_worker", # Unique ID for this worker instance
+            component_id="inactivity_monitor_worker",
             interval_seconds=settings.AGENT_INACTIVITY_CHECK_INTERVAL,
-            status_key_prefix="worker_status:inactivity_monitor:" # Specific status key prefix
+            status_key_prefix="worker_status:inactivity_monitor:"
         )
         self.process_manager = ProcessManager()
-        self.logger.debug(f"[{self._component_id}] Initialized with check interval: {self.interval_seconds}s.")
+        self.logger.debug(
+            "[%s] Initialized with check interval: %ss.",
+            self._component_id, self.interval_seconds
+        )
 
     async def setup(self):
-        """
-        Выполняет настройку InactivityMonitorWorker перед запуском основного цикла.
-
-        Действия:
-        1. Вызывает `super().setup()` для инициализации `StatusUpdater` и клиента Redis для статуса воркера.
-        2. Если воркер уже находится в процессе остановки (`self._running` is False), прерывает настройку.
-        3. Инициализирует `self.process_manager` вызовом `setup_manager()`.
-           В случае ошибки инициализации `ProcessManager`, инициирует остановку воркера.
-        4. После небольшой задержки (10 секунд, чтобы дать другим компонентам время на запуск),
-           выполняет начальную проверку `_check_and_restart_crashed_processes()` для
-           перезапуска процессов, которые могли "упасть" до старта этого воркера.
-        """
-        await super().setup() # Sets up StatusUpdater, Redis client for worker status
+        """Выполняет настройку воркера перед запуском основного цикла."""
+        await super().setup()
         if not self._running:
-            self.logger.info(f"[{self._component_id}] Shutdown initiated during setup. Aborting further setup.")
-            return
-        try:
-            await self.process_manager.setup_manager() # Ensure PM is setup
-            self.logger.info(f"[{self._component_id}] ProcessManager initialized for InactivityMonitor.")
-        except Exception as e:
-            self.logger.error(f"[{self._component_id}] Failed to initialize ProcessManager: {e}", exc_info=True)
-            self.initiate_shutdown() # Stop the worker if PM setup fails
+            self.logger.info(
+                "[%s] Shutdown initiated during setup. Aborting further setup.",
+                self._component_id
+            )
             return
 
-        # Initial check for crashed/stopped processes shortly after startup
-        if self._running: # Check _running before performing tasks
-            self.logger.info(f"[{self._component_id}] Delaying initial check for 10 seconds to allow lifespan to complete agent setups...")
-            await asyncio.sleep(10) # Added delay
-            self.logger.info(f"[{self._component_id}] Performing initial check for crashed/stopped processes...")
+        try:
+            await self.process_manager.setup_manager()
+            self.logger.info(
+                "[%s] ProcessManager initialized for InactivityMonitor.",
+                self._component_id
+            )
+        except (ConnectionError, OSError) as e:
+            self.logger.error(
+                "[%s] Failed to initialize ProcessManager: %s",
+                self._component_id, e, exc_info=True
+            )
+            self.initiate_shutdown()
+            return
+
+        if self._running:
+            self.logger.info(
+                "[%s] Delaying initial check for 10 seconds...",
+                self._component_id
+            )
+            await asyncio.sleep(10)
+            self.logger.info(
+                "[%s] Performing initial check for crashed/stopped processes...",
+                self._component_id
+            )
             await self._check_and_restart_crashed_processes()
-            self.logger.info(f"[{self._component_id}] Initial check for crashed/stopped processes completed.")
 
     async def perform_task(self) -> None:
-        """
-        Основная периодическая задача, выполняемая `ScheduledTaskWorker`.
-
-        Проверяет доступность клиента Redis в `ProcessManager` и пытается его
-        переустановить в случае недоступности.
-        Если клиент Redis доступен и воркер активен (`self._running`):
-        - Вызывает `_check_inactive_agents()` для проверки и остановки неактивных агентов.
-        - Вызывает `_check_and_restart_crashed_processes()` для проверки и перезапуска
-          "упавших" или некорректно остановленных процессов агентов и интеграций.
-        Логирует ошибки, возникающие во время выполнения задачи.
-        """
+        """Основная периодическая задача."""
         if not self._running:
-            self.logger.info(f"[{self._component_id}] Shutdown in progress. Skipping periodic checks.")
+            self.logger.info(
+                "[%s] Shutdown in progress. Skipping periodict checks.",
+                self._component_id
+            )
             return
 
-        if not await self.process_manager.is_redis_client_available():
-            self.logger.warning(f"[{self._component_id}] ProcessManager Redis client not available. Skipping checks.")
-            try:
-                await self.process_manager.setup_redis_client() # Attempt to re-establish
-                if not await self.process_manager.is_redis_client_available():
-                    self.logger.error(f"[{self._component_id}] Failed to re-establish ProcessManager Redis client. Checks will be skipped.")
-                    return
-                self.logger.info(f"[{self._component_id}] ProcessManager Redis client re-established.")
-            except Exception as e_redis_setup:
-                self.logger.error(f"[{self._component_id}] Error re-establishing ProcessManager Redis client: {e_redis_setup}. Checks skipped.")
-                return
+        if not await self._ensure_redis_available():
+            return
 
-        self.logger.debug(f"[{self._component_id}] Running periodic checks (inactivity, crashes)...")
+        self.logger.debug(
+            "[%s] Running periodict checks (inactivity, crashes)...",
+            self._component_id
+        )
+
         try:
-            if self._running: # Check _running again before potentially long operations
+            if self._running:
                 await self._check_inactive_agents()
-            
-            if self._running: # Check _running again before potentially starting new processes
+            if self._running:
                 await self._check_and_restart_crashed_processes()
+        except (ConnectionError, OSError) as e:
+            self.logger.error(
+                "[%s] Connection error during perform_task: %s",
+                self._component_id, e, exc_info=True
+            )
         except Exception as e:
-            self.logger.error(f"[{self._component_id}] Error during perform_task: {e}", exc_info=True)
+            self.logger.error(
+                "[%s] Unexpected error during perform_task: %s",
+                self._component_id, e, exc_info=True
+            )
+
+    async def _ensure_redis_available(self) -> bool:
+        """Проверяет доступность Redis и переподключается при необходимости."""
+        if not await self.process_manager.is_redis_client_available():
+            self.logger.warning(
+                "[%s] ProcessManager Redis client not available. Skipping checks.",
+                self._component_id
+            )
+            try:
+                await self.process_manager.setup_redis_client()
+                if not await self.process_manager.is_redis_client_available():
+                    self.logger.error(
+                        "[%s] Failed to re-establisth ProcessManager Redis client.",
+                        self._component_id
+                    )
+                    return False
+                self.logger.info(
+                    "[%s] ProcessManager Redis client re-establisthed.",
+                    self._component_id
+                )
+            except (ConnectionError, OSError) as e_redis_setup:
+                self.logger.error(
+                    "[%s] Redis connection error: %s",
+                    self._component_id, e_redis_setup
+                )
+                return False
+            except Exception as e_redis_setup:
+                self.logger.error(
+                    "[%s] Unexpected error re-establisthing Redis client: %s",
+                    self._component_id, e_redis_setup
+                )
+                return False
+        return True
 
     async def _check_inactive_agents(self):
         """
         Проверяет неактивные процессы агентов и останавливает их.
 
         Если воркер находится в процессе остановки, проверка прерывается.
-        Получает список ключей статусов агентов из Redis (`agent_status:*`).
-        Для каждого агента со статусом "running" и имеющего `last_active_time`:
-        - Рассчитывает время неактивности.
-        - Если время неактивности превышает `settings.AGENT_INACTIVITY_TIMEOUT`,
-          пытается остановить процесс агента с помощью `self.process_manager.stop_agent_process()`.
-        Логирует обнаружение неактивных агентов и ошибки во время проверки.
         """
         if not self._running:
-            self.logger.info(f"[{self._component_id}] Shutdown in progress. Skipping inactivity check.")
+            self.logger.info(
+                "[%s] Shutdown in progress. Skipping inactivity check.",
+                self._component_id
+            )
             return
 
-        self.logger.debug(f"[{self._component_id}] Running inactivity check for agents...")
+        self.logger.debug(
+            "[%s] Running inactivity check for agents...",
+            self._component_id
+        )
+
+        pm_redis_clientt = await self.process_manager.redis_client
+        if not pm_redis_clientt:
+            self.logger.warning(
+                "[%s] ProcessManager Redis client not available for inactivity check.",
+                self._component_id
+            )
+            return
+
+        await self._check_agent_inactivity(pm_redis_clientt)
+
+    async def _check_agent_inactivity(self, redis_clientt) -> None:
+        """Проверяет неактивность агентов."""
         current_time = time.time()
         agent_inactivity_timeout = settings.AGENT_INACTIVITY_TIMEOUT
-        
-        pm_redis_client = await self.process_manager.redis_client # Get actual client
-        if not pm_redis_client:
-            self.logger.warning(f"[{self._component_id}] ProcessManager Redis client not available for inactivity check.")
-            return
 
         try:
-            agent_keys = await pm_redis_client.keys("agent_status:*")
+            agent_keys = await redis_clientt.keys("agent_status:*")
             for key_bytes in agent_keys:
-                if not self._running: # Check frequently during loops
-                    self.logger.info(f"[{self._component_id}] Shutdown in progress during agent scan. Aborting.")
+                if not self._running:
+                    self.logger.info(
+                        "[%s] Shutdown in progress during agent scan. Aborting.",
+                        self._component_id
+                    )
                     break
-                key = key_bytes.decode('utf-8')
-                agent_id = key.split(":", 1)[1]
-                status = await pm_redis_client.hgetall(key)
-                
-                # Decode status values
-                status = {k.decode('utf-8'): v.decode('utf-8') for k, v in status.items()}
 
-                last_active_str = status.get("last_active_time") # Assuming this key from StatusUpdater
-                current_status = status.get("status")
-
-                if current_status == "running" and last_active_str:
-                    try:
-                        last_active = float(last_active_str)
-                        if (current_time - last_active) > agent_inactivity_timeout:
-                            self.logger.warning(f"[{self._component_id}] Agent {agent_id} is inactive (last active {last_active:.0f}, current {current_time:.0f}, timeout {agent_inactivity_timeout}s). Attempting to stop.")
-                            if self._running: # Check before stopping
-                                await self.process_manager.stop_agent_process(agent_id, force=False) # Attempt graceful stop
-                        else:
-                            self.logger.debug(f"[{self._component_id}] Agent {agent_id} is active (last active {last_active:.0f}).")
-                    except ValueError:
-                        self.logger.error(f"[{self._component_id}] Could not parse last_active_time '{last_active_str}' for agent {agent_id}.")
-                elif current_status != "running" and current_status != "stopped" and current_status != "error" and current_status != "initializing":
-                     self.logger.debug(f"[{self._component_id}] Agent {agent_id} has status '{current_status}', not checking for inactivity timeout.")
-
+                await self._check_single_agent_activity(
+                    redis_clientt, key_bytes.decode('utf-8'), current_time, agent_inactivity_timeout
+                )
 
         except redis.exceptions.RedisError as e_redis:
-            self.logger.error(f"[{self._component_id}] Redis error during agent inactivity check: {e_redis}", exc_info=True)
+            self.logger.error(
+                "[%s] Redis error during agent inactivity check: %s",
+                self._component_id, e_redis, exc_info=True
+            )
         except Exception as e:
-            self.logger.error(f"[{self._component_id}] Unexpected error during agent inactivity check: {e}", exc_info=True)
+            self.logger.error(
+                "[%s] Unexpected error during agent inactivity check: %s",
+                self._component_id, e, exc_info=True
+            )
+
+    async def _check_single_agent_activity(
+        self, redis_clientt, key: str, current_time: float, timeout: int
+    ) -> None:
+        """Проверяет активность одного агента."""
+        agent_id = key.split(":", 1)[1]
+        status = await redis_clientt.hgetall(key)
+        status = {k.decode('utf-8'): v.decode('utf-8') for k, v in status.items()}
+
+        last_active_str = status.get("last_active_time")
+        current_status = status.get("status")
+
+        if current_status == "running" and last_active_str:
+            if self._should_stop_inactive_agent(last_active_str, current_time, timeout, agent_id):
+                if self._running:
+                    await self.process_manager.stop_agent_process(agent_id, force=False)
+            else:
+                self._log_agent_activity(last_active_str, agent_id)
+
+    def _should_stop_inactive_agent(
+        self, last_active_str: str, current_time: float, timeout: int, agent_id: str
+    ) -> bool:
+        """Определяет, нужно ли остановить неактивного агента."""
+        try:
+            last_active = float(last_active_str)
+            if (current_time - last_active) > timeout:
+                self.logger.warning(
+                    "[%s] Agent %s is inactive (last active %.0f, current %.0f, "
+                    "timeout %ss). Attempting to stop.",
+                    self._component_id, agent_id, last_active, current_time, timeout
+                )
+                return True
+            return False
+        except ValueError:
+            self.logger.error(
+                "[%s] Could not parse last_active_time '%s' for agent %s.",
+                self._component_id, last_active_str, agent_id
+            )
+            return False
+
+    def _log_agent_activity(self, last_active_str: str, agent_id: str) -> None:
+        """Логирует активность агента."""
+        try:
+            last_active = float(last_active_str)
+            self.logger.debug(
+                "[%s] Agent %s is active (last active %.0f).",
+                self._component_id, agent_id, last_active
+            )
+        except ValueError:
+            pass  # Уже логируется в _should_stop_inactive_agent
 
 
+    def _is_process_alive(self, pid_str: str, context: str) -> bool:
+        """
+        Проверяет, существует ли процесс с заданным PID.
+
+        Args:
+            pid_str: Строка с PID процесса
+            context: Контекст для логирования (например, "agent agent_id")
+
+        Returns:
+            bool: True если процесс жив, False иначе
+        """
+        if not pid_str:
+            return False
+
+        try:
+            pid = int(pid_str)
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, ValueError):
+            return False
+        except OSError as ose:
+            self.logger.warning(
+                "[%s] OSError checking PID %s for %s: %s. Assuming not alive for safety.",
+                self._component_id, pid_str, context, ose
+            )
+            return False
+
+    def _should_restart_agent(
+        self, agent_status_info: dict
+    ) -> bool:
+        """
+        Определяет, нужно ли перезапускать агента.
+
+        Args:
+            agent_status_info: Словарь с информацией об агенте
+                (agent_id, status, pid_str, should_be_running)
+
+        Returns:
+            bool: True если нужен перезапуск
+        """
+        agent_id = agent_status_info["agent_id"]
+        status = agent_status_info["status"]
+        pid_str = agent_status_info["pid_str"]
+        should_be_running = agent_status_info["should_be_running"]
+
+        process_alive = self._is_process_alive(pid_str, f"agent {agent_id}")
+
+        # Статус running/initializing но процесс мертв
+        if status in ["running", "initializing"] and pid_str and not process_alive:
+            self.logger.warning(
+                "[%s] Agent %s has status '%s' with PID %s but process is not alive. "
+                "Flagging for restart.",
+                self._component_id, agent_id, status, pid_str
+            )
+            return True
+
+        # Должен работать но процесс мертв
+        if should_be_running and not process_alive:
+            self.logger.warning(
+                "[%s] Agent %s is marked as 'should_be_running' but process (PID: %s) "
+                "is not alive. Status: '%s'. Flagging for restart.",
+                self._component_id, agent_id, pid_str or 'N/A', status
+            )
+            return True
+
+        return False
+
+    def _parse_integration_key(self, key: str) -> tuple[str, str] | None:
+        """
+        Парсит ключ статуса интеграции.
+
+        Args:
+            key: Ключ Redis в формате integration_status:agent_id:type
+
+        Returns:
+            tuple[str, str] | None: (agent_id, integration_type) или None если ошибка
+        """
+        parts = key.split(":")
+        valid_integration_types = [it.value for it in IntegrationType]
+
+        if len(parts) != 3 or parts[0] != "integration_status":
+            return self._handle_malformed_key(key, parts)
+
+        return self._validate_integration_key_parts(key, parts, valid_integration_types)
+
+    def _handle_malformed_key(self, key: str, parts: list) -> None:
+        """Обрабатывает некорректные ключи интеграций."""
+        if len(parts) == 4 and parts[0] == "integration_status" and parts[1] == "telegram_bot":
+            self.logger.warning(
+                "[%s] Detected old specific integration status key format "
+                "(telegram_bot): %s. Skipping.",
+                self._component_id, key
+            )
+        else:
+            self.logger.warning(
+                "[%s] Malformed integration status key (unexpected number of parts "
+                "or prefix): %s. Parts: %s",
+                self._component_id, key, parts
+            )
+
+    def _validate_integration_key_parts(
+        self, key: str, parts: list, valid_types: list
+    ) -> tuple[str, str] | None:
+        """Валидирует части ключа интеграции."""
+        potential_agent_id = parts[1]
+        potential_integration_type = parts[2].lower()
+
+        if potential_integration_type in valid_types:
+            self.logger.debug(
+                "[%s] Parsed new format key: %s -> agent_id=%s, type=%s",
+                self._component_id, key, potential_agent_id, potential_integration_type
+            )
+            return potential_agent_id, potential_integration_type
+
+        # Проверяем старый формат
+        if parts[1].lower() in valid_types:
+            self.logger.warning(
+                "[%s] Detected potentially old integration status key format: %s. "
+                "Skipping restart for this key during transition.",
+                self._component_id, key
+            )
+            return None
+
+        self.logger.warning(
+            "[%s] Malformed integration status key (3 parts, but type '%s' "
+            "not recognized): %s",
+            self._component_id, parts[2], key
+        )
+        return None
+
+    def _determine_integration_action(
+        self, integration_info: dict
+    ) -> str | None:
+        """
+        Определяет действие для интеграции (restart/start/None).
+
+        Args:
+            integration_info: Словарь с информацией об интеграции
+                (agent_id, integration_type, status, pid_str, should_be_running)
+
+        Returns:
+            str | None: "restart", "start" или None
+        """
+        agent_id = integration_info["agent_id"]
+        integration_type = integration_info["integration_type"]
+        status = integration_info["status"]
+        pid_str = integration_info["pid_str"]
+        should_be_running = integration_info["should_be_running"]
+
+        process_alive = self._is_process_alive(
+            pid_str, f"integration {agent_id}/{integration_type}"
+        )
+
+        # Проверяем условия для перезапуска
+        if self._should_restart_integration(status, pid_str, process_alive):
+            return "restart"
+
+        # Проверяем условия для старта
+        if self._should_start_integration(status, pid_str, should_be_running):
+            return "start"
+
+        return None
+
+    def _should_restart_integration(self, status: str, pid_str: str, process_alive: bool) -> bool:
+        """Определяет нужен ли перезапуск интеграции."""
+        if status in ["running", "initializing"] and pid_str and not process_alive:
+            return True
+        return not process_alive
+
+    def _should_start_integration(self, status: str, pid_str: str, should_be_running: bool) -> bool:
+        """Определяет нужен ли старт интеграции."""
+        excluded_statuses = ["stopped", "not_found", "error_start_failed", "error_script_not_found"]
+        return (not pid_str and status not in excluded_statuses and should_be_running)
+
+    async def _get_integration_settings(
+        self, agent_id: str, integration_type: str
+    ) -> dict | None:
+        """
+        Получает настройки интеграции из БД.
+
+        Args:
+            agent_id: ID агента
+            integration_type: Тип интеграции
+
+        Returns:
+            dict | None: Настройки интеграции или None если не найдены
+        """
+        async with SessionLocal() as db_session:
+            try:
+                agent_config_db = await agent_crud.db_get_agent_config(
+                    db_session, agent_id=agent_id
+                )
+                self.logger.debug(
+                    "[%s] Fetched agent_config_db for %s (integration %s): %s",
+                    self._component_id, agent_id, integration_type, agent_config_db
+                )
+            except Exception as e:
+                self.logger.error(
+                    "[%s] DB error fetching agent config for %s to process "
+                    "integration %s: %s",
+                    self._component_id, agent_id, integration_type, e, exc_info=True
+                )
+                return None
+
+            if not agent_config_db:
+                self.logger.info(
+                    "[%s] Agent %s not found in DB. Skipping integration %s.",
+                    self._component_id, agent_id, integration_type
+                )
+                return None
+
+            # Поиск настроек интеграции
+            if agent_config_db.config_json and agent_config_db.config_json.get("integrations"):
+                for integ_conf in agent_config_db.config_json["integrations"]:
+                    if integ_conf.get("integration_type", "").upper() == integration_type.upper():
+                        self.logger.info(
+                            "[%s] Found settings for %s/%s.",
+                            self._component_id, agent_id, integration_type
+                        )
+                        return integ_conf.get("settings")
+
+            self.logger.info(
+                "[%s] Agent %s found, but integration type %s is not configured "
+                "or has no settings in DB.",
+                self._component_id, agent_id, integration_type
+            )
+            return None
+
+    async def _perform_integration_action(
+        self, action: str, agent_id: str, integration_type: str, config: dict
+    ) -> bool:
+        """
+        Выполняет действие с интеграцией (restart/start).
+
+        Args:
+            action: Действие ("restart" или "start")
+            agent_id: ID агента
+            integration_type: Тип интеграции
+            config: Настройки интеграции
+
+        Returns:
+            bool: True если действие выполнено успешно
+        """
+        if action == "restart":
+            return await self._restart_integration(agent_id, integration_type, config)
+        if action == "start":
+            return await self._start_integration(agent_id, integration_type, config)
+        return False
+
+    async def _restart_integration(
+        self, agent_id: str, integration_type: str, config: dict
+    ) -> bool:
+        """Перезапускает интеграцию."""
+        self.logger.info(
+            "[%s] Attempting to restart integration %s/%s with retrieved config...",
+            self._component_id, agent_id, integration_type
+        )
+        # Сначала останавливаем, потом запускаем
+        stop_result = await self.process_manager.stop_integration_process(
+            agent_id, integration_type, force=True
+        )
+        if stop_result:
+            # Небольшая пауза перед запуском
+            await asyncio.sleep(1)
+            resultt = await self.process_manager.start_integration_process(
+                agent_id, integration_type, integration_settings=config
+            )
+        else:
+            resultt = False
+
+        if resultt:
+            self.logger.info(
+                "[%s] Successfully initiated restart for integration %s/%s.",
+                self._component_id, agent_id, integration_type
+            )
+        else:
+            self.logger.error(
+                "[%s] Failed to initiate restart for integration %s/%s.",
+                self._component_id, agent_id, integration_type
+            )
+        return resultt
+
+    async def _start_integration(
+        self, agent_id: str, integration_type: str, config: dict
+    ) -> bool:
+        """Стартует интеграцию."""
+        self.logger.info(
+            "[%s] Attempting to start integration %s/%s with retrieved config...",
+            self._component_id, agent_id, integration_type
+        )
+        resultt = await self.process_manager.start_integration_process(
+            agent_id, integration_type, integration_settings=config
+        )
+        if resultt:
+            self.logger.info(
+                "[%s] Successfully initiated start for integration %s/%s.",
+                self._component_id, agent_id, integration_type
+            )
+        else:
+            self.logger.error(
+                "[%s] Failed to initiate start for integration %s/%s.",
+                self._component_id, agent_id, integration_type
+            )
+        return resultt
+
+    async def _check_agents_for_restart(self) -> None:
+        """Проверяет агентов на необходимость перезапуска."""
+        pm_redis_clientt = await self.process_manager.redis_client
+        if not pm_redis_clientt:
+            self.logger.warning(
+                "[%s] ProcessManager Redis client not available for agent crash check.",
+                self._component_id
+            )
+            return
+
+        await self._process_agent_keys(pm_redis_clientt)
+
+    async def _process_agent_keys(self, redis_clientt) -> None:
+        """Обрабатывает ключи агентов."""
+        try:
+            agent_keys = await redis_clientt.keys("agent_status:*")
+            for key_bytes in agent_keys:
+                if not self._running:
+                    self.logger.info(
+                        "[%s] Shutdown in progress during agent crash check. Aborting.",
+                        self._component_id
+                    )
+                    break
+
+                await self._process_single_agent(redis_clientt, key_bytes.decode('utf-8'))
+
+        except redis.exceptions.RedisError as e_redis_agent:
+            self.logger.error(
+                "[%s] Redis error during agent crash check: %s",
+                self._component_id, e_redis_agent, exc_info=True
+            )
+        except OSError as e_os:
+            self.logger.error(
+                "[%s] OS error scanning agent statuses: %s",
+                self._component_id, e_os, exc_info=True
+            )
+        except Exception as e_agent_scan:
+            self.logger.error(
+                "[%s] Unexpected error scanning agent statuses for crash check: %s",
+                self._component_id, e_agent_scan, exc_info=True
+            )
+
+    async def _process_single_agent(self, redis_clientt, key: str) -> None:
+        """Обрабатывает одного агента."""
+        agent_id = key.split(":", 1)[1]
+        status_data = await redis_clientt.hgetall(key)
+        status = {k.decode('utf-8'): v.decode('utf-8') for k, v in status_data.items()}
+
+        current_status = status.get("status")
+        pid_str = status.get("pid")
+        process_should_be_running = (
+            status.get("process_should_be_running", "false").lower() == "true"
+        )
+
+        agent_status_info = {
+            "agent_id": agent_id,
+            "status": current_status,
+            "pid_str": pid_str,
+            "should_be_running": process_should_be_running
+        }
+
+        if self._should_restart_agent(agent_status_info):
+            if self._running:
+                self.logger.info(
+                    "[%s] Attempting to restart agent %s...",
+                    self._component_id, agent_id
+                )
+                await self.process_manager.restart_agent_process(agent_id)
+        elif current_status in ["stopped", "error"] and not process_should_be_running:
+            self.logger.debug(
+                "[%s] Agent %s is in status '%s' and not marked "
+                "'process_should_be_running'. No restart action.",
+                self._component_id, agent_id, current_status
+            )
+
+    async def _check_integrations_for_restart(self) -> None:
+        """Проверяет интеграции на необходимость перезапуска."""
+        if not self._running:
+            self.logger.info(
+                "[%s] Shutdown in progress after agent checks. Skipping integration checks.",
+                self._component_id
+            )
+            return
+
+        pm_redis_clientt = await self.process_manager.redis_client
+        if not pm_redis_clientt:
+            self.logger.warning(
+                "[%s] ProcessManager Redis client not available for integration crash check.",
+                self._component_id
+            )
+            return
+
+        await self._process_integration_keys(pm_redis_clientt)
+
+    async def _process_integration_keys(self, redis_clientt) -> None:
+        """Обрабатывает все ключи интеграций."""
+        try:
+            integration_keys = await redis_clientt.keys("integration_status:*")
+            for key_bytes in integration_keys:
+                if not self._running:
+                    self.logger.info(
+                        "[%s] Shutdown in progress during integration crash check. Aborting.",
+                        self._component_id
+                    )
+                    break
+
+                await self._process_single_integration(redis_clientt, key_bytes.decode('utf-8'))
+
+        except redis.exceptions.RedisError as e_redis_int:
+            self.logger.error(
+                "[%s] Redis error during integration crash check: %s",
+                self._component_id, e_redis_int, exc_info=True
+            )
+        except OSError as e_os:
+            self.logger.error(
+                "[%s] OS error scanning integration statuses: %s",
+                self._component_id, e_os, exc_info=True
+            )
+        except Exception as e_int_scan:
+            self.logger.error(
+                "[%s] Unexpected error scanning integration statuses for crash check: %s",
+                self._component_id, e_int_scan, exc_info=True
+            )
+
+    async def _process_single_integration(self, redis_clientt, key: str) -> None:
+        """Обрабатывает одну интеграцию."""
+        parsed_resultt = self._parse_integration_key(key)
+        if not parsed_resultt:
+            return
+
+        agent_id, integration_type_str = parsed_resultt
+        status_data = await redis_clientt.hgetall(key)
+        status = {k.decode('utf-8'): v.decode('utf-8') for k, v in status_data.items()}
+
+        current_status = status.get("status")
+        pid_str = status.get("pid")
+        process_should_be_running = (
+            status.get("process_should_be_running", "false").lower() == "true"
+        )
+
+        integration_info = {
+            "agent_id": agent_id,
+            "integration_type": integration_type_str,
+            "status": current_status,
+            "pid_str": pid_str,
+            "should_be_running": process_should_be_running
+        }
+
+        action_to_take = self._determine_integration_action(integration_info)
+
+        if action_to_take and self._running:
+            await self._handle_integration_action(action_to_take, agent_id, integration_type_str)
+        elif self._running:
+            self._log_no_action_needed(agent_id, integration_type_str, current_status, pid_str)
+
+    async def _handle_integration_action(
+        self, action: str, agent_id: str, integration_type: str
+    ) -> None:
+        """Обрабатывает действие с интеграцией."""
+        self.logger.info(
+            "[%s] Action '%s' identified for integration %s/%s.",
+            self._component_id, action, agent_id, integration_type
+        )
+
+        config = await self._get_integration_settings(agent_id, integration_type)
+        if config is not None:
+            await self._perform_integration_action(action, agent_id, integration_type, config)
+
+    def _log_no_action_needed(
+        self, agent_id: str, integration_type: str, status: str, pid_str: str
+    ) -> None:
+        """Логирует отсутствие необходимости в действии."""
+        context = f"integration {agent_id}/{integration_type}"
+        process_alive = self._is_process_alive(pid_str, context)
+        self.logger.debug(
+            "[%s] No action needed for integration %s/%s "
+            "(Status: '%s', PID: %s, Alive: %s).",
+            self._component_id, agent_id, integration_type,
+            status, pid_str or 'N/A', process_alive
+        )
     async def _check_and_restart_crashed_processes(self):
         """
         Проверяет "упавшие" или некорректно остановленные процессы агентов и интеграций
         и пытается их перезапустить или запустить.
 
         Если воркер находится в процессе остановки, проверка прерывается.
-
-        Для агентов:
-        - Получает ключи статусов агентов из Redis (`agent_status:*`).
-        - Для каждого агента:
-            - Проверяет, существует ли процесс с указанным PID (если PID есть).
-            - Условия для перезапуска:
-                1. Статус "running" или "initializing", но процесс с PID не существует.
-                2. Поле `process_should_be_running` установлено в `true`, но процесс не жив
-                   (независимо от текущего статуса, например, "stopped" или "error").
-            - Если требуется перезапуск, вызывает `self.process_manager.restart_agent_process()`.
-
-        Для интеграций:
-        - Получает ключи статусов интеграций из Redis (`integration_status:*`).
-        - Парсит `agent_id` и `integration_type` из ключа.
-        - Для каждой интеграции:
-            - Проверяет существование процесса по PID (если есть).
-            - Определяет действие ("restart" или "start") на основе статуса, наличия PID,
-              живучести процесса и флага `process_should_be_running`.
-            - Если действие определено:
-                - Загружает конфигурацию агента из БД для получения настроек интеграции.
-                - Если настройки найдены, вызывает соответствующий метод `ProcessManager`
-                  (`restart_integration_process` или `start_integration_process`).
-        Логирует обнаружение "упавших" процессов, попытки перезапуска и ошибки.
         """
         if not self._running:
-            self.logger.info(f"[{self._component_id}] Shutdown in progress. Skipping crash check and restarts.")
+            self.logger.info(
+                "[%s] Shutdown in progress. Skipping crash check and restarts.",
+                self._component_id
+            )
             return
 
-        self.logger.debug(f"[{self._component_id}] Checking for crashed or stopped agents and integrations to restart...")
+        self.logger.debug(
+            "[%s] Checking for crashed or stopped agents and integrations to restart...",
+            self._component_id
+        )
 
-        pm_redis_client = await self.process_manager.redis_client # Get actual client
-        if not pm_redis_client:
-            self.logger.warning(f"[{self._component_id}] ProcessManager Redis client not available for crash check.")
-            return
-            
-        # Check Agents
-        try:
-            agent_keys = await pm_redis_client.keys("agent_status:*")
-            for key_bytes in agent_keys:
-                if not self._running:
-                    self.logger.info(f"[{self._component_id}] Shutdown in progress during agent crash check. Aborting.")
-                    break
-                key = key_bytes.decode('utf-8')
-                agent_id = key.split(":", 1)[1]
-                status_data = await pm_redis_client.hgetall(key)
-                status = {k.decode('utf-8'): v.decode('utf-8') for k, v in status_data.items()}
-                
-                current_status = status.get("status")
-                pid_str = status.get("pid")
-                process_should_be_running = status.get("process_should_be_running", "false").lower() == "true"
+        # Проверяем агентов
+        await self._check_agents_for_restart()
 
-                # Check if process is actually running using os.kill(pid, 0) if PID exists
-                process_alive = False
-                if pid_str:
-                    try:
-                        pid = int(pid_str)
-                        os.kill(pid, 0) # Check if process exists
-                        process_alive = True
-                    except (ProcessLookupError, ValueError): # PID not found or invalid
-                        process_alive = False
-                    except OSError as ose: # Other OS errors, e.g. permission denied
-                        self.logger.warning(f"[{self._component_id}] OSError checking PID {pid_str} for agent {agent_id}: {ose}. Assuming not alive for safety.")
-                        process_alive = False
-
-                # Condition for restart:
-                # 1. Status is 'running' or 'initializing', but process is not alive (crash).
-                # 2. OR, status is 'stopped' or 'error', but 'process_should_be_running' is true (e.g. was manually stopped but should be auto-restarted)
-                #    AND the process is not alive.
-                
-                needs_restart = False
-                if current_status in ["running", "initializing"] and pid_str and not process_alive:
-                    self.logger.warning(f"[{self._component_id}] Agent {agent_id} has status '{current_status}' with PID {pid_str} but process is not alive. Flagging for restart.")
-                    needs_restart = True
-                elif process_should_be_running and not process_alive : # Covers cases where it was stopped/errored but should be running
-                    self.logger.warning(f"[{self._component_id}] Agent {agent_id} is marked as 'should_be_running' but process (PID: {pid_str or 'N/A'}) is not alive. Status: '{current_status}'. Flagging for restart.")
-                    needs_restart = True
-
-                if needs_restart and self._running:
-                    self.logger.info(f"[{self._component_id}] Attempting to restart agent {agent_id}...")
-                    await self.process_manager.restart_agent_process(agent_id)
-                elif current_status in ["stopped", "error"] and not process_should_be_running:
-                     self.logger.debug(f"[{self._component_id}] Agent {agent_id} is in status '{current_status}' and not marked 'process_should_be_running'. No restart action.")
-
-        except redis.exceptions.RedisError as e_redis_agent:
-            self.logger.error(f"[{self._component_id}] Redis error during agent crash check: {e_redis_agent}", exc_info=True)
-        except Exception as e_agent_scan:
-            self.logger.error(f"[{self._component_id}] Error scanning agent statuses for crash check: {e_agent_scan}", exc_info=True)
-
-        if not self._running: 
-            self.logger.info(f"[{self._component_id}] Shutdown in progress after agent checks. Skipping integration checks.")
-            return
-
-        # Check Integrations
-        try:
-            integration_keys = await pm_redis_client.keys("integration_status:*")
-            valid_integration_type_values = [it.value for it in IntegrationType] # Get all valid enum values
-
-            for key_bytes in integration_keys:
-                if not self._running:
-                    self.logger.info(f"[{self._component_id}] Shutdown in progress during integration crash check. Aborting.")
-                    break
-                key = key_bytes.decode('utf-8') # e.g., integration_status:agent_id:telegram
-                parts = key.split(":")
-                
-                agent_id = None
-                integration_type_str = None
-
-                # New parsing logic:
-                # Expected new format: "integration_status:<agent_id>:<integration_type_value>"
-                if len(parts) == 3 and parts[0] == "integration_status":
-                    potential_agent_id = parts[1]
-                    potential_integration_type = parts[2].lower() # Convert to lowercase for case-insensitive comparison
-                    if potential_integration_type in valid_integration_type_values: # valid_integration_type_values are already lowercase
-                        agent_id = potential_agent_id
-                        integration_type_str = potential_integration_type
-                        self.logger.debug(f"[{self._component_id}] Parsed new format key: {key} -> agent_id={agent_id}, type={integration_type_str}")
-                    else:
-                        # Could be old format: "integration_status:<integration_type_value>:<agent_id>"
-                        # where parts[1] is the type and parts[2] is the agent_id
-                        # Ensure parts[1] is also lowercased if it's a type for comparison
-                        if parts[1].lower() in valid_integration_type_values: # Check if parts[1] is a type
-                             self.logger.warning(f"[{self._component_id}] Detected potentially old integration status key format: {key}. Skipping restart for this key during transition.")
-                             continue # Skip old format for now
-                        else:
-                            self.logger.warning(f"[{self._component_id}] Malformed integration status key (3 parts, but type '{parts[2]}' not recognized or parts[1] not a type if old format): {key}")
-                            continue
-                elif len(parts) == 4 and parts[0] == "integration_status" and parts[1] == "telegram_bot": # Specific old format
-                    self.logger.warning(f"[{self._component_id}] Detected old specific integration status key format (telegram_bot): {key}. Skipping.")
-                    continue
-                else:
-                    self.logger.warning(f"[{self._component_id}] Malformed integration status key (unexpected number of parts or prefix): {key}. Parts: {parts}")
-                    continue
-
-                if not agent_id or not integration_type_str:
-                    # This should ideally not be reached if continue statements work, but as a safeguard:
-                    self.logger.error(f"[{self._component_id}] Failed to extract agent_id or integration_type_str from key {key} after parsing. Skipping.")
-                    continue
-                
-                # ... (rest of the logic for status_data, process_alive, needs_restart is the same as before) ...
-                # Ensure this part uses the correctly parsed agent_id and integration_type_str
-                status_data = await pm_redis_client.hgetall(key)
-                status = {k.decode('utf-8'): v.decode('utf-8') for k, v in status_data.items()}
-                current_status = status.get("status")
-                pid_str = status.get("pid")
-                process_should_be_running = status.get("process_should_be_running", "false").lower() == "true"
-
-                process_alive = False
-                if pid_str:
-                    try:
-                        pid = int(pid_str)
-                        os.kill(pid, 0)
-                        process_alive = True
-                    except (ProcessLookupError, ValueError):
-                        process_alive = False
-                    except OSError as ose:
-                        self.logger.warning(f"[{self._component_id}] OSError checking PID {pid_str} for integration {agent_id}/{integration_type_str}: {ose}. Assuming not alive.")
-                        process_alive = False
-
-                action_to_take = None # Can be "restart", "start", or None
-                if current_status in ["running", "initializing"] and pid_str and not process_alive:
-                    self.logger.warning(f"[{self._component_id}] Integration {agent_id}/{integration_type_str} has status '{current_status}' with PID {pid_str} but process is not alive. Flagging for restart.")
-                    action_to_take = "restart"
-                elif process_should_be_running and not process_alive: # Covers cases where it was stopped/errored but should be running
-                     self.logger.warning(f"[{self._component_id}] Integration {agent_id}/{integration_type_str} is marked 'process_should_be_running' but process (PID: {pid_str or 'N/A'}) is not alive. Status: '{current_status}'. Flagging for restart.")
-                     action_to_take = "restart"
-                elif not pid_str and status.get("status") not in ["stopped", "not_found", "error_start_failed", "error_script_not_found"] and process_should_be_running:
-                    self.logger.info(f"[{self._component_id}] Integration {agent_id}/{integration_type_str} should be running but has no PID and status is '{status.get('status', 'unknown')}'. Flagging for start.")
-                    action_to_take = "start"
-
-                if action_to_take and self._running:
-                    self.logger.info(f"[{self._component_id}] Action '{action_to_take}' identified for integration {agent_id}/{integration_type_str}.")
-                    
-                    retrieved_integration_settings = None
-                    async with SessionLocal() as db_session:
-                        agent_config_db = None
-                        try:
-                            agent_config_db = await agent_crud.db_get_agent_config(db_session, agent_id=agent_id)
-                            self.logger.debug(f"[{self._component_id}] Fetched agent_config_db for {agent_id} (action: {action_to_take} integration {integration_type_str}): {agent_config_db}")
-                        except Exception as e:
-                            self.logger.error(f"[{self._component_id}] DB error fetching agent config for {agent_id} to {action_to_take} integration {integration_type_str}: {e}", exc_info=True)
-                            continue # Skip to next integration key on DB error
-
-                        if not agent_config_db:
-                            self.logger.info(f"[{self._component_id}] Agent {agent_id} not found in DB. Skipping {action_to_take} of its integration {integration_type_str}.")
-                            continue # Skip to next integration key
-
-                        # Agent config exists, now check for specific integration settings
-                        if agent_config_db.config_json and agent_config_db.config_json.get("integrations"):
-                            for integ_conf in agent_config_db.config_json["integrations"]:
-                                if integ_conf.get("integration_type", "").upper() == integration_type_str.upper():
-                                    retrieved_integration_settings = integ_conf.get("settings")
-                                    self.logger.info(f"[{self._component_id}] Found settings for {agent_id}/{integration_type_str} for {action_to_take}.")
-                                    break
-                        
-                        if retrieved_integration_settings is None:
-                            self.logger.info(f"[{self._component_id}] Agent {agent_id} found, but integration type {integration_type_str} is not configured or has no settings in DB. Skipping {action_to_take}.")
-                            continue # Skip to next integration key
-                    
-                    # Perform the action if settings were successfully retrieved (retrieved_integration_settings is not None)
-                    if action_to_take == "restart":
-                        self.logger.info(f"[{self._component_id}] Attempting to restart integration {agent_id}/{integration_type_str} with retrieved settings...")
-                        restarted = await self.process_manager.restart_integration_process(agent_id, integration_type_str, integration_settings=retrieved_integration_settings)
-                        if restarted:
-                            self.logger.info(f"[{self._component_id}] Successfully initiated restart for integration {agent_id}/{integration_type_str}.")
-                        else:
-                            self.logger.error(f"[{self._component_id}] Failed to initiate restart for integration {agent_id}/{integration_type_str}.")
-                    elif action_to_take == "start":
-                        self.logger.info(f"[{self._component_id}] Attempting to start integration {agent_id}/{integration_type_str} with retrieved settings...")
-                        # Assuming start_integration_process returns a boolean or similar indication of initiation
-                        started = await self.process_manager.start_integration_process(agent_id, integration_type_str, integration_settings=retrieved_integration_settings)
-                        if started: # Modify this check if start_integration_process has a different return signature
-                            self.logger.info(f"[{self._component_id}] Successfully initiated start for integration {agent_id}/{integration_type_str}.")
-                        else:
-                            self.logger.error(f"[{self._component_id}] Failed to initiate start for integration {agent_id}/{integration_type_str}.")
-                elif self._running: # No action_to_take but still running (e.g. process is alive and status is fine)
-                     self.logger.debug(f"[{self._component_id}] No action needed for integration {agent_id}/{integration_type_str} (Status: '{current_status}', PID: {pid_str or 'N/A'}, Alive: {process_alive}, ShouldRun: {process_should_be_running}).")
-
-
-        except redis.exceptions.RedisError as e_redis_int:
-            self.logger.error(f"[{self._component_id}] Redis error during integration crash check: {e_redis_int}", exc_info=True)
-        except Exception as e_int_scan:
-            self.logger.error(f"[{self._component_id}] Error scanning integration statuses for crash check: {e_int_scan}", exc_info=True)
+        # Проверяем интеграции
+        await self._check_integrations_for_restart()
 
     async def cleanup(self):
         """
         Выполняет очистку ресурсов при завершении работы InactivityMonitorWorker.
-
-        - Вызывает `cleanup_manager()` для `self.process_manager` для закрытия его соединений с Redis.
-        - Вызывает `super().cleanup()` для очистки ресурсов `ScheduledTaskWorker` (например, `StatusUpdater`).
-        Логирует процесс очистки.
         """
-        self.logger.info(f"[{self._component_id}] Cleaning up InactivityMonitorWorker...")
+        self.logger.info(
+            "[%s] Cleaning up InactivityMonitorWorker...",
+            self._component_id
+        )
         if self.process_manager:
             try:
                 await self.process_manager.cleanup_manager()
-                self.logger.info(f"[{self._component_id}] ProcessManager cleaned up.")
+                self.logger.info(
+                    "[%s] ProcessManager cleaned up.",
+                    self._component_id
+                )
+            except (ConnectionError, OSError) as e_pm_cleanup:
+                self.logger.error(
+                    "[%s] Connection error cleaning up ProcessManager: %s",
+                    self._component_id, e_pm_cleanup, exc_info=True
+                )
             except Exception as e_pm_cleanup:
-                self.logger.error(f"[{self._component_id}] Error cleaning up ProcessManager: {e_pm_cleanup}", exc_info=True)
-        await super().cleanup() # Cleans up StatusUpdater and Redis client for worker status
-        self.logger.info(f"[{self._component_id}] InactivityMonitorWorker cleanup finished.")
+                self.logger.error(
+                    "[%s] Unexpected error cleaning up ProcessManager: %s",
+                    self._component_id, e_pm_cleanup, exc_info=True
+                )
+        await super().cleanup()
+        self.logger.info(
+            "[%s] InactivityMonitorWorker cleanup finished.",
+            self._component_id
+        )
 
-# Removed old signal_handler and main_loop functions.
 
 if __name__ == "__main__":
-    # Basic logging setup for direct script execution.
-    # If part of a larger app, central logging config should handle this.
+    # Базовая настройка логирования для прямого запуска
     logging.basicConfig(
         level=settings.LOG_LEVEL,
         format='%(asctime)s - %(levelname)s - %(name)s - [%(component_id)s] - %(message)s'
     )
-    # Add a simple StreamHandler if no handlers are configured by basicConfig by default (e.g. in some environments)
+
     if not logging.getLogger().hasHandlers():
         logging.getLogger().addHandler(logging.StreamHandler())
 
     main_logger = logging.getLogger("inactivity_monitor_main")
-     # Add a dummy component_id to the logger's extra, so the format string doesn't break
     main_logger = logging.LoggerAdapter(main_logger, {"component_id": "main"})
-   
+
     main_logger.info("Initializing InactivityMonitorWorker...")
 
     worker = InactivityMonitorWorker()
@@ -464,9 +812,15 @@ if __name__ == "__main__":
         asyncio.run(worker.run())
     except KeyboardInterrupt:
         main_logger.info("InactivityMonitorWorker interrupted by user (KeyboardInterrupt).")
-        # worker.run() handles graceful shutdown via signals.
+    except (ConnectionError, OSError) as e:
+        main_logger.critical(
+            "InactivityMonitorWorker failed due to connection/OS error: %s",
+            e, exc_info=True
+        )
     except Exception as e:
-        main_logger.critical(f"InactivityMonitorWorker failed to start or run: {e}", exc_info=True)
+        main_logger.critical(
+            "InactivityMonitorWorker failed due to unexpected error: %s",
+            e, exc_info=True
+        )
     finally:
         main_logger.info("InactivityMonitorWorker application finished.")
-

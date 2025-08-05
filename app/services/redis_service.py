@@ -64,17 +64,3 @@ async def get_redis_client() -> redis.Redis: # Changed redis.asyncio.Redis to re
     # Connections are managed by the client/pool automatically.
     return redis.Redis(connection_pool=pool)
 
-# Можно добавить другие функции для работы с Redis, если это необходимо,
-# например, для публикации сообщений, работы с очередями и т.д.,
-# чтобы инкапсулировать эту логику здесь.
-# Пример:
-# async def publish_message(channel: str, message: str):
-#     if not _redis_pool:
-#         logger.error("Cannot publish message: Redis pool not available.")
-#         return
-#     try:
-#         client = redis.Redis.from_pool(_redis_pool)
-#         await client.publish(channel, message)
-#         await client.close()
-#     except Exception as e:
-#         logger.error(f"Error publishing Redis message to {channel}: {e}", exc_info=True)

@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 import asyncio
 import json
 import logging
-from typing import List, Optional, Any, Dict
+from typing import List, Any, Dict
 from datetime import datetime, timezone, timedelta
 
 from app.core.base.runnable_component import RunnableComponent
@@ -204,7 +204,6 @@ class QueueWorker(BaseWorker):
             message_data (Dict[str, Any]): Данные сообщения, извлеченные из очереди
                                            и декодированные из JSON.
         """
-        pass
 
 
 class ScheduledTaskWorker(BaseWorker):
@@ -298,4 +297,3 @@ class ScheduledTaskWorker(BaseWorker):
         Этот метод должен быть реализован в дочерних классах для выполнения
         специфической логики периодически выполняемой задачи.
         """
-        pass

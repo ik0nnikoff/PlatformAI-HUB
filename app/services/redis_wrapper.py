@@ -3,9 +3,9 @@
 """
 
 import logging
-from typing import Optional, Any
+from typing import Optional
 import redis.asyncio as redis
-from app.services.redis_service import init_redis_pool, close_redis_pool, _redis_pool
+from app.services.redis_service import init_redis_pool, close_redis_pool
 
 class RedisService:
     """Простая обертка Redis сервиса для совместимости с голосовыми сервисами"""
