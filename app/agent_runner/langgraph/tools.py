@@ -68,16 +68,16 @@ def _add_centralized_tools(agent_config: Dict, agent_id: str, safe_tools: List, 
 def _add_predefined_tools(safe_tools: List, logger):
     """
     Add predefined tools to safe tools list.
-    
+
     🔶 PHASE 5.1.2 DEPRECATION: voice_capabilities_tool redirects to LangGraph decisions
-    - Tool now educates agents to use contextual voice decisions 
+    - Tool now educates agents to use contextual voice decisions
     - Eliminates keyword matching guidance
     - Encourages LangGraph workflow-based voice decisions
     """
     # 🔶 PHASE 5.1.2: voice_capabilities_tool updated to redirect to LangGraph decisions
     safe_tools.extend([auth_tool, get_user_info_tool, voice_capabilities_tool])
     logger.info("Added predefined tools: auth, user_info, voice_capabilities (REDIRECTS TO LANGGRAPH)")
-    
+
     # ✅ PREFERRED: Add voice_v2 tools if available
     voice_v2_tools = ToolsRegistry.get_voice_v2_tools()
     if voice_v2_tools:

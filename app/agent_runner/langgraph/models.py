@@ -38,7 +38,7 @@ class AgentState(TypedDict):
     provider: str
     enable_memory: bool
     memory_depth: int
-    
+
     # Token usage tracking
     interaction_id: Optional[str]
         token_usage_events: List[TokenUsageData]
@@ -66,9 +66,9 @@ class AgentState(TypedDict):
     memory_depth: int
 
     # New fields for token usage tracking
-    interaction_id: Optional[str] = None 
+    interaction_id: Optional[str] = None
     token_usage_events: List[TokenUsageData] = Field(default_factory=list)
-    
+
     # Voice workflow fields
     voice_intent_analysis: Optional[Dict[str, Any]] = None
     voice_response_decision: Optional[Dict[str, Any]] = None

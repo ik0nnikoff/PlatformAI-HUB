@@ -13,7 +13,7 @@ Key Features:
 
 This replaces multiple duplicated implementations found in:
 - /backup/agent_runner/langgraph_tools.py
-- /OLD/hub/agent_runner/tools.py  
+- /OLD/hub/agent_runner/tools.py
 - /app/agent_runner/langgraph/tools.py
 """
 
@@ -29,15 +29,15 @@ from langgraph.prebuilt import InjectedState
 
 # Import voice_v2 tools
 try:
-    # NOTE: voice_intent_analysis_tool and voice_response_decision_tool removed 
+    # NOTE: voice_intent_analysis_tool and voice_response_decision_tool removed
     # as anti-patterns (Phase 4.8.1) - LangGraph should use native decision making
-    
+
     # Phase 4.8.2: LangGraph native TTS tool
     from app.services.voice_v2.tools import generate_voice_response
-    
+
     # Legacy capabilities tool (still needed)
     from app.services.voice_v2.integration.voice_capabilities_tool import voice_capabilities_tool
-    
+
     VOICE_V2_AVAILABLE = True
 except ImportError:
     VOICE_V2_AVAILABLE = False
@@ -161,10 +161,10 @@ def make_api_request(
     """
     Makes an HTTP request based on the provided API configuration and input arguments.
     Handles simple key-value parameters and placeholder replacement from LangGraph state.
-    
+
     This is a centralized implementation that replaces multiple duplicated versions
     found across different tool files.
-    
+
     Args:
         api_config: Configuration dictionary containing:
             - apiUrl: The API endpoint URL
@@ -174,13 +174,13 @@ def make_api_request(
             - name: Tool name for logging
         log_adapter: Logger adapter for consistent logging
         state: LangGraph injected state for placeholder resolution
-        
+
     Returns:
         str: API response as JSON string or plain text, or error message
     """
     if not api_config:
         return "Error: API tool called without configuration."
-    
+
     # Use default logger if adapter not provided (should be passed via partial)
     effective_logger = log_adapter if log_adapter else logger
 
@@ -200,7 +200,7 @@ def make_api_request(
     # Normalize headers: convert list format to dict format if needed
     headers = {}
     effective_logger.debug(f"Raw headers type: {type(headers_raw)}, value: {headers_raw}")
-    
+
     if isinstance(headers_raw, dict):
         headers = headers_raw.copy()
         effective_logger.debug(f"Using dict headers: {headers}")
@@ -218,7 +218,7 @@ def make_api_request(
         effective_logger.warning(f"Unexpected headers format in API tool '{tool_name}': {type(headers_raw)}")
         # Ensure headers is always a dict for requests library
         headers = {}
-    
+
     # Final safety check - ensure headers is always a dict
     if not isinstance(headers, dict):
         effective_logger.error(f"CRITICAL: Headers is not a dict after normalization! Type: {type(headers)}, Value: {headers}")
@@ -226,7 +226,7 @@ def make_api_request(
 
     effective_logger.info(f"Executing API tool '{tool_name}'")
     # effective_logger.info(f"Function parameters: api_config={api_config is not None}, log_adapter={log_adapter is not None}, state={state is not None}")
-    
+
     # Early debug logging
     try:
         # effective_logger.info(f"State type: {type(state)}")
@@ -240,7 +240,7 @@ def make_api_request(
     except Exception as e:
         effective_logger.error(f"Error accessing state: {e}", exc_info=True)
         user_data = {}
-    
+
     effective_logger.debug(f"API Config: {api_config}")
     if state:
         # Log state without messages to avoid verbose output
@@ -251,7 +251,7 @@ def make_api_request(
 
     # --- Prepare Query Parameters with Placeholder Replacement ---
     # user_data already extracted above
-    
+
     # Debug logging
     effective_logger.debug(f"Final user_data for API tool '{tool_name}': {user_data}")
 
@@ -263,7 +263,7 @@ def make_api_request(
             # Replace placeholders like {phone_number}
             try:
                 param_value = str(param_value)
-                
+
                 # Enhanced placeholder replacement with better error handling
                 placeholders_map = {
                     "{phone_number}": user_data.get("phone_number", ""),
@@ -271,7 +271,7 @@ def make_api_request(
                     "{first_name}": user_data.get("first_name", ""),
                     "{last_name}": user_data.get("last_name", ""),
                 }
-                
+
                 for placeholder, replacement in placeholders_map.items():
                     if placeholder in param_value:
                         param_value = param_value.replace(placeholder, str(replacement))
@@ -283,7 +283,7 @@ def make_api_request(
                     continue
 
                 query_params[param_key] = param_value
-                
+
             except Exception as e:
                 effective_logger.error(f"Error processing parameter '{param_key}' with value '{param_value}': {e}")
                 return f"Error processing parameter '{param_key}' for API tool '{tool_name}'."
@@ -311,11 +311,11 @@ def make_api_request(
                     'desktop': True
                 }
             )
-            
+
             # Update headers to include realistic browser headers if not already present
             if not headers.get('User-Agent'):
                 headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            
+
             response = scraper.request(
                 method=method,
                 url=url,
@@ -324,11 +324,11 @@ def make_api_request(
                 timeout=15
             )
             effective_logger.debug(f"Cloudscraper request successful with status {response.status_code}")
-            
+
         except Exception as cloudscraper_error:
             effective_logger.warning(f"Cloudscraper failed for {url}: {cloudscraper_error}")
             effective_logger.info(f"Falling back to standard requests library")
-            
+
             # Fallback to standard requests if cloudscraper fails
             response = requests.request(
                 method=method,
@@ -339,14 +339,14 @@ def make_api_request(
             )
 
         response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
-        
+
         # Log response details for debugging
         effective_logger.debug(f"API Response Status: {response.status_code}")
         effective_logger.debug(f"API Response Headers: {dict(response.headers)}")
         effective_logger.debug(f"API Response Content-Type: {response.headers.get('content-type', 'Not specified')}")
         effective_logger.debug(f"API Response Content Length: {len(response.content)} bytes")
         effective_logger.debug(f"API Response Encoding: {response.encoding}")
-        
+
         # Get properly decoded text content (handles compression automatically)
         try:
             # Use response.text which automatically handles decompression and encoding
@@ -399,11 +399,11 @@ def make_api_request(
 class ToolsRegistry:
     """
     Central registry for managing predefined tools and their configurations.
-    
+
     This class provides a standardized way to access and configure tools
     across different parts of the agent runner system.
     """
-    
+
     # Registry of predefined tools
     PREDEFINED_TOOLS = {
         'auth_tool': auth_tool,
@@ -414,29 +414,29 @@ class ToolsRegistry:
         # 'describe_image_content': describe_image_content,
         # 'get_bonus_points': get_bonus_points,
     }
-    
+
     # Voice v2 tools (conditionally added if available)
     VOICE_V2_TOOLS = {}
-    
+
     @classmethod
     def get_predefined(cls, tool_name: str) -> Optional[BaseTool]:
         """Get a predefined tool by name."""
         return cls.PREDEFINED_TOOLS.get(tool_name)
-    
+
     @classmethod
     def get_all_predefined(cls) -> List[BaseTool]:
         """Get all predefined tools as a list, including voice_v2 tools if available."""
         all_tools = list(cls.PREDEFINED_TOOLS.values())
-        
+
         # Add voice_v2 tools if available
         if VOICE_V2_AVAILABLE:
             if not hasattr(cls, '_voice_v2_initialized'):
                 cls._init_voice_v2_tools()
                 cls._voice_v2_initialized = True
             all_tools.extend(list(cls.VOICE_V2_TOOLS.values()))
-        
+
         return all_tools
-    
+
     @classmethod
     def _init_voice_v2_tools(cls):
         """Initialize voice_v2 tools registry."""
@@ -447,29 +447,29 @@ class ToolsRegistry:
                 # Legacy capabilities tool (still needed for voice provider info)
                 'voice_capabilities_tool': voice_capabilities_tool,
             }
-    
+
     @classmethod
     def get_voice_v2_tools(cls) -> List[BaseTool]:
         """Get voice_v2 tools if available."""
         if not VOICE_V2_AVAILABLE:
             return []
-        
+
         if not hasattr(cls, '_voice_v2_initialized'):
             cls._init_voice_v2_tools()
             cls._voice_v2_initialized = True
-        
+
         return list(cls.VOICE_V2_TOOLS.values())
-    
+
     @classmethod
     def get_predefined_names(cls) -> List[str]:
         """Get names of all predefined tools."""
         return list(cls.PREDEFINED_TOOLS.keys())
-    
+
     @classmethod
     def get_vision_tools(cls) -> List[BaseTool]:
         """
         Get vision analysis tools with lazy import to avoid circular dependencies.
-        
+
         Returns:
             List[BaseTool]: List of vision analysis tools
         """
@@ -485,24 +485,24 @@ class ToolsRegistry:
         except Exception as e:
             logger.error(f"Unexpected error loading vision tools: {e}", exc_info=True)
             return []
-    
+
     @classmethod
-    def create_api_tool(cls, api_config: Dict[str, Any], 
+    def create_api_tool(cls, api_config: Dict[str, Any],
                        log_adapter: logging.LoggerAdapter) -> BaseTool:
         """
         Create a dynamic API request tool using the centralized make_api_request function.
-        
+
         Args:
             api_config: API configuration dictionary
             log_adapter: Logger adapter for consistent logging
-            
+
         Returns:
             BaseTool: Configured API tool
         """
         tool_id = api_config.get("id", "api_tool")
         tool_name = api_config.get("name", tool_id)
         tool_description = api_config.get("description", f"API tool: {tool_name}")
-        
+
         # Create API tool using @tool decorator pattern for proper InjectedState handling
         @tool
         def api_tool_func(state: Annotated[dict, InjectedState]) -> str:
@@ -515,11 +515,11 @@ class ToolsRegistry:
                 log_adapter=log_adapter,
                 state=state
             )
-        
+
         # Update the tool's metadata to match configuration
         api_tool_func.name = tool_id
         api_tool_func.description = tool_description
-        
+
         return api_tool_func
 
 
@@ -528,19 +528,19 @@ class ToolsRegistry:
 # =============================================================================
 
 def configure_tools_centralized(
-    agent_config: Dict, 
+    agent_config: Dict,
     agent_id: str
 ) -> Tuple[List[BaseTool], List[BaseTool], List[BaseTool]]:
     """
     Centralized function to configure predefined tools and API request tools.
-    
+
     This function provides a standardized way to set up tools that can be used
     across different tool configuration modules, reducing code duplication.
-    
+
     Args:
         agent_config: The agent's configuration dictionary
         agent_id: The ID of the agent for logging context
-        
+
     Returns:
         Tuple containing:
         - List of all configured centralized tools
@@ -548,26 +548,26 @@ def configure_tools_centralized(
         - List of API tools
     """
     log_adapter = logging.LoggerAdapter(logger, {'agent_id': agent_id})
-    
+
     # Get all predefined tools
     predefined_tools = ToolsRegistry.get_all_predefined()
     safe_tools = predefined_tools.copy()  # Predefined tools are considered safe
     api_tools = []
-    
+
     log_adapter.info(f"Configured {len(predefined_tools)} predefined tools from centralized registry")
-    
+
     # Configure API request tools if present in config
     config_simple = agent_config.get("config", {}).get("simple", {})
     if config_simple:
         settings = config_simple.get("settings", {})
         tool_settings = settings.get("tools", [])
-        
+
         # Configure API request tools
         api_request_configs = [t for t in tool_settings if t.get("type") == "apiRequest"]
         for api_config_entry in api_request_configs:
             try:
                 api_settings = api_config_entry.get("settings", {})
-                
+
                 # Merge tool-level configuration with settings for complete API config
                 complete_api_config = {
                     "id": api_config_entry.get("id", "api_tool"),
@@ -580,12 +580,12 @@ def configure_tools_centralized(
                     "headers": api_settings.get("headers", {}),
                     "params": api_settings.get("params", [])
                 }
-                
+
                 # Skip disabled tools
                 if not complete_api_config.get("enabled", True):
                     log_adapter.info(f"Skipping disabled API tool: {complete_api_config['id']}")
                     continue
-                
+
                 api_tool = ToolsRegistry.create_api_tool(
                     api_config=complete_api_config,
                     log_adapter=log_adapter
@@ -594,9 +594,9 @@ def configure_tools_centralized(
                 log_adapter.info(f"Configured API tool: {complete_api_config['id']} ({complete_api_config['name']}) (method: {complete_api_config['method']}) wirh description: {complete_api_config['description']})")
             except Exception as e:
                 log_adapter.error(f"Failed to configure API tool {api_config_entry.get('id', 'unnamed')}: {e}")
-    
+
     all_tools = predefined_tools + api_tools
-    
+
     return all_tools, safe_tools, api_tools
 
 
@@ -607,18 +607,18 @@ def configure_tools_centralized(
 def validate_tools_registry():
     """Validate that all tools in the registry are properly configured."""
     issues = []
-    
+
     for tool_name, tool_func in ToolsRegistry.PREDEFINED_TOOLS.items():
         if not hasattr(tool_func, 'name'):
             issues.append(f"Tool {tool_name} missing 'name' attribute")
         if not hasattr(tool_func, 'description'):
             issues.append(f"Tool {tool_name} missing 'description' attribute")
-    
+
     if issues:
         logger.warning(f"Tools registry validation issues: {issues}")
     else:
         logger.info("Tools registry validation passed")
-    
+
     return len(issues) == 0
 
 

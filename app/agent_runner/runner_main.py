@@ -46,7 +46,7 @@ async def main_async_runner(agent_id: str):
                 log_adapter.info(f"AgentRunner for {agent_id} requested restart. Re-initializing for another run cycle...")
                 # The AgentRunner's setup() method (called by run()) should handle resetting its state.
                 # If full re-instantiation were needed:
-                # agent_runner = AgentRunner(...) 
+                # agent_runner = AgentRunner(...)
             else:
                 log_adapter.info(f"AgentRunner for {agent_id} finished execution or was shut down without a restart request.")
                 break # Exit the loop, leading to shutdown

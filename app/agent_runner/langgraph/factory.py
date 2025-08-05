@@ -18,7 +18,7 @@ from app.agent_runner.common.config_mixin import AgentConfigMixin
 
 # Global flag for graceful shutdown (if needed by runner_main that uses this factory)
 # This might be re-evaluated if it's better managed by the AgentRunner instance
-running = True 
+running = True
 
 class GraphFactory(AgentConfigMixin):
     """
@@ -30,7 +30,7 @@ class GraphFactory(AgentConfigMixin):
         self.agent_config = agent_config
         self.agent_id = agent_id
         self.logger = logger
-        
+
         # Эти атрибуты будут инициализированы в соответствующих методах
         self.llm: Optional[ChatOpenAI] = None
         self.tools: list = []
@@ -65,10 +65,10 @@ class GraphFactory(AgentConfigMixin):
             self.logger.error(f"Failed to configure main LLM: {model_config['model_id']} via {model_config['provider']}")
 
     def _create_llm_instance(
-        self, 
-        provider: str, 
-        model_name: str, 
-        temperature: float, 
+        self,
+        provider: str,
+        model_name: str,
+        temperature: float,
         streaming: bool,
         log_adapter_override: Optional[logging.LoggerAdapter] = None
     ) -> Optional[ChatOpenAI]:
@@ -78,16 +78,16 @@ class GraphFactory(AgentConfigMixin):
         """
         logger_to_use = log_adapter_override if log_adapter_override else self.logger
         logger_to_use.info(f"Attempting to create LLM instance for provider: {provider}, model: {model_name}, temp: {temperature}, streaming: {streaming}")
-        
+
         model_kwargs = {}
         extra_body_kwargs = {}
-        
+
         is_gemini = model_name.startswith("google/")
         # Gemini via OpenRouter does not support streaming according to original logic
         if is_gemini and provider.lower() == "openrouter":
             logger_to_use.info(f"Detected Google Gemini model: {model_name} via OpenRouter. Forcing streaming to False.")
-            streaming = False 
-            
+            streaming = False
+
         if streaming:
             if provider.lower() in ["openai", "openrouter"]:
                 # For OpenAI and OpenRouter, include_usage is often enabled with streaming
@@ -110,7 +110,7 @@ class GraphFactory(AgentConfigMixin):
             if not api_key:
                 logger_to_use.error("OPENROUTER_API_KEY not found in settings for OpenRouter provider.")
                 return None
-            
+
             if is_gemini:
                 logger_to_use.info("Applying safety settings for Gemini model via OpenRouter.")
                 safety_settings = [
@@ -148,7 +148,7 @@ class GraphFactory(AgentConfigMixin):
                 self.datastore_names,
                 self.max_rewrites,
             ) = configure_tools(self.agent_config, self.agent_id, self.logger)
-            
+
             self.safe_tool_names = {t.name for t in self.safe_tools if t} # Ensure t is not None
             self.logger.info(
                 f"Tools configured: {len(self.tools)} total, "
@@ -185,25 +185,25 @@ class GraphFactory(AgentConfigMixin):
         # self.datastore_names should be populated by _configure_tools before this method is called
         if limit_to_kb and self.datastore_names:
             final_prompt += "\nAnswer ONLY from the provided context from the knowledge base. If the answer is not in the context, say you don't know."
-        
+
         if answer_in_user_lang:
             final_prompt += "\nAnswer in the same language as the user's question."
-        
+
         if use_markdown:
             final_prompt += "\nFormat your responses using Markdown syntax where appropriate. If you include code blocks, specify the language."
-        
+
         self.system_prompt = final_prompt
         self.logger.debug(f"System prompt constructed: {self.system_prompt}")
 
     def _extract_token_data(self, response: BaseMessage, call_type: str, node_model_id: str) -> Optional[TokenUsageData]:
         """
         Извлекает данные об использовании токенов из ответа модели и возвращает TokenUsageData объект.
-        
+
         Args:
             response: Ответ от модели (BaseMessage)
             call_type: Тип вызова для логирования
             node_model_id: ID модели по умолчанию
-            
+
         Returns:
             TokenUsageData объект или None если токены не найдены
         """
@@ -254,7 +254,7 @@ class GraphFactory(AgentConfigMixin):
         """Agent node logic, adapted to be a method of GraphFactory."""
         self.logger.info(f"---CALL AGENT NODE (Agent ID: {self.agent_id})---")
 
-        messages = state["messages"]        
+        messages = state["messages"]
         # Используем централизованные методы для получения конфигурации
         llm_config = self._get_node_config("agent")
         node_model_id = llm_config.get("model_name", "gpt-4o-mini")
@@ -271,7 +271,7 @@ class GraphFactory(AgentConfigMixin):
         model = self._bind_tools_to_model(model)
         chain = prompt | model
 
-        response: Optional[AIMessage] = None 
+        response: Optional[AIMessage] = None
 
         try:
             response_raw = await chain.ainvoke({"messages": messages}, config=config)
@@ -294,7 +294,7 @@ class GraphFactory(AgentConfigMixin):
             # Tool call recovery logic from original agent_node
             if hasattr(response, 'invalid_tool_calls') and response.invalid_tool_calls and \
                (not hasattr(response, 'tool_calls') or not response.tool_calls):
-                
+
                 self.logger.warning(f"Response has invalid_tool_calls but no valid tool_calls. Attempting recovery. Invalid: {response.invalid_tool_calls}")
                 recovered_calls = []
                 remaining_invalid = []
@@ -317,19 +317,19 @@ class GraphFactory(AgentConfigMixin):
                         self.logger.warning(f"Skipping unrecognized invalid_tool_call object: {itc_obj}")
                         remaining_invalid.append(itc_obj)
                         continue
-                    
+
                     if error_value is None:
                         args_value = itc_dict.get("args")
                         if args_value is None:
                             args_value = {}
-                        
+
                         call_to_add = {
                             "name": itc_dict.get("name"),
                             "args": args_value,
                             "id": itc_dict.get("id"),
                             "type": itc_dict.get("type", "function")
                         }
-                        
+
                         if call_to_add.get("name") and call_to_add.get("id"):
                             recovered_calls.append(call_to_add)
                             self.logger.info(f"Recovered tool call: {call_to_add}")
@@ -338,11 +338,11 @@ class GraphFactory(AgentConfigMixin):
                             remaining_invalid.append(itc_obj)
                     else:
                         remaining_invalid.append(itc_obj)
-                
+
                 if recovered_calls:
                     if not hasattr(response, 'tool_calls') or response.tool_calls is None:
                         response.tool_calls = []
-                    
+
                     response.tool_calls.extend(recovered_calls)
                     response.invalid_tool_calls = remaining_invalid
                     self.logger.info(f"Successfully recovered/added {len(recovered_calls)} tool_calls. New tool_calls: {response.tool_calls}")
@@ -384,7 +384,7 @@ class GraphFactory(AgentConfigMixin):
         kb_ids = self._extract_kb_ids_from_tool_message(last_message)
         llm_config = self._get_node_config("grading", kb_ids)
         node_model_id = llm_config.get("model_id", "gpt-4o-mini")  # Используем правильный ключ model_id
-        
+
         if kb_ids:
             self.logger.info(f"Using KB-specific model configuration for KB IDs: {kb_ids}")
         else:
@@ -397,7 +397,7 @@ class GraphFactory(AgentConfigMixin):
             docs = []
         else:
             docs = docs_content.split("\\n---RETRIEVER_DOC---\\n")
-            
+
         if not docs or all(not d.strip() for d in docs):
             self.logger.info("No documents retrieved or all documents are empty.")
             return {"documents": [], "question": current_question}
@@ -408,7 +408,7 @@ class GraphFactory(AgentConfigMixin):
 
         if not model:
             return {"documents": [], "question": current_question}
-            
+
         llm_with_tool = model.with_structured_output(Grade, include_raw=True)
 
         async def process_doc(doc_content: str) -> Tuple[str, str]:
@@ -421,10 +421,10 @@ class GraphFactory(AgentConfigMixin):
                     return doc_content, "no"
 
                 invocation_result = await chain.ainvoke({"question": current_question, "context": doc_content})
-                
+
                 parsed_grade = invocation_result.get("parsed")
                 raw_ai_message = invocation_result.get("raw")
-                
+
                 binary_score = "no"
                 if parsed_grade and isinstance(parsed_grade, Grade): # Check type
                     binary_score = parsed_grade.binary_score
@@ -440,13 +440,13 @@ class GraphFactory(AgentConfigMixin):
                     # Создаем временное состояние для сбора токенов
                     temp_state = {"token_usage_events": []}
                     self._get_tokens(temp_state, "grading_llm", node_model_id, raw_ai_message)
-                    
+
                     # Добавляем токены в основное состояние
                     if temp_state["token_usage_events"]:
                         current_token_events.extend(temp_state["token_usage_events"])
                 else:
                     self.logger.warning(f"Grading raw AIMessage not found or not AIMessage type in invocation_result for doc: '{doc_content[:100]}...'")
-                
+
                 return doc_content, binary_score
             except Exception as e:
                 self.logger.error(f"Error processing document for grading ('{doc_content[:100]}...'): {e}", exc_info=True)
@@ -454,14 +454,14 @@ class GraphFactory(AgentConfigMixin):
 
         filtered_docs: List[str] = [] # Explicitly type
         tasks = [process_doc(d) for d in docs if d.strip()] # Process only non-empty docs
-        
+
         current_token_events = state.get("token_usage_events", [])
         if tasks: # Only run gather if there are tasks
             results = await asyncio.gather(*tasks)
             for doc_content, score in results:
                 if score == "yes":
                     filtered_docs.append(doc_content)
-        
+
             # Токены уже добавлены в current_token_events через _get_tokens в process_doc
             if any(evt.call_type == "grading_llm" for evt in current_token_events): # Log only if grading tokens were added
                 total_grading_tokens = sum(evt.total_tokens for evt in current_token_events if evt.call_type == "grading_llm")
@@ -481,23 +481,23 @@ class GraphFactory(AgentConfigMixin):
         messages = state["messages"]
         rewrite_count = state.get("rewrite_count", 0)
         node_max_rewrites = self.max_rewrites # Max rewrites from factory
-        
+
         # Ищем последнее ToolMessage от datastore tool для извлечения KB IDs
         last_datastore_tool_message = None
         for message in reversed(messages):
             if isinstance(message, ToolMessage) and message.name in self.datastore_names:
                 last_datastore_tool_message = message
                 break
-        
+
         # Извлекаем KB IDs для получения KB-специфичной конфигурации
         kb_ids = []
         if last_datastore_tool_message:
             kb_ids = self._extract_kb_ids_from_tool_message(last_datastore_tool_message)
-        
+
         # Используем централизованные методы для получения конфигурации с KB IDs
         llm_config = self._get_node_config("rewrite", kb_ids)
         node_model_id = llm_config.get("model_id", "gpt-4o-mini")  # Используем правильный ключ model_id
-        
+
         if kb_ids:
             self.logger.info(f"Using KB-specific model configuration for rewrite. KB IDs: {kb_ids}")
         else:
@@ -508,7 +508,7 @@ class GraphFactory(AgentConfigMixin):
         if rewrite_count < node_max_rewrites:
             self.logger.info(f"Rewriting original question: {original_question}")
             prompt_msg = self._create_rewrite_prompt(original_question, messages)
-        
+
             # Используем централизованный метод создания LLM с KB-специфичной конфигурацией
             model = self._create_node_llm("rewrite", kb_ids)
 
@@ -523,7 +523,7 @@ class GraphFactory(AgentConfigMixin):
                         rewritten_question = ""
                     else:
                         rewritten_question = response.content.strip()
-                    
+
                     self.logger.info(f"Rewritten question: {rewritten_question}")
 
                     # Используем централизованный метод учета токенов
@@ -536,7 +536,7 @@ class GraphFactory(AgentConfigMixin):
                         trigger_message = HumanMessage(content=f"Произведи поиск в базе данных заново: {rewritten_question}")
                         return {
                             "messages": [trigger_message],
-                            "question": rewritten_question, 
+                            "question": rewritten_question,
                             "rewrite_count": rewrite_count + 1,
                         }
                 except Exception as e:
@@ -558,23 +558,23 @@ class GraphFactory(AgentConfigMixin):
         messages = state["messages"]
         current_question = state["question"]
         documents = state["documents"]
-        
+
         # Ищем последнее ToolMessage от datastore tool для извлечения KB IDs
         last_datastore_tool_message = None
         for message in reversed(messages):
             if isinstance(message, ToolMessage) and message.name in self.datastore_names:
                 last_datastore_tool_message = message
                 break
-        
+
         # Извлекаем KB IDs для получения KB-специфичной конфигурации
         kb_ids = []
         if last_datastore_tool_message:
             kb_ids = self._extract_kb_ids_from_tool_message(last_datastore_tool_message)
-        
+
         # Используем централизованные методы для получения конфигурации с KB IDs
         llm_config = self._get_node_config("generate", kb_ids)
         node_model_id = llm_config.get("model_id", "gpt-4o-mini")  # Используем правильный ключ model_id
-        
+
         if kb_ids:
             self.logger.info(f"Using KB-specific model configuration for generation. KB IDs: {kb_ids}")
         else:
@@ -614,7 +614,7 @@ class GraphFactory(AgentConfigMixin):
             if not isinstance(response, BaseMessage):
                  self.logger.warning(f"Generate node got non-BaseMessage response: {type(response)}. Converting to AIMessage.")
                  final_msg = AIMessage(content=str(response))
-                 
+
             return {"messages": [final_msg]}
         except Exception as e:
             self.logger.error(f"Error during generation: {e}", exc_info=True)
@@ -664,14 +664,14 @@ class GraphFactory(AgentConfigMixin):
         if not isinstance(last_message.tool_calls, list) or not last_message.tool_calls:
             self.logger.warning(f"Tool calls are present but not in expected format or empty: {last_message.tool_calls}. Ending.")
             return END
-            
+
         first_tool_call = last_message.tool_calls[0]
-        
+
         # Ensure first_tool_call is a dict and has a 'name' key
         if not isinstance(first_tool_call, dict) or "name" not in first_tool_call:
             self.logger.warning(f"First tool call is not a dict or missing 'name': {first_tool_call}. Ending.")
             return END
-            
+
         tool_name = first_tool_call["name"]
         self.logger.info(f"Tool call detected: {tool_name}")
 
@@ -689,9 +689,9 @@ class GraphFactory(AgentConfigMixin):
 
     def _get_node_config(self, node_type: str = "default", kb_ids: List[str] = None) -> Dict[str, Any]:
         """
-        Получает конфигурацию LLM для узлов с возможностью 
+        Получает конфигурацию LLM для узлов с возможностью
         специфических настроек для разных типов узлов и баз знаний.
-        
+
         Args:
             node_type: Тип узла ("agent", "grading", "rewrite", "generate")
             kb_ids: Список ID баз знаний для RAG операций
@@ -721,16 +721,16 @@ class GraphFactory(AgentConfigMixin):
     def _create_node_llm(self, node_type: str = "default", kb_ids: List[str] = None) -> Optional[ChatOpenAI]:
         """
         Создает экземпляр LLM для узла с соответствующей конфигурацией.
-        
+
         Args:
             node_type: Тип узла ("agent", "grading", "rewrite", "generate")
             kb_ids: Список ID баз знаний для RAG операций
-        
+
         Returns:
             ChatOpenAI instance или None при ошибке
         """
         config = self._get_node_config(node_type, kb_ids)
-        
+
         model = self._create_llm_instance(
             provider=config["provider"],
             model_name=config["model_id"],
@@ -738,14 +738,14 @@ class GraphFactory(AgentConfigMixin):
             streaming=config["streaming"],
             log_adapter_override=self.logger
         )
-        
+
         if model:
             kb_info = f" for KB {kb_ids}" if kb_ids else ""
             self.logger.info(f"Created {node_type} LLM{kb_info}: {config['model_id']} via {config['provider']}")
         else:
             kb_info = f" for KB {kb_ids}" if kb_ids else ""
             self.logger.error(f"Failed to create {node_type} LLM{kb_info}: {config['model_id']} via {config['provider']}")
-            
+
         return model
 
     def _get_moscow_time(self) -> str:
@@ -758,12 +758,12 @@ class GraphFactory(AgentConfigMixin):
         Создает базовый ChatPromptTemplate с временной меткой для агента.
         """
         time_str = self._get_moscow_time()
-        
+
         if "{current_time}" not in system_prompt:
             prompt_with_time = system_prompt + "\nТекущее время (Москва): {current_time}"
         else:
             prompt_with_time = system_prompt
-        
+
         return ChatPromptTemplate.from_messages([
             ("system", prompt_with_time),
             MessagesPlaceholder(variable_name="messages")
@@ -772,7 +772,7 @@ class GraphFactory(AgentConfigMixin):
     def _create_rag_template(self) -> PromptTemplate:
         """Создает стандартный PromptTemplate для RAG генерации."""
         time_str = self._get_moscow_time()
-        
+
         template = """Ты помощник для задач с ответами на вопросы. Используйте следующие фрагменты извлеченного контекста, чтобы ответить на вопрос.
             Если у тебя нет ответа на вопрос, просто скажи что у тебя нет данных для ответа на этот вопрос, предложи переформулировать вопрос.
             Старайся отвечать кратко и содержательно.\n
@@ -780,7 +780,7 @@ class GraphFactory(AgentConfigMixin):
                 Вопрос: {question} \n
                 Контекст: {context} \n
                 Ответ:"""
-        
+
         return PromptTemplate(
             template=template,
             input_variables=["context", "question", "current_time"],
@@ -790,15 +790,15 @@ class GraphFactory(AgentConfigMixin):
         """Создает стандартный PromptTemplate для оценки релевантности документов."""
         return PromptTemplate(
             template="""You are assessing the relevance of a retrieved document to a user question.
-                    
-                    Retrieved document: 
+
+                    Retrieved document:
                     {context}
-                    
+
                     User question: {question}
-                    
+
                     If the document contains keywords or semantic meaning related to the user question, grade it as relevant.
                     It does not need to be a stringent test. The goal is to filter out erroneous retrievals.
-                    
+
                     Give a binary score 'yes' or 'no' to indicate whether the document is relevant to the question.
                     You must respond ONLY with 'yes' or 'no'.""",
             input_variables=["context", "question"],
@@ -828,7 +828,7 @@ Rephrased Question:"""
             content = f"An error occurred: {error_message}"
         else:
             content = f"Sorry, an error occurred: Could not initialize LLM for provider {provider} in {node_type}_node."
-        
+
         self.logger.error(f"{node_type} node error: {content}")
         return AIMessage(content=content)
 
@@ -845,7 +845,7 @@ Rephrased Question:"""
                 self.logger.warning("No valid tools were configured after filtering.")
         else:
             self.logger.warning("No tools are configured in self.tools.")
-        
+
         return model
 
     # ===== END CENTRALIZED HELPER METHODS =====
@@ -853,7 +853,7 @@ Rephrased Question:"""
     def _is_voice_v2_available(self) -> bool:
         """Check if voice_v2 tools are available."""
         try:
-            # NOTE: Changed check after Phase 4.8.1 anti-pattern removal  
+            # NOTE: Changed check after Phase 4.8.1 anti-pattern removal
             # Check for new native TTS tool
             from app.services.voice_v2.tools import generate_voice_response
             return True
@@ -979,7 +979,7 @@ Rephrased Question:"""
         memory_saver_instance = None
         if self.enable_context_memory: # Use the configured setting
             memory_saver_instance = MemorySaver()
-        
+
         app = workflow.compile(checkpointer=memory_saver_instance)
         self.logger.info(f"Agent graph compiled successfully in GraphFactory. Checkpointer: {'Enabled' if memory_saver_instance else 'Disabled'}")
 
