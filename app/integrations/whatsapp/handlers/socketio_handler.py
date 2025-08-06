@@ -28,6 +28,13 @@ class SocketIOEventHandlers:
         self._setup_status_handlers()
         self._setup_diagnostic_handlers()
 
+    def cleanup_handlers(self):
+        """Cleanup and remove Socket.IO event handlers"""
+        if self.bot.sio:
+            self.logger.debug("Cleaning up Socket.IO event handlers")
+            # Socket.IO client will handle cleanup automatically
+            # when connection is closed
+
     def _setup_connection_handlers(self):
         """Setup connection-related event handlers"""
         @self.bot.sio.event
@@ -51,8 +58,14 @@ class SocketIOEventHandlers:
             body = response.get("content") or response.get("body", "")
             from_me = response.get("fromMe", False)
             chat_id = response.get("chatId") or response.get("from", "")
-            self.logger.info(f"Received message: chat={chat_id}, fromMe={from_me}, body='{body[:50]}{'...' if len(body) > 50 else ''}'")
-            await self.bot._handle_received_message(data)
+            body_preview = (
+                f"{body[:50]}..." if len(body) > 50 else body
+            )
+            self.logger.info(
+                "Received message: chat=%s, fromMe=%s, body='%s'",
+                chat_id, from_me, body_preview
+            )
+            await self.bot._handle_received_message(data)  # pylint: disable=protected-access
 
         # Регистрируем обработчик для события с дефисом
         self.bot.sio.on('received-message', received_message_hyphen)
@@ -89,14 +102,17 @@ class SocketIOEventHandlers:
         msg_data = self._extract_message_data(data)
         ack = msg_data.get('ack', 'unknown')
         body = msg_data.get('body', '')
-        self.logger.info(f"[{event}] ack={ack}, body='{body[:30]}{'...' if len(body) > 30 else ''}'")
+        body_preview = f"{body[:30]}..." if len(body) > 30 else body
+        self.logger.info("[%s] ack=%s, body='%s'", event, ack, body_preview)
 
     async def _handle_message_event(self, data):
         """Handle received message events"""
         if isinstance(data, dict):
-            await self.bot._handle_received_message(data)
+            await self.bot._handle_received_message(data)  # pylint: disable=protected-access
         else:
-            self.logger.warning(f"Received message event with non-dict data: {type(data)}")
+            self.logger.warning(
+                "Received message event with non-dict data: %s", type(data)
+            )
 
     def _extract_message_data(self, data) -> dict:
         """Extract message data from various formats"""

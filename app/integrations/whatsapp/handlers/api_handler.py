@@ -5,7 +5,9 @@ WhatsApp API Handler
 """
 import asyncio
 from typing import Optional
+import base64
 import httpx
+from .voice_sender import VoiceMessageSender
 
 
 class WhatsAppAPIHandler:
@@ -13,13 +15,14 @@ class WhatsAppAPIHandler:
 
     def __init__(self, bot_instance):
         """
-        Initialize API handler
+        Initialize API handler with voice sender.
 
         Args:
             bot_instance: Reference to main WhatsAppIntegrationBot instance
         """
         self.bot = bot_instance
         self.logger = bot_instance.logger
+        self.voice_sender = VoiceMessageSender(self.logger)
 
     async def send_message(self, chat_id: str, message: str) -> bool:
         """
@@ -37,7 +40,7 @@ class WhatsAppAPIHandler:
                 self.logger.error("HTTP client not initialized")
                 return False
 
-            url = "/api/%s/send-message" % self.bot.session_name
+            url = f"/api/{self.bot.session_name}/send-message"
             payload = {
                 "phone": chat_id,
                 "message": message,
@@ -51,21 +54,21 @@ class WhatsAppAPIHandler:
                 self.logger.debug("Message sent successfully to %s", chat_id)
                 await self.bot.update_last_active_time()
                 return True
-            else:
-                # Упрощаем вывод ошибки - показываем только статус и первые 
-                # 200 символов ответа
-                response_preview = (
-                    response.text[:200] + "..." 
-                    if len(response.text) > 200 
-                    else response.text
-                )
-                self.logger.error(
-                    "Failed to send message. Status: %s, Response preview: %s",
-                    response.status_code, response_preview
-                )
-                return False
 
-        except Exception as e:
+            # Упрощаем вывод ошибки - показываем только статус и первые
+            # 200 символов ответа
+            response_preview = (
+                response.text[:200] + "..."
+                if len(response.text) > 200
+                else response.text
+            )
+            self.logger.error(
+                "Failed to send message. Status: %s, Response preview: %s",
+                response.status_code, response_preview
+            )
+            return False
+
+        except (ConnectionError, TimeoutError) as e:
             self.logger.error("Error sending message to %s: %s", chat_id, e, exc_info=True)
             return False
 
@@ -85,7 +88,7 @@ class WhatsAppAPIHandler:
                 self.logger.error("HTTP client not initialized")
                 return False
 
-            url = "/api/%s/typing" % self.bot.session_name
+            url = f"/api/{self.bot.session_name}/typing"
             payload = {
                 "phone": chat_id,
                 "isGroup": False,
@@ -96,17 +99,17 @@ class WhatsAppAPIHandler:
 
             if response.status_code in [200, 201]:
                 self.logger.debug(
-                    "Typing action %s for %s", 
+                    "Typing action %s for %s",
                     'started' if is_typing else 'stopped', chat_id
                 )
                 return True
-            else:
-                self.logger.warning(
-                    "Failed to set typing action. Status: %s", response.status_code
-                )
-                return False
 
-        except Exception as e:
+            self.logger.warning(
+                "Failed to set typing action. Status: %s", response.status_code
+            )
+            return False
+
+        except (ConnectionError, TimeoutError) as e:
             self.logger.error(
                 "Error sending typing action to %s: %s", chat_id, e, exc_info=True
             )
@@ -114,66 +117,20 @@ class WhatsAppAPIHandler:
 
     async def send_voice_message(self, chat_id: str, audio_url: str) -> bool:
         """
-        Отправка голосового сообщения в WhatsApp через wppconnect API
+        Send voice message to WhatsApp through wppconnect API with delegated complexity.
 
         Args:
-            chat_id: ID чата WhatsApp
-            audio_url: URL аудиофайла
+            chat_id: WhatsApp chat ID
+            audio_url: Audio file URL
 
         Returns:
-            True если сообщение отправлено успешно
+            True if message sent successfully
         """
-        try:
-            import aiohttp
-            import base64
+        return await self.voice_sender.send_voice_message(chat_id, audio_url, self.bot)
 
-            self.logger.debug("Downloading audio from URL: %s", audio_url)
-
-            # Скачиваем аудиофайл по URL
-            async with aiohttp.ClientSession() as session:
-                async with session.get(audio_url) as resp:
-                    if resp.status == 200:
-                        audio_data = await resp.read()
-                        self.logger.debug(
-                            "Downloaded audio data: %s bytes", len(audio_data)
-                        )
-                    else:
-                        self.logger.error(
-                            "Failed to download audio from %s: HTTP %s",
-                            audio_url, resp.status
-                        )
-                        return False
-
-            # Кодируем в base64 для wppconnect API
-            audio_base64 = base64.b64encode(audio_data).decode('utf-8')
-            self.logger.debug(
-                "Encoded audio to base64: %s characters", len(audio_base64)
-            )
-
-            # Отправляем через wppconnect API используя send-voice-base64 endpoint
-            url = "/api/%s/send-voice-base64" % self.bot.session_name
-            payload = {
-                "phone": chat_id,
-                "isGroup": False,
-                "base64Ptt": audio_base64
-            }
-
-            self.logger.debug(f"Sending voice message to {chat_id} via {url}")
-            response = await self.bot.http_client.post(url, json=payload)
-
-            if response.status_code in [200, 201]:
-                self.logger.info(f"Voice message sent successfully to {chat_id}")
-                await self.bot.update_last_active_time()
-                return True
-            else:
-                self.logger.error(f"Failed to send voice message. Status: {response.status_code}, Response: {response.text}")
-                return False
-
-        except Exception as e:
-            self.logger.error(f"Error sending voice message to {chat_id}: {e}", exc_info=True)
-            return False
-
-    async def download_whatsapp_media(self, media_key: str, mimetype: str, message_id: str) -> Optional[bytes]:
+    async def download_whatsapp_media(
+        self, media_key: str, mimetype: str, message_id: str
+    ) -> Optional[bytes]:
         """
         Скачивание медиа файла из WhatsApp
 
@@ -203,19 +160,20 @@ class WhatsAppAPIHandler:
             self.logger.debug(f"Download response status: {response.status_code}")
             if response.status_code == 200:
                 return await self._process_media_response(response)
-            else:
-                self.logger.error(f"Failed to download WhatsApp media. Status: {response.status_code}, Response: {response.text}")
-                return None
 
-        except Exception as e:
+            self.logger.error(
+                "Failed to download WhatsApp media. Status: %s, Response: %s",
+                response.status_code, response.text
+            )
+            return None
+
+        except (ConnectionError, TimeoutError) as e:
             self.logger.error(f"Error downloading WhatsApp media: {e}", exc_info=True)
             return None
 
     async def _process_media_response(self, response: httpx.Response) -> Optional[bytes]:
         """Process media download response"""
         try:
-            import base64
-
             # Log raw response for debugging
             raw_response = response.text
             self.logger.debug(f"Raw response (first 200 chars): {raw_response[:200]}")
@@ -242,17 +200,23 @@ class WhatsAppAPIHandler:
             if base64_data:
                 try:
                     audio_bytes = base64.b64decode(base64_data)
-                    self.logger.debug(f"Successfully decoded base64 media data, size: {len(audio_bytes)} bytes")
+                    self.logger.debug(
+                        "Successfully decoded base64 media data, size: %s bytes",
+                        len(audio_bytes)
+                    )
                     return audio_bytes
-                except Exception as e:
+                except (ValueError, TypeError) as e:
                     self.logger.error(f"Failed to decode base64 data: {e}")
                     return None
             else:
                 # Some implementations return raw bytes
-                self.logger.debug(f"No base64 field found, using raw response data, size: {len(response.content)} bytes")
+                self.logger.debug(
+                    "No base64 field found, using raw response data, size: %s bytes",
+                    len(response.content)
+                )
                 return response.content
 
-        except Exception as e:
+        except (ValueError, KeyError) as e:
             self.logger.error(f"Error processing media response: {e}", exc_info=True)
             return None
 
@@ -275,7 +239,7 @@ class WhatsAppAPIHandler:
             self.logger.debug(f"Typing task cancelled for chat {chat_id}")
             # Stop typing when cancelled
             await self.send_typing_action(chat_id, False)
-        except Exception as e:
+        except (ConnectionError, RuntimeError) as e:
             self.logger.error(f"Error in typing task for chat {chat_id}: {e}", exc_info=True)
         finally:
             # Clean up typing task
