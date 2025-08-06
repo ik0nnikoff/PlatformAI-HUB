@@ -127,7 +127,7 @@ class STTRequest(BaseModel):
     """Speech-to-Text request schema"""
 
     audio_data: bytes = Field(..., description="Audio file data")
-    language: Optional[str] = Field(default="auto", description="Audio language code")
+    language: Optional[str] = Field(default="ru", description="Audio language code")
     audio_format: Optional[AudioFormat] = Field(default=None, description="Audio format")
 
     @field_validator('audio_data')

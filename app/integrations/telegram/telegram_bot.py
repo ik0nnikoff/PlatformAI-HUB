@@ -656,7 +656,7 @@ class TelegramIntegrationBot(ServiceComponentBase):
             audio_format = AudioFormat.OGG if file_type == "voice" else AudioFormat.MP3
             stt_request = STTRequest(
                 audio_data=audio_data.read(),
-                language="auto",  # Auto-detect language
+                language="ru",  # Auto-detect language
                 audio_format=audio_format
             )
             

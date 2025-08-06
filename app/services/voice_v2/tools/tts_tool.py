@@ -292,18 +292,19 @@ def _validate_agent_state(state: Dict) -> Dict[str, Any]:
     agent_id = None
     chat_id = None
     
-    # Вариант 1: из user_data
-    if isinstance(user_data, dict):
-        agent_id = user_data.get("agent_id")
-        # В Telegram боте chat_id часто совпадает с user_id
-        if not chat_id:
-            chat_id = user_data.get("user_id") or user_data.get("platform_user_id")
+    # Вариант 1: напрямую из состояния (приоритетный)
+    chat_id = state.get("chat_id")
+    platform_user_id = state.get("platform_user_id")
+    agent_id = state.get("agent_id")
     
-    # Вариант 2: напрямую из состояния
-    if not agent_id:
-        agent_id = state.get("agent_id")
-    if not chat_id:
-        chat_id = state.get("chat_id") or state.get("platform_user_id")
+    # Вариант 2: из user_data
+    if isinstance(user_data, dict):
+        if not agent_id:
+            agent_id = user_data.get("agent_id")
+        if not chat_id:
+            chat_id = user_data.get("chat_id")
+        if not platform_user_id:
+            platform_user_id = user_data.get("platform_user_id") or user_data.get("user_id")
     
     # Вариант 3: из контекста LangGraph (messages могут содержать thread_id)
     messages = state.get("messages", [])

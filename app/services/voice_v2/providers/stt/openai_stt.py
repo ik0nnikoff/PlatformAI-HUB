@@ -316,10 +316,10 @@ class OpenAISTTProvider(BaseSTTProvider, RetryMixin, STTInitializationMixin, STT
         if isinstance(result, str):
             text = result.strip()
             confidence = 0.95
-            language_detected = request.language if request.language != "auto" else "en"
+            language_detected = request.language if request.language != "auto" else "ru"
         else:
             text = result.text.strip() if hasattr(result, 'text') else str(result)
-            language_detected = getattr(result, 'language', request.language or "en")
+            language_detected = getattr(result, 'language', request.language or "ru")
             confidence = self._calculate_confidence_from_segments(result)
 
         if not text:
