@@ -132,7 +132,7 @@ class MessageProcessor:
         config = {
             "configurable": {
                 "thread_id": ctx.context["thread_id"],
-                "component_id": ctx.context["component_id"]
+                "agent_id": ctx.context["component_id"]
             }
         }
 
@@ -147,6 +147,7 @@ class MessageProcessor:
             "image_urls": ctx.context.get("image_urls", []),
             "chat_id": ctx.context["thread_id"],
             "platform_user_id": ctx.context.get("platform_user_id", ""),
+            "token_usage_events": [],
         }
 
         return graph_input, config
@@ -160,22 +161,22 @@ class MessageProcessor:
     ) -> None:
         """Публикует ответ агента в Redis канал."""
         response_payload = {
-            "text": ctx.response_content,
             "chat_id": ctx.chat_id,
-            "platform": ctx.channel,
-            "audio_url": ctx.audio_url,
-            "timestamp": json.dumps(
-                datetime.now(timezone.utc).isoformat(),
-                ensure_ascii=False
-            ),
+            "response": ctx.response_content,
+            "channel": ctx.channel,
         }
+
+        # Add audio_url if TTS tool was used by agent
+        if ctx.audio_url:
+            response_payload["audio_url"] = ctx.audio_url
+            self.logger.info("Including audio_url in response payload: %s", ctx.audio_url)
 
         response_str = json.dumps(response_payload, ensure_ascii=False)
         await redis_cli.publish(ctx.response_channel, response_str)
 
         self.logger.debug(
             "Published response to channel %s: %s",
-            ctx.response_channel, ctx.response_content[:100]
+            ctx.response_channel, response_str
         )
 
     async def publish_error_notification(
