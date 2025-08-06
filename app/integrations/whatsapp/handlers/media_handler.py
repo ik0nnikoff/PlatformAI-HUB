@@ -193,9 +193,10 @@ class MediaHandler:
         message_id: str
     ) -> None:
         """
-        🎯 PHASE 4.4.2: UNIFIED VOICE PROCESSING - Real STT processing
-        Process voice message using voice_v2 orchestrator with full STT.
-        Consistent with Telegram pattern: STT → Agent → voice tools → TTS
+        🎯 PHASE 4.4.2: UNIFIED VOICE PROCESSING - voice_v2 orchestrator
+        Process voice message using voice_v2 orchestrator with direct STT.
+        Aligned with Telegram pattern: STT → Agent → voice tools → TTS
+        ConnectionManager warnings preserved as requested for legacy retry fallback.
         """
         try:
             # Use global voice orchestrator if available, otherwise create temporary one
@@ -204,58 +205,30 @@ class MediaHandler:
                 await self._handle_voice_processing_error(chat_id, Exception("Voice orchestrator not available"))
                 return
 
-            # Process STT using the voice_v2 orchestrator
+            # Process STT using the voice_v2 orchestrator (simplified approach like Telegram)
             from app.services.voice_v2.core.schemas import STTRequest
             from app.services.voice_v2.core.interfaces import AudioFormat
-            from app.services.voice_v2.core.exceptions import VoiceServiceError
             
-            try:
-                # Create STT request
-                stt_request = STTRequest(
-                    audio_data=voice_data,
-                    language="ru",  # Default to Russian for WhatsApp
-                    audio_format=AudioFormat.OGG  # WhatsApp voice messages are typically OGG
-                )
-                
-                # Process STT
-                stt_response = await orchestrator.transcribe_audio(stt_request)
-                
-                # Convert to legacy result format for backward compatibility
-                result = type('VoiceProcessingResult', (), {
-                    'success': True,
-                    'text': stt_response.text,
-                    'error_message': None,
-                    'provider_used': stt_response.provider,
-                    'processing_time': stt_response.processing_time
-                })()
-                
-            except VoiceServiceError as e:
-                # Handle voice service errors
-                result = type('VoiceProcessingResult', (), {
-                    'success': False,
-                    'text': None,
-                    'error_message': str(e),
-                    'provider_used': None,
-                    'processing_time': 0.0
-                })()
-                
-            except Exception as e:
-                # Handle unexpected errors
-                self.logger.error(f"Unexpected error in voice_v2 STT: {e}", exc_info=True)
-                result = type('VoiceProcessingResult', (), {
-                    'success': False,
-                    'text': None,
-                    'error_message': f"Unexpected STT error: {str(e)}",
-                    'provider_used': None,
-                    'processing_time': 0.0
-                })()
+            # Create STT request with voice_v2 schemas
+            stt_request = STTRequest(
+                audio_data=voice_data,
+                language="ru",  # Default to Russian for WhatsApp
+                audio_format=AudioFormat.OGG  # WhatsApp voice messages are typically OGG
+            )
+            
+            # Direct transcription using voice_v2 orchestrator
+            stt_response = await orchestrator.transcribe_audio(stt_request)
 
-            if result.success and result.text:
+            if stt_response.text:
+                # Send recognized text to agent as a regular message (Telegram pattern)
+                self.logger.info(f"WhatsApp voice transcription successful: '{stt_response.text[:100]}...'")
                 await self._handle_successful_stt(
-                    chat_id, user_context["platform_user_id"], result.text, user_context
+                    chat_id, user_context["platform_user_id"], stt_response.text, user_context
                 )
             else:
-                await self._handle_failed_stt(chat_id, result)
+                # Handle transcription failure
+                self.logger.warning("Voice processing failed: No text recognized")
+                await self._handle_failed_stt(chat_id, None)
 
         except Exception as e:
             await self._handle_voice_processing_error(chat_id, e)
@@ -338,12 +311,10 @@ class MediaHandler:
             chat_id, platform_user_id, text, user_data
         )
 
-    async def _handle_failed_stt(self, chat_id: str, result):
-        """Handle failed STT result."""
-        self.logger.warning(
-            "STT processing failed: %s", 
-            result.error_message if result else 'No result'
-        )
+    async def _handle_failed_stt(self, chat_id: str, result=None):
+        """Handle failed STT result - simplified approach aligned with Telegram."""
+        error_msg = "No text recognized" if not result else getattr(result, 'error_message', 'STT processing failed')
+        self.logger.warning(f"WhatsApp STT processing failed: {error_msg}")
         await self.bot.api_handler.send_message(
             chat_id, 
             "Извините, не удалось распознать голосовое сообщение."
