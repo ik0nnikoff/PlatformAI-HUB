@@ -4,6 +4,7 @@ WhatsApp Socket.IO Event Handlers
 Модуль для обработки событий Socket.IO wppconnect-server
 """
 
+
 class SocketIOEventHandlers:
     """Handles Socket.IO events for WhatsApp integration"""
 
@@ -37,6 +38,7 @@ class SocketIOEventHandlers:
 
     def _setup_connection_handlers(self):
         """Setup connection-related event handlers"""
+
         @self.bot.sio.event
         async def connect():
             self.logger.info("Connected to wppconnect-server Socket.IO")
@@ -52,26 +54,28 @@ class SocketIOEventHandlers:
 
     def _setup_message_handlers(self):
         """Setup message-related event handlers"""
+
         async def received_message_hyphen(data):
             """Обработка полученных сообщений от WhatsApp"""
             response = data.get("response", {})
             body = response.get("content") or response.get("body", "")
             from_me = response.get("fromMe", False)
             chat_id = response.get("chatId") or response.get("from", "")
-            body_preview = (
-                f"{body[:50]}..." if len(body) > 50 else body
-            )
+            body_preview = f"{body[:50]}..." if len(body) > 50 else body
             self.logger.info(
                 "Received message: chat=%s, fromMe=%s, body='%s'",
-                chat_id, from_me, body_preview
+                chat_id,
+                from_me,
+                body_preview,
             )
-            await self.bot._handle_received_message(data)  # pylint: disable=protected-access
+            await self.bot._handle_received_message(data)
 
         # Регистрируем обработчик для события с дефисом
-        self.bot.sio.on('received-message', received_message_hyphen)
+        self.bot.sio.on("received-message", received_message_hyphen)
 
     def _setup_status_handlers(self):
         """Setup status-related event handlers"""
+
         @self.bot.sio.event
         async def whatsapp_status(data):
             """Обработка изменения статуса WhatsApp"""
@@ -85,30 +89,31 @@ class SocketIOEventHandlers:
 
     def _setup_diagnostic_handlers(self):
         """Setup diagnostic event handlers"""
+
         async def catch_all_events(event, data):
             """Ловит все события для диагностики"""
-            if event in ['onack', 'mensagem-enviada']:
+            if event in ["onack", "mensagem-enviada"]:
                 await self._log_status_event(event, data)
-            elif event == 'received-message':
+            elif event == "received-message":
                 await self._handle_message_event(data)
             else:
                 self.logger.debug(f"[DIAGNOSTIC] Event '{event}' received")
 
         # Регистрируем универсальный обработчик
-        self.bot.sio.on('*', catch_all_events)
+        self.bot.sio.on("*", catch_all_events)
 
     async def _log_status_event(self, event: str, data):
         """Log status events with minimal info"""
         msg_data = self._extract_message_data(data)
-        ack = msg_data.get('ack', 'unknown')
-        body = msg_data.get('body', '')
+        ack = msg_data.get("ack", "unknown")
+        body = msg_data.get("body", "")
         body_preview = f"{body[:30]}..." if len(body) > 30 else body
         self.logger.info("[%s] ack=%s, body='%s'", event, ack, body_preview)
 
     async def _handle_message_event(self, data):
         """Handle received message events"""
         if isinstance(data, dict):
-            await self.bot._handle_received_message(data)  # pylint: disable=protected-access
+            await self.bot._handle_received_message(data)
         else:
             self.logger.warning(
                 "Received message event with non-dict data: %s", type(data)

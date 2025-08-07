@@ -1,8 +1,8 @@
 """
-Redis operations for WhatsApp Integration.
+Redis service for WhatsApp integration.
 
 Handles message publishing and Redis communication
-to reduce complexity in main WhatsApp bot.
+following single responsibility principle.
 """
 
 import json
@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 from redis import exceptions as redis_exceptions
 
 
-class WhatsAppRedisManager:
+class RedisService:
     """Manages Redis operations for WhatsApp integration."""
 
     def __init__(self, bot_instance, logger: logging.LoggerAdapter):
@@ -39,7 +39,9 @@ class WhatsAppRedisManager:
 
         if image_urls:
             payload["image_urls"] = image_urls
-            self.logger.info("Adding %s image URLs to WhatsApp message payload", len(image_urls))
+            self.logger.info(
+                "Adding %s image URLs to WhatsApp message payload", len(image_urls)
+            )
 
         return payload
 
@@ -48,7 +50,9 @@ class WhatsAppRedisManager:
         try:
             return await self.bot.redis_client
         except RuntimeError as e:
-            self.logger.error("Redis client not available for publishing to agent: %s", e)
+            self.logger.error(
+                "Redis client not available for publishing to agent: %s", e
+            )
             await self.bot.api_handler.send_message(
                 chat_id, "Ошибка: Не удалось связаться с агентом (сервис недоступен)."
             )
@@ -70,7 +74,9 @@ class WhatsAppRedisManager:
             )
             raise
         except Exception as e:
-            self.logger.error("Unexpected error publishing message: %s", e, exc_info=True)
+            self.logger.error(
+                "Unexpected error publishing message: %s", e, exc_info=True
+            )
             raise
 
     async def publish_to_agent(
@@ -89,9 +95,10 @@ class WhatsAppRedisManager:
                 image_urls=image_urls,
             )
 
-            channel = f"agent:{self.agent_id}:input"  # pylint: disable=no-member
-            await self.redis_client.publish(channel, json.dumps(payload))  # pylint: disable=no-member
-            self.logger.debug(f"Published message to agent {self.agent_id}")  # pylint: disable=no-member
+            channel = f"agent:{self.bot.agent_id}:input"
+            redis_client = await self.bot.redis_client
+            await redis_client.publish(channel, json.dumps(payload))
+            self.logger.debug("Published message to agent %s", self.bot.agent_id)
             return True
 
         except ConnectionError as e:
@@ -101,5 +108,7 @@ class WhatsAppRedisManager:
             self.logger.error("Data serialization error: %s", e, exc_info=True)
             raise
         except Exception as e:
-            self.logger.error("Unexpected error publishing message: %s", e, exc_info=True)
+            self.logger.error(
+                "Unexpected error publishing message: %s", e, exc_info=True
+            )
             raise

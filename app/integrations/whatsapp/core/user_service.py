@@ -1,8 +1,8 @@
 """
-User management for WhatsApp Integration.
+User service for WhatsApp integration.
 
 Handles user creation, authorization, and context extraction
-to reduce complexity in main WhatsApp bot.
+following single responsibility principle.
 """
 
 import logging
@@ -13,8 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.db.crud import user_crud
 
 
-class WhatsAppUserManager:
-    """Manages WhatsApp user operations with reduced complexity."""
+class UserService:
+    """Manages WhatsApp user operations with focused responsibility."""
 
     def __init__(
         self,
@@ -84,7 +84,7 @@ class WhatsAppUserManager:
     async def extract_user_context(
         self, response: Dict[str, Any], chat_id: str, sender_info: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
-        """Extract user context from WhatsApp response with reduced complexity."""
+        """Extract user context from WhatsApp response."""
         try:
             # Extract platform user ID
             platform_user_id = self.extract_platform_user_id(sender_info)
@@ -158,16 +158,24 @@ class WhatsAppUserManager:
         return bool(auth_record and auth_record.is_authorized) if auth_record else False
 
     async def auto_authorize_user_with_phone(
-        self, session: AsyncSession, user_id: int, platform_user_id: str, phone_number: str
+        self,
+        session: AsyncSession,
+        user_id: int,
+        platform_user_id: str,
+        phone_number: str,
     ) -> bool:
         """Auto-authorize new user with phone number."""
         auth_record = await user_crud.update_agent_user_authorization(
             session, agent_id=self.agent_id, user_id=user_id, is_authorized=True
         )
-        is_authorized = bool(auth_record and auth_record.is_authorized) if auth_record else False
+        is_authorized = (
+            bool(auth_record and auth_record.is_authorized) if auth_record else False
+        )
         if is_authorized:
             self.logger.info(
-                f"Auto-authorized WhatsApp user {platform_user_id} with phone {phone_number}"
+                "Auto-authorized WhatsApp user %s with phone %s",
+                platform_user_id,
+                phone_number,
             )
         return is_authorized
 
@@ -201,41 +209,40 @@ class WhatsAppUserManager:
         last_name: Optional[str] = None,
         phone_number: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """
-        Get or create user with reduced complexity through delegation.
-
-        Args:
-            platform_user_id: WhatsApp user ID
-            first_name: User's first name
-            last_name: User's last name (optional)
-            phone_number: User's phone number (optional)
-
-        Returns:
-            User data with authorization flag
-        """
+        """Get or create user with focused responsibility."""
         try:
             if not self.db_session_factory:
                 self.logger.warning("Database session factory not available")
-                return self.create_fallback_data(first_name, platform_user_id, last_name)
-
-            async with self.db_session_factory() as session:
-                return await self._process_user_in_session(
-                    session, platform_user_id, first_name, last_name, phone_number
+                return self.create_fallback_data(
+                    first_name, platform_user_id, last_name
                 )
 
+            async with self.db_session_factory() as session:
+                user_info = {
+                    "platform_user_id": platform_user_id,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "phone_number": phone_number,
+                }
+                return await self._process_user_in_session(session, user_info)
+
         except (ConnectionError, AttributeError, ValueError) as e:
-            self.logger.error(f"Error getting/creating user {platform_user_id}: {e}", exc_info=True)
+            self.logger.error(
+                "Error getting/creating user %s: %s", platform_user_id, e, exc_info=True
+            )
             return self.create_fallback_data(first_name, platform_user_id, last_name)
 
     async def _process_user_in_session(
         self,
         session: AsyncSession,
-        platform_user_id: str,
-        first_name: str,
-        last_name: Optional[str],
-        phone_number: Optional[str],
-    ) -> Optional[Dict[str, Any]]:
-        """Process user operations within database session."""
+        user_info: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Process user in database session with consolidated parameters."""
+        platform_user_id = user_info["platform_user_id"]
+        first_name = user_info["first_name"]
+        last_name = user_info.get("last_name")
+        phone_number = user_info.get("phone_number")
+
         # Try to get existing user
         user_db = await user_crud.get_user_by_platform_id(
             session, "whatsapp", platform_user_id
@@ -243,9 +250,7 @@ class WhatsAppUserManager:
 
         is_new_user = False
         if not user_db:
-            user_db = await self._create_new_user(
-                session, platform_user_id, first_name, last_name, phone_number
-            )
+            user_db = await self._create_new_user_with_info(session, user_info)
             is_new_user = True
 
         if not user_db:
@@ -262,21 +267,31 @@ class WhatsAppUserManager:
 
         return self.build_user_data_result(user_db, platform_user_id, is_authorized)
 
+    async def _create_new_user_with_info(
+        self, session: AsyncSession, user_info: Dict[str, Any]
+    ) -> Any:
+        """Create new user with consolidated info."""
+        return await self._create_new_user(session, user_info)
+
     async def _create_new_user(
         self,
         session: AsyncSession,
-        platform_user_id: str,
-        first_name: str,
-        last_name: Optional[str],
-        phone_number: Optional[str],
+        user_info: Dict[str, Any],
     ) -> Any:
         """Create new user in database."""
-        user_details = self.prepare_user_details(first_name, last_name, phone_number)
+        user_details = self.prepare_user_details(
+            user_info["first_name"],
+            user_info.get("last_name"),
+            user_info.get("phone_number"),
+        )
         user_db = await user_crud.create_or_update_user(
-            session, "whatsapp", platform_user_id, user_details
+            session, "whatsapp", user_info["platform_user_id"], user_details
         )
         self.logger.info(
-            f"Created new WhatsApp user: {platform_user_id}, "
-            f"first_name: {first_name}, last_name: {last_name}, phone: {phone_number}"
+            "Created new WhatsApp user: %s, first_name: %s, last_name: %s, phone: %s",
+            user_info["platform_user_id"],
+            user_info["first_name"],
+            user_info.get("last_name"),
+            user_info.get("phone_number"),
         )
         return user_db

@@ -1,14 +1,13 @@
 """
 WhatsApp integration handlers package
 
-Содержит вспомогательные модули для обработки различных типов сообщений и операций WhatsApp:
-- MediaHandler: обработка медиа сообщений (изображения, голос)
-- APIHandler: операции с API wppconnect-server
+Содержит активные компоненты для обработки Socket.IO операций WhatsApp:
 - SocketIOEventHandlers: обработка событий Socket.IO
+- VoiceMessageSender: отправка голосовых сообщений
+
+Примечание: MediaHandler мигрирован в processors/ в рамках clean architecture
 """
 
-from .media_handler import MediaHandler
-from .api_handler import WhatsAppAPIHandler
 from .socketio_handler import SocketIOEventHandlers
 
-__all__ = ['MediaHandler', 'WhatsAppAPIHandler', 'SocketIOEventHandlers']
+__all__ = ["SocketIOEventHandlers"]

@@ -8,7 +8,9 @@ to reduce complexity in main APIHandler.
 import base64
 import logging
 from typing import Any, Dict
+
 import aiohttp
+
 
 class VoiceMessageSender:
     """Handles WhatsApp voice message sending with reduced complexity."""
@@ -31,26 +33,19 @@ class VoiceMessageSender:
                     return audio_data
 
                 self.logger.error(
-                    "Failed to download audio from %s: HTTP %s",
-                    audio_url, resp.status
+                    "Failed to download audio from %s: HTTP %s", audio_url, resp.status
                 )
                 raise ConnectionError(f"HTTP {resp.status} downloading audio")
 
     def encode_audio_to_base64(self, audio_data: bytes) -> str:
         """Encode audio data to base64."""
-        audio_base64 = base64.b64encode(audio_data).decode('utf-8')
-        self.logger.debug(
-            "Encoded audio to base64: %s characters", len(audio_base64)
-        )
+        audio_base64 = base64.b64encode(audio_data).decode("utf-8")
+        self.logger.debug("Encoded audio to base64: %s characters", len(audio_base64))
         return audio_base64
 
     def create_voice_payload(self, chat_id: str, audio_base64: str) -> Dict[str, Any]:
         """Create voice message payload for wppconnect API."""
-        return {
-            "phone": chat_id,
-            "isGroup": False,
-            "base64Ptt": audio_base64
-        }
+        return {"phone": chat_id, "isGroup": False, "base64Ptt": audio_base64}
 
     def create_api_url(self, session_name: str) -> str:
         """Create API URL for voice message sending."""
@@ -109,5 +104,7 @@ class VoiceMessageSender:
             return success
 
         except (ConnectionError, TimeoutError, ValueError) as e:
-            self.logger.error(f"Error sending voice message to {chat_id}: {e}", exc_info=True)
+            self.logger.error(
+                f"Error sending voice message to {chat_id}: {e}", exc_info=True
+            )
             return False
