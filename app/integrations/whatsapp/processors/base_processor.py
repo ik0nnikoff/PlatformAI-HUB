@@ -27,8 +27,8 @@ class BaseProcessor(ABC):
         self.redis_service: Optional["RedisService"] = None
 
     def _initialize_common_components(
-        self, 
-        bot_instance: "WhatsAppIntegrationBot", 
+        self,
+        bot_instance: "WhatsAppIntegrationBot",
         redis_service: "RedisService"
     ) -> None:
         """Initialize common components for all processors."""
@@ -103,7 +103,7 @@ class BaseProcessor(ABC):
     def _extract_media_data(self, response: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract media data from WhatsApp response.
-        
+
         WhatsApp структура содержит mediaKey в body или других вложенных объектах,
         а не прямой URL. Используется логика из бэкапа интеграции.
         """
@@ -113,7 +113,7 @@ class BaseProcessor(ABC):
             message_id = id_field.get("id", "")
         else:
             message_id = str(id_field) if id_field else ""
-        
+
         # Извлекаем media_data из body
         body_field = response.get("body", {})
         if isinstance(body_field, dict):
@@ -123,12 +123,12 @@ class BaseProcessor(ABC):
             # Для случаев когда body - строка, ищем в других местах
             media_key = response.get("mediaKey", "")
             mimetype = response.get("mimetype", "")
-        
+
         # Если media_key не найден, пробуем альтернативные локации
         if not media_key:
             alt_locations = [
                 response.get("quotedMsg", {}).get("mediaKey", ""),
-                response.get("message", {}).get("mediaKey", ""), 
+                response.get("message", {}).get("mediaKey", ""),
                 response.get("mediaData", {}).get("mediaKey", ""),
                 response.get("media", {}).get("mediaKey", "")
             ]
@@ -136,7 +136,7 @@ class BaseProcessor(ABC):
                 if alt_key:
                     media_key = alt_key
                     break
-        
+
         return {
             "media_key": media_key,
             "mimetype": mimetype,

@@ -36,7 +36,7 @@ class TypingManager:
         # Cancel existing typing task if any
         if chat_id in self.typing_tasks:
             self.typing_tasks[chat_id].cancel()
-        
+
         # Start new typing task
         self.typing_tasks[chat_id] = asyncio.create_task(
             self._send_typing_periodically(chat_id)
@@ -66,7 +66,7 @@ class TypingManager:
         try:
             # Start typing
             await self.api_client.send_typing_action(chat_id, True)
-            
+
             # Максимальное время typing - 60 секунд (20 итераций по 3 сек)
             max_iterations = 20
             iterations = 0
@@ -78,7 +78,7 @@ class TypingManager:
 
             # Typing timeout reached
             self.logger.warning(
-                "Typing timeout (60s) reached for chat %s, stopping indicator", 
+                "Typing timeout (60s) reached for chat %s, stopping indicator",
                 chat_id
             )
             await self.api_client.send_typing_action(chat_id, False)
@@ -121,6 +121,6 @@ class TypingManager:
     def get_active_typing_chats(self) -> list[str]:
         """Get list of chat_ids with active typing indicators"""
         return [
-            chat_id for chat_id, task in self.typing_tasks.items() 
+            chat_id for chat_id, task in self.typing_tasks.items()
             if not task.done()
         ]

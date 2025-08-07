@@ -1,11 +1,10 @@
 """
-TextProcessor - обработчик текстовых сообщений.
+Text message processor for WhatsApp integration.
 
-Полностью независимый компонент для обработки текстовых сообщений WhatsApp
-с прямой интеграцией с сервисами без промежуточных зависимостей.
-Наследует от BaseProcessor для устранения дублирования кода.
+Handles text message processing and user management.
 """
 
+# pylint: disable=duplicate-code
 from typing import TYPE_CHECKING, Any, Dict
 
 from .base_processor import BaseProcessor

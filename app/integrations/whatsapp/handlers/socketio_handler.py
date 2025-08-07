@@ -68,7 +68,7 @@ class SocketIOEventHandlers:
                 from_me,
                 body_preview,
             )
-            await self.bot._handle_received_message(data)
+            await self.bot._handle_received_message(data)  # pylint: disable=protected-access
 
         # Регистрируем обработчик для события с дефисом
         self.bot.sio.on("received-message", received_message_hyphen)
@@ -113,7 +113,7 @@ class SocketIOEventHandlers:
     async def _handle_message_event(self, data):
         """Handle received message events"""
         if isinstance(data, dict):
-            await self.bot._handle_received_message(data)
+            await self.bot._handle_received_message(data)  # pylint: disable=protected-access
         else:
             self.logger.warning(
                 "Received message event with non-dict data: %s", type(data)

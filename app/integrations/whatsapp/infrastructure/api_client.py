@@ -48,18 +48,23 @@ class WhatsAppAPIClient:
                 "message": message,
                 "isGroup": False
             }
-            
+
             response = await self.http_client.post(url, json=payload)
-            
+
             if response.status_code in [200, 201]:
-                self.logger.debug(f"Message sent successfully to {chat_id}")
+                self.logger.debug("Message sent successfully to %s", chat_id)
                 return True
-            else:
-                self.logger.error(f"Failed to send message. Status: {response.status_code}, Response: {response.text}")
-                return False
-                
-        except Exception as e:
-            self.logger.error(f"Error sending message to {chat_id}: {e}", exc_info=True)
+
+            self.logger.error(
+                "Failed to send message. Status: %s, Response: %s",
+                response.status_code, response.text
+            )
+            return False
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self.logger.error(
+                "Error sending message to %s: %s", chat_id, e, exc_info=True
+            )
             return False
 
     async def send_typing_action(self, chat_id: str, is_typing: bool) -> bool:
@@ -72,18 +77,25 @@ class WhatsAppAPIClient:
                 "isGroup": False,
                 "value": is_typing
             }
-            
+
             response = await self.http_client.post(url, json=payload)
-            
+
             if response.status_code in [200, 201]:
-                self.logger.debug(f"Typing action {'started' if is_typing else 'stopped'} for {chat_id}")
+                self.logger.debug(
+                    "Typing action %s for %s",
+                    'started' if is_typing else 'stopped', chat_id
+                )
                 return True
-            else:
-                self.logger.warning(f"Failed to set typing action. Status: {response.status_code}")
-                return False
-                
-        except Exception as e:
-            self.logger.error(f"Error sending typing action to {chat_id}: {e}", exc_info=True)
+
+            self.logger.warning(
+                "Failed to set typing action. Status: %s", response.status_code
+            )
+            return False
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self.logger.error(
+                "Error sending typing action to %s: %s", chat_id, e, exc_info=True
+            )
             return False
 
     async def send_voice_message(self, chat_id: str, audio_url: str) -> bool:

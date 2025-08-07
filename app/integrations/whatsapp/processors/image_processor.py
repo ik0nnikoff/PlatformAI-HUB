@@ -1,11 +1,10 @@
 """
-ImageProcessor - обработчик изображений.
+Image message processor for WhatsApp integration.
 
-Полностью независимый компонент для обработки изображений WhatsApp
-с прямой интеграцией с image orchestrator.
-Наследует от BaseProcessor для устранения дублирования кода.
+Handles image message processing with infrastructure integration.
 """
 
+# pylint: disable=duplicate-code
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .base_processor import BaseProcessor

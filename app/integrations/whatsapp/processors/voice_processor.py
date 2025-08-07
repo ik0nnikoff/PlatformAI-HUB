@@ -1,9 +1,7 @@
 """
-VoiceProcessor - обработчик голосовых сообщений.
+Voice message processor for WhatsApp integration.
 
-Полностью независимый компонент для обработки голосовых сообщений WhatsApp
-с прямой интеграцией с voice_v2 orchestrator.
-Наследует от BaseProcessor для устранения дублирования кода.
+Handles voice message processing with voice_v2 orchestrator integration.
 """
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -14,9 +12,9 @@ from app.services.voice_v2.core.schemas import STTRequest
 from .base_processor import BaseProcessor
 
 if TYPE_CHECKING:
+    from ..whatsapp_bot import WhatsAppIntegrationBot
     from ..core.redis_service import RedisService
     from ..core.user_service import UserService
-    from ..whatsapp_bot import WhatsAppIntegrationBot
 
 
 class VoiceProcessor(BaseProcessor):
