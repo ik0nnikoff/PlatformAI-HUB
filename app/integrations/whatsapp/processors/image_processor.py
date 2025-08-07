@@ -5,6 +5,8 @@ Handles image message processing with infrastructure integration.
 """
 
 # pylint: disable=duplicate-code
+
+import base64
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .base_processor import BaseProcessor
@@ -52,10 +54,15 @@ class ImageProcessor(BaseProcessor):
                 return  # Error already handled
 
             # Send to agent with image URLs and typing
+            # For image messages, don't send the base64 body content as message_text
+            # as it creates huge token consumption. Instead, send a descriptive text.
+            caption = response.get("caption", "")
+            message_text = caption if caption else "Пользователь отправил изображение"
+
             await self.bot.publish_to_agent(
                 {
                     "chat_id": chat_id,
-                    "message_text": response.get("body", ""),
+                    "message_text": message_text,
                     "platform_user_id": user_data["platform_user_id"],
                     "is_image_message": True,
                 },
@@ -87,19 +94,29 @@ class ImageProcessor(BaseProcessor):
             # Use image orchestrator if available
             if not self.bot.image_orchestrator:
                 self.logger.warning(
-                    "Image orchestrator not initialized, using direct URL"
+                    "Image orchestrator not initialized, falling back to base64 processing"
                 )
-                # Fallback to direct image URL if orchestrator not available
-                return [image_data["media_url"]] if image_data["media_url"] else None
+                # Fallback: create base64 image URL for direct processing
+                image_base64 = base64.b64encode(image_data["image_data"]).decode('utf-8')
+                return [f"data:image/jpeg;base64,{image_base64}"]
 
-            # Process with image orchestrator
-            result = await self.bot.image_orchestrator.process_images(
-                [image_data], self.bot.agent_id, chat_id
+            # Prepare image data for orchestrator (similar to archive pattern)
+            image_filename = (
+                f"whatsapp_image_{image_data.get('message_id', 'unknown')}_"
+                f"{self.bot.agent_id}.jpg"
             )
 
-            if result and result.get("image_urls"):
+            # Process with image orchestrator - pass bytes directly
+            result = await self.bot.image_orchestrator.process_images(
+                images_data=[image_data["image_data"]],  # Pass bytes directly
+                agent_id=self.bot.agent_id,
+                user_id=chat_id,
+                original_filenames=[image_filename]
+            )
+
+            if result:
                 self.logger.info("Image processed successfully for chat %s", chat_id)
-                return result["image_urls"]
+                return result  # result is already a List[str] of URLs
 
             self.logger.warning("Image processing failed for chat %s", chat_id)
             await self._send_error_message(
@@ -123,7 +140,16 @@ class ImageProcessor(BaseProcessor):
         message_id = self._extract_message_id(response)
         result = await self._extract_media_common(self.bot, response, message_id)
         if result:
-            # Add media_url for image processing
-            media_data = self._extract_media_data(response)
-            result["media_url"] = media_data["media_url"]
+            # Download image data directly using bot's API client
+            image_data = await self.bot.api_client.download_whatsapp_media(
+                result.get("media_key", ""), message_id
+            )
+            if image_data:
+                result["image_data"] = image_data
+                self.logger.debug(
+                    "Successfully extracted image data: %s bytes", len(image_data)
+                )
+            else:
+                self.logger.error("Failed to download image data for message: %s", message_id)
+                return None
         return result

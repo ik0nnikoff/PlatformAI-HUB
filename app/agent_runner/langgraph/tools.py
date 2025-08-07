@@ -88,11 +88,24 @@ def _add_predefined_tools(safe_tools: List, logger):
 
 
 def _add_vision_tools(vision_settings: Dict, safe_tools: List, logger):
-    """Add vision analysis tools."""
-    if vision_settings.get("enabled", False):
-        safe_tools.append(analyze_images)
-        safe_tools.append(describe_image_content)
-        logger.info("Vision tools enabled and added")
+    """Add vision analysis tools - always enabled as core functionality."""
+    safe_tools.append(analyze_images)
+    safe_tools.append(describe_image_content)
+    logger.info("Vision tools added as core functionality")
+
+
+def _remove_duplicate_tools(tools: List) -> List:
+    """Remove duplicate tools based on tool name."""
+    seen_names = set()
+    unique_tools = []
+    
+    for tool in tools:
+        tool_name = getattr(tool, 'name', str(tool))
+        if tool_name not in seen_names:
+            seen_names.add(tool_name)
+            unique_tools.append(tool)
+    
+    return unique_tools
 
 
 def _add_tavily_tools(use_tavily_search: bool, safe_tools: List, logger):
@@ -328,7 +341,7 @@ def _configure_basic_tools(agent_config: Dict, agent_id: str, settings: Dict, sa
     # Add predefined tools as fallback
     _add_predefined_tools(safe_tools, logger)
 
-    # Add vision tools
+    # Add vision tools as core functionality (always enabled)
     _add_vision_tools(settings.get("vision", {}), safe_tools, logger)
 
 
@@ -362,9 +375,13 @@ def _finalize_tools_configuration(safe_tools: List, datastore_tools: List,
                                  logger) -> Tuple[List[BaseTool], List[BaseTool],
                                                 List[BaseTool], Set[str], int]:
     """Finalize tools configuration and return results."""
+    # Remove duplicates from safe_tools and datastore_tools
+    safe_tools = _remove_duplicate_tools(safe_tools)
+    datastore_tools = _remove_duplicate_tools(datastore_tools)
+    
     tools_list = safe_tools + datastore_tools
 
-    logger.info("Total tools configured: %d (%d safe, %d datastore).",
+    logger.info("Total tools configured: %d (%d safe, %d datastore) after deduplication.",
                len(tools_list), len(safe_tools), len(datastore_tools))
     logger.info("Tool names: %s", [tool.name for tool in tools_list])
     logger.info("Using max_rewrites: %d", max_rewrites)
