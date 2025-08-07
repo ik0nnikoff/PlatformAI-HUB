@@ -79,3 +79,6 @@ endif
 		--agent-id $(AGENT_ID) \
 		--redis-url ${REDIS_URL:-redis://localhost:6379} \
 		--integration-settings \'{"botToken": "$(BOT_TOKEN)"}\'
+
+clean:
+	find /Users/jb/Projects/PlatformAI/PlatformAI-HUB -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
