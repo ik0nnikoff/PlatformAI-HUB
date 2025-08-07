@@ -1,18 +1,5 @@
 """
-WhatsApp API client for infrastructur            if response.status_code == 200:
-                self.logger.deb            if response.status_code == 200:
-                return await self._process_media_response(response)
-
-            self.logger.error(
-                "Failed to download media %s: HTTP %s", message_id, response.status_code
-            )
-            return Nonesage sent successfully to %s", chat_id)
-                return True
-
-            self.logger.error(
-                "Failed to send message to %s: %s", chat_id, response.status_code
-            )
-            return False
+WhatsApp API client for infrastructure layer.
 
 Handles HTTP API operations with external WhatsApp service
 following clean architecture principles.
@@ -41,71 +28,68 @@ class WhatsAppAPIClient:
         self.logger = bot_instance.logger
         self.voice_sender = VoiceMessageSender(self.logger)
 
+    @property
+    def session_name(self) -> str:
+        """Get session name from bot instance."""
+        return self.bot.session_name
+
+    @property
+    def http_client(self) -> httpx.AsyncClient:
+        """Get HTTP client from bot instance."""
+        return self.bot.http_client
+
     async def send_message(self, chat_id: str, message: str) -> bool:
-        """Send text message to WhatsApp chat."""
+        """Send text message via WhatsApp API"""
         try:
-            if not self.bot.http_client:
-                self.logger.error("HTTP client not initialized")
-                return False
-
+            # URL формат как в бэкапе: /api/{session_name}/send-message
+            url = f"/api/{self.session_name}/send-message"
             payload = {
-                "chatId": chat_id,
+                "phone": chat_id,
                 "message": message,
-                "session": self.bot.session_name,
+                "isGroup": False
             }
-
-            response = await self.bot.http_client.post("/api/sendMessage", json=payload)
-
-            if response.status_code == 200:
-                self.logger.debug("Message sent successfully to %s", chat_id)
+            
+            response = await self.http_client.post(url, json=payload)
+            
+            if response.status_code in [200, 201]:
+                self.logger.debug(f"Message sent successfully to {chat_id}")
                 return True
-
-            self.logger.error(
-                "Failed to send message to %s: HTTP %s",
-                chat_id,
-                response.status_code,
-            )
-            return False
-
-        except (httpx.RequestError, httpx.TimeoutException) as e:
-            self.logger.error("Error sending message to %s: %s", chat_id, e)
+            else:
+                self.logger.error(f"Failed to send message. Status: {response.status_code}, Response: {response.text}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error sending message to {chat_id}: {e}", exc_info=True)
             return False
 
     async def send_typing_action(self, chat_id: str, is_typing: bool) -> bool:
-        """Send typing indicator to WhatsApp chat."""
+        """Send typing indicator to WhatsApp"""
         try:
-            if not self.bot.http_client:
-                self.logger.error("HTTP client not initialized")
-                return False
-
-            action = "start" if is_typing else "stop"
+            # URL формат как в бэкапе: /api/{session_name}/typing
+            url = f"/api/{self.session_name}/typing"
             payload = {
-                "chatId": chat_id,
-                "action": action,
-                "session": self.bot.session_name,
+                "phone": chat_id,
+                "isGroup": False,
+                "value": is_typing
             }
-
-            response = await self.bot.http_client.post("/api/sendTyping", json=payload)
-
-            if response.status_code == 200:
-                self.logger.debug("Typing action %s sent to %s", action, chat_id)
+            
+            response = await self.http_client.post(url, json=payload)
+            
+            if response.status_code in [200, 201]:
+                self.logger.debug(f"Typing action {'started' if is_typing else 'stopped'} for {chat_id}")
                 return True
-
-            self.logger.warning(
-                "Failed to send typing action to %s: HTTP %s",
-                chat_id,
-                response.status_code,
-            )
-            return False
-
-        except (httpx.RequestError, httpx.TimeoutException) as e:
-            self.logger.debug("Error sending typing action to %s: %s", chat_id, e)
+            else:
+                self.logger.warning(f"Failed to set typing action. Status: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error sending typing action to {chat_id}: {e}", exc_info=True)
             return False
 
     async def send_voice_message(self, chat_id: str, audio_url: str) -> bool:
         """Send voice message to WhatsApp chat."""
         try:
-            if not self.bot.http_client:
+            if not self.http_client:
                 self.logger.error("HTTP client not initialized")
                 return False
 
@@ -123,25 +107,24 @@ class WhatsAppAPIClient:
     ) -> Optional[bytes]:
         """Download media from WhatsApp."""
         try:
-            if not self.bot.http_client:
+            if not self.http_client:
                 self.logger.error("HTTP client not initialized")
                 return None
 
+            # URL формат как в бэкапе: /api/{session_name}/download-media
+            url = f"/api/{self.session_name}/download-media"
             payload = {
-                "messageId": message_id,
-                "session": self.bot.session_name,
+                "messageId": message_id
             }
 
-            response = await self.bot.http_client.post(
-                "/api/downloadMedia", json=payload
-            )
+            response = await self.http_client.post(url, json=payload)
 
             if response.status_code == 200:
                 return await self._process_media_response(response)
 
             self.logger.error(
                 "Failed to download media %s: HTTP %s",
-                media_key,
+                message_id,
                 response.status_code,
             )
             return None
@@ -212,8 +195,5 @@ class WhatsAppAPIClient:
         except (httpx.RequestError, AttributeError, ConnectionError) as e:
             self.logger.error("Error in periodic typing for %s: %s", chat_id, e)
         finally:
-            # Clean up typing task
-            if chat_id in self.bot.typing_tasks:
-                del self.bot.typing_tasks[chat_id]
             # Ensure typing is stopped
             await self.send_typing_action(chat_id, False)

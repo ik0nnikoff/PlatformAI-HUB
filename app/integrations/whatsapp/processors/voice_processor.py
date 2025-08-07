@@ -55,11 +55,11 @@ class VoiceProcessor(BaseProcessor):
             if not voice_text:
                 return  # Error already handled in _process_voice_with_stt
 
-            # Send transcribed text to agent
-            await self.redis_service.publish_to_agent(
-                voice_text,
+            # Send transcribed text to agent with typing
+            await self.bot.publish_to_agent(
                 {
                     "chat_id": chat_id,
+                    "message_text": voice_text,
                     "platform_user_id": user_data["platform_user_id"],
                     "is_voice_message": True,
                 },
@@ -73,9 +73,8 @@ class VoiceProcessor(BaseProcessor):
                 chat_id,
                 "⚠️ Произошла ошибка при обработке голосового сообщения.",
             )
-        finally:
-            # Stop typing indicator
-            await self.bot._stop_typing_for_chat(chat_id)
+            # Stop typing on error
+            await self.bot.stop_typing_for_chat(chat_id)
 
     async def _process_voice_with_stt(
         self, response: Dict[str, Any], chat_id: str
@@ -101,20 +100,20 @@ class VoiceProcessor(BaseProcessor):
             # Create STT request
             stt_request = STTRequest(
                 audio_data=voice_data["content"],
-                format=AudioFormat.OGG,
-                language="ru-RU",
+                audio_format=AudioFormat.OGG,
+                language="auto",  # Auto-detect language
             )
 
             # Process with voice_v2 orchestrator
-            result = await self.bot.voice_orchestrator.process_stt(stt_request)
+            result = await self.bot.voice_orchestrator.transcribe_audio(stt_request)
 
-            if result.success and result.text:
+            if result.text:
                 self.logger.info(
                     "Voice message transcribed successfully for chat %s", chat_id
                 )
                 return result.text
 
-            self.logger.warning("STT failed for chat %s: %s", chat_id, result.error)
+            self.logger.warning("STT failed for chat %s: no text returned", chat_id)
             await self._send_error_message(
                 self.bot,
                 chat_id,

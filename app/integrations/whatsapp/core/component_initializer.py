@@ -48,12 +48,18 @@ class ComponentInitializer:
         # Lazy imports to avoid circular dependencies
         from ..infrastructure.api_client import WhatsAppAPIClient
         from ..infrastructure.socketio_client import SocketIOClient
+        from ..infrastructure.typing_manager import TypingManager
 
         # API client for HTTP operations
         bot_instance.api_client = WhatsAppAPIClient(bot_instance)
 
         # Socket.IO client for real-time communication
         bot_instance.socketio_client = SocketIOClient(bot_instance)
+
+        # Typing manager for handling typing indicators
+        bot_instance.typing_manager = TypingManager(
+            bot_instance.api_client, bot_instance.logger
+        )
 
     @staticmethod
     def initialize_processors(bot_instance: "WhatsAppIntegrationBot") -> None:

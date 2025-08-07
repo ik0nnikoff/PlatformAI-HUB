@@ -52,10 +52,13 @@ class TextProcessor(BaseProcessor):
             if not self._is_valid_text_message(text_content, chat_id):
                 return
 
-            # Send to agent via Redis
-            await self.redis_service.publish_to_agent(
-                text_content,
-                {"chat_id": chat_id, "platform_user_id": user_data["platform_user_id"]},
+            # Send to agent via Redis with typing
+            await self.bot.publish_to_agent(
+                {
+                    "chat_id": chat_id,
+                    "message_text": text_content,
+                    "platform_user_id": user_data["platform_user_id"],
+                },
                 user_data,
             )
 
@@ -64,9 +67,8 @@ class TextProcessor(BaseProcessor):
             await self._send_error_message(
                 self.bot, chat_id, "⚠️ Произошла ошибка при обработке сообщения."
             )
-        finally:
-            # Stop typing indicator
-            await self.bot._stop_typing_for_chat(chat_id)
+            # Stop typing only on error
+            await self.bot.stop_typing_for_chat(chat_id)
 
     def _is_valid_text_message(self, message_text: str, chat_id: str) -> bool:
         """Check if text message is valid."""

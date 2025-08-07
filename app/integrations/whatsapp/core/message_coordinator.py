@@ -117,8 +117,8 @@ class MessageCoordinator:
             chat_id = data.get("response", {}).get("chatId") or data.get(
                 "response", {}
             ).get("from", "")
-            if chat_id and chat_id in self.bot.typing_tasks:
-                self.bot.typing_tasks[chat_id].cancel()
+            if chat_id:
+                await self.bot.stop_typing_for_chat(chat_id)
 
     def is_valid_agent_response(self, data: Dict[str, Any]) -> bool:
         """Validate agent response data."""

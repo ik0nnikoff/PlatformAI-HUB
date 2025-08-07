@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from .core.user_service import UserService
     from .infrastructure.api_client import WhatsAppAPIClient
     from .infrastructure.socketio_client import SocketIOClient
+    from .infrastructure.typing_manager import TypingManager
     from .processors.image_processor import ImageProcessor
     from .processors.text_processor import TextProcessor
     from .processors.voice_processor import VoiceProcessor
@@ -48,6 +49,7 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
     # Type hints for infrastructure
     api_client: "WhatsAppAPIClient"
     socketio_client: "SocketIOClient"
+    typing_manager: "TypingManager"
 
     # Type hints for processors
     text_processor: "TextProcessor"
@@ -83,7 +85,6 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
         self.sio: Optional[AsyncClient] = None
         self.http_client: Optional[httpx.AsyncClient] = None
         self.wppconnect_base_url = settings.WPPCONNECT_URL
-        self.typing_tasks: Dict[str, asyncio.Task] = {}
 
         # Orchestrator references
         self.voice_orchestrator = None
@@ -217,7 +218,7 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
         self.logger.info("Cleaning up WhatsApp integration...")
 
         try:
-            await self._cleanup_typing_tasks()
+            await self.typing_manager.cleanup_all_typing_tasks()
             await self.socketio_client.cleanup()
             await self._cleanup_http_client()
             await self._cleanup_orchestrators()
@@ -227,19 +228,6 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             self.logger.error(
                 "Error during WhatsApp integration cleanup: %s", e, exc_info=True
             )
-
-    async def _cleanup_typing_tasks(self) -> None:
-        """Cancel all typing tasks"""
-        for chat_id, task in self.typing_tasks.items():
-            task.cancel()
-            # Optionally send stop typing for each chat
-            try:
-                await self.api_client.send_typing_action(chat_id, False)
-            except (httpx.RequestError, AttributeError) as e_typing:
-                self.logger.debug(
-                    "Failed to stop typing for %s during cleanup: %s", chat_id, e_typing
-                )
-        self.typing_tasks.clear()
 
     async def _cleanup_socket_connection(self) -> None:
         """Cleanup Socket.IO connection"""
@@ -322,62 +310,16 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
         return self.text_processor.extract_user_info(response, sender_info)
 
     async def _start_typing_for_chat(self, chat_id: str) -> None:
-        """Start typing indicator for chat"""
-        if chat_id in self.typing_tasks:
-            self.typing_tasks[chat_id].cancel()
-        self.typing_tasks[chat_id] = asyncio.create_task(
-            self._send_typing_periodically(chat_id)
-        )
+        """Start typing indicator for chat - delegated to TypingManager"""
+        await self.typing_manager.start_typing_for_chat(chat_id)
 
     async def _stop_typing_for_chat(self, chat_id: str) -> None:
-        """Stop typing indicator for a specific chat"""
-        if chat_id in self.typing_tasks:
-            self.typing_tasks[chat_id].cancel()
-            del self.typing_tasks[chat_id]
-
-        # Send stop typing action to WhatsApp
-        try:
-            await self.api_client.send_typing_action(chat_id, False)
-        except (httpx.RequestError, AttributeError) as e:
-            self.logger.error(
-                "Failed to stop typing action for chat %s: %s", chat_id, e
-            )
+        """Stop typing indicator for a specific chat - delegated to TypingManager"""
+        await self.typing_manager.stop_typing_for_chat(chat_id)
 
     async def stop_typing_for_chat(self, chat_id: str) -> None:
         """Stop typing indicator for chat - public interface for helpers."""
-        await self._stop_typing_for_chat(chat_id)
-
-    async def _send_typing_periodically(self, chat_id: str) -> None:
-        """
-        Периодически отправляет индикатор печати в WhatsApp.
-
-        Показывает пользователю, что агент обрабатывает запрос.
-        """
-        try:
-            # Start typing
-            await self.api_client.send_typing_action(chat_id, True)
-
-            while True:
-                await asyncio.sleep(3)  # Refresh typing indicator every 3 seconds
-                await self.api_client.send_typing_action(chat_id, True)
-
-        except asyncio.CancelledError:
-            self.logger.debug("Typing task cancelled for chat %s", chat_id)
-            # Stop typing when cancelled
-            try:
-                await self.api_client.send_typing_action(chat_id, False)
-            except (httpx.RequestError, AttributeError) as e:
-                self.logger.error(
-                    "Failed to stop typing action on cancel for chat %s: %s", chat_id, e
-                )
-        except (httpx.RequestError, asyncio.TimeoutError, ConnectionError) as e:
-            self.logger.error(
-                "Error in typing task for chat %s: %s", chat_id, e, exc_info=True
-            )
-        finally:
-            # Clean up typing task
-            if chat_id in self.typing_tasks:
-                del self.typing_tasks[chat_id]
+        await self.typing_manager.stop_typing_for_chat(chat_id)
 
     async def publish_to_agent(
         self,
@@ -392,13 +334,16 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             "chat_id": chat_id,
             "platform_user_id": message_data["platform_user_id"],
         }
+
+        # Start typing indicator before publishing to agent
+        await self._start_typing_for_chat(chat_id)
+
         await self.redis_service.publish_to_agent(
             message_text, message_context, user_data, image_urls
         )
 
-        if chat_id in self.typing_tasks:
-            self.typing_tasks[chat_id].cancel()
-            del self.typing_tasks[chat_id]
+        # Typing indicator должен продолжаться пока агент обрабатывает запрос
+        # Отмена происходит только в _handle_agent_response
 
     async def _get_or_create_user(
         self, user_params: Dict[str, str]
@@ -452,8 +397,9 @@ class WhatsAppIntegrationBot(ServiceComponentBase):
             response_text = data["response"]
             audio_url = data.get("audio_url")
 
+            # Немедленно останавливаем typing indicator
             await self._stop_typing_for_chat(chat_id)
-            await asyncio.sleep(0.5)  # Natural typing simulation
+            await asyncio.sleep(0.3)  # Короткая пауза перед отправкой
 
             voice_sent_successfully = await self._send_voice_response(
                 chat_id, audio_url

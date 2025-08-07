@@ -52,11 +52,11 @@ class ImageProcessor(BaseProcessor):
             if not image_urls:
                 return  # Error already handled
 
-            # Send to agent with image URLs
-            await self.redis_service.publish_to_agent(
-                response.get("body", ""),
+            # Send to agent with image URLs and typing
+            await self.bot.publish_to_agent(
                 {
                     "chat_id": chat_id,
+                    "message_text": response.get("body", ""),
                     "platform_user_id": user_data["platform_user_id"],
                     "is_image_message": True,
                 },
@@ -69,9 +69,8 @@ class ImageProcessor(BaseProcessor):
             await self._send_error_message(
                 self.bot, chat_id, "⚠️ Произошла ошибка при обработке изображения."
             )
-        finally:
-            # Stop typing indicator
-            await self.bot._stop_typing_for_chat(chat_id)
+            # Stop typing only on error
+            await self.bot.stop_typing_for_chat(chat_id)
 
     async def _process_image_with_orchestrator(
         self, response: Dict[str, Any], chat_id: str

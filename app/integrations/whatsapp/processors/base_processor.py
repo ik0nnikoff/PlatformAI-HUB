@@ -10,7 +10,9 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
+    from ..core.redis_service import RedisService
     from ..core.user_service import UserService
+    from ..whatsapp_bot import WhatsAppIntegrationBot
 
 
 class BaseProcessor(ABC):
@@ -21,10 +23,14 @@ class BaseProcessor(ABC):
         self.user_service = user_service
         self.logger = logger
         # Initialize attributes that will be set by _initialize_common_components
-        self.bot = None
-        self.redis_service = None
+        self.bot: Optional["WhatsAppIntegrationBot"] = None
+        self.redis_service: Optional["RedisService"] = None
 
-    def _initialize_common_components(self, bot_instance, redis_service):
+    def _initialize_common_components(
+        self, 
+        bot_instance: "WhatsAppIntegrationBot", 
+        redis_service: "RedisService"
+    ) -> None:
         """Initialize common components for all processors."""
         self.bot = bot_instance
         self.redis_service = redis_service
@@ -95,11 +101,47 @@ class BaseProcessor(ABC):
         return user_data
 
     def _extract_media_data(self, response: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract media data from response."""
+        """
+        Extract media data from WhatsApp response.
+        
+        WhatsApp структура содержит mediaKey в body или других вложенных объектах,
+        а не прямой URL. Используется логика из бэкапа интеграции.
+        """
+        # Извлекаем message_id - может быть строкой или вложенным объектом
+        id_field = response.get("id", {})
+        if isinstance(id_field, dict):
+            message_id = id_field.get("id", "")
+        else:
+            message_id = str(id_field) if id_field else ""
+        
+        # Извлекаем media_data из body
+        body_field = response.get("body", {})
+        if isinstance(body_field, dict):
+            media_key = body_field.get("mediaKey", "")
+            mimetype = body_field.get("mimetype", "")
+        else:
+            # Для случаев когда body - строка, ищем в других местах
+            media_key = response.get("mediaKey", "")
+            mimetype = response.get("mimetype", "")
+        
+        # Если media_key не найден, пробуем альтернативные локации
+        if not media_key:
+            alt_locations = [
+                response.get("quotedMsg", {}).get("mediaKey", ""),
+                response.get("message", {}).get("mediaKey", ""), 
+                response.get("mediaData", {}).get("mediaKey", ""),
+                response.get("media", {}).get("mediaKey", "")
+            ]
+            for alt_key in alt_locations:
+                if alt_key:
+                    media_key = alt_key
+                    break
+        
         return {
-            "media_url": response.get("url", ""),
-            "mimetype": response.get("mimetype", ""),
-            "filename": response.get("filename", ""),
+            "media_key": media_key,
+            "mimetype": mimetype,
+            "message_id": message_id,
+            "filename": f"whatsapp_media_{message_id}",
         }
 
     def _extract_message_id(self, response: Dict[str, Any]) -> str:
@@ -107,9 +149,9 @@ class BaseProcessor(ABC):
         return response.get("id", "")
 
     def _validate_media_data(self, media_data: Dict[str, Any], message_id: str) -> bool:
-        """Validate extracted media data."""
-        if not media_data["media_url"]:
-            self.logger.warning("No media URL found for message %s", message_id)
+        """Validate extracted media data for WhatsApp format."""
+        if not media_data["media_key"]:
+            self.logger.warning("No media key found for message %s", message_id)
             return False
 
         if not media_data["mimetype"]:
@@ -120,16 +162,13 @@ class BaseProcessor(ABC):
 
     async def _handle_message_common(
         self,
-        bot_instance,
+        bot_instance: "WhatsAppIntegrationBot",
         response: Dict[str, Any],
         chat_id: str,
         sender_info: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
         """Common message handling logic for all processors."""
         try:
-            # Start typing indicator
-            await bot_instance._start_typing_for_chat(chat_id)
-
             # Process user with common logic from BaseProcessor
             user_data = await self._process_user_common(response, sender_info)
             if not user_data:
@@ -142,10 +181,6 @@ class BaseProcessor(ABC):
 
         except (ConnectionError, AttributeError, ValueError) as e:
             self.logger.error("Error in common message handling: %s", e, exc_info=True)
-            await self._send_error_message(
-                bot_instance, chat_id, "⚠️ Произошла ошибка при обработке сообщения."
-            )
-            return None
 
     async def _extract_media_common(
         self, bot_instance, response: Dict[str, Any], message_id: str
@@ -158,9 +193,9 @@ class BaseProcessor(ABC):
             if not self._validate_media_data(media_data, message_id):
                 return None
 
-            # Get content from WhatsApp API
-            content = await bot_instance.api_client.download_media(
-                media_data["media_url"], message_id
+            # Download content using WhatsApp API download method
+            content = await bot_instance.api_client.download_whatsapp_media(
+                media_data["media_key"], media_data["message_id"]
             )
 
             if not content:
