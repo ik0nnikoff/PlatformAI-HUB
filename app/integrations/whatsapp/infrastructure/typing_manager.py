@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 class TypingManager:
     """
     Управляет typing indicator'ами для WhatsApp чатов.
-    
+
     Предоставляет centralized управление typing tasks с:
     - Автоматическим timeout (60 секунд)
     - Graceful cancellation
@@ -78,8 +78,7 @@ class TypingManager:
 
             # Typing timeout reached
             self.logger.warning(
-                "Typing timeout (60s) reached for chat %s, stopping indicator",
-                chat_id
+                "Typing timeout (60s) reached for chat %s, stopping indicator", chat_id
             )
             await self.api_client.send_typing_action(chat_id, False)
 
@@ -121,6 +120,5 @@ class TypingManager:
     def get_active_typing_chats(self) -> list[str]:
         """Get list of chat_ids with active typing indicators"""
         return [
-            chat_id for chat_id, task in self.typing_tasks.items()
-            if not task.done()
+            chat_id for chat_id, task in self.typing_tasks.items() if not task.done()
         ]

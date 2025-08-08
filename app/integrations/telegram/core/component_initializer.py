@@ -27,9 +27,12 @@ class ComponentInitializer:
         logger_adapter: logging.LoggerAdapter,
     ) -> None:
         """Initialize core business logic components."""
-        # User management service
+        # User management service with bot instance reference for Redis access
         bot_instance.user_service = UserService(
-            agent_id, db_session_factory, logger_adapter
+            agent_id,
+            db_session_factory,
+            logger_adapter,
+            bot_instance=bot_instance,  # Pass bot instance for Redis client access
         )
 
         # Redis communication service
@@ -42,12 +45,8 @@ class ComponentInitializer:
         """Initialize infrastructure components."""
         # Lazy imports to avoid circular dependencies
         # pylint: disable=import-outside-toplevel
-        from ..infrastructure.api_client import (
-            TelegramAPIClient,
-        )
-        from ..infrastructure.typing_manager import (
-            TypingManager,
-        )
+        from ..infrastructure.api_client import TelegramAPIClient
+        from ..infrastructure.typing_manager import TypingManager
 
         # API client for Telegram operations
         bot_instance.api_client = TelegramAPIClient(bot_instance)
@@ -62,18 +61,10 @@ class ComponentInitializer:
         """Initialize specialized message processors."""
         # Lazy imports to avoid circular dependencies
         # pylint: disable=import-outside-toplevel
-        from ..processors.contact_processor import (
-            ContactProcessor,
-        )
-        from ..processors.image_processor import (
-            ImageProcessor,
-        )
-        from ..processors.text_processor import (
-            TextProcessor,
-        )
-        from ..processors.voice_processor import (
-            VoiceProcessor,
-        )
+        from ..processors.contact_processor import ContactProcessor
+        from ..processors.image_processor import ImageProcessor
+        from ..processors.text_processor import TextProcessor
+        from ..processors.voice_processor import VoiceProcessor
 
         # Text message processor
         bot_instance.text_processor = TextProcessor(
@@ -117,15 +108,13 @@ class ComponentInitializer:
         """Initialize media orchestrators."""
         # Lazy imports to avoid circular dependencies
         # pylint: disable=import-outside-toplevel
-        from ..infrastructure.orchestrators.voice_orchestrator import (
-            VoiceOrchestrator,
-        )
-        from ..infrastructure.orchestrators.image_orchestrator import ImageOrchestrator
+        from ..infrastructure.orchestrators.image_orchestrator import \
+            ImageOrchestrator
+        from ..infrastructure.orchestrators.voice_orchestrator import \
+            VoiceOrchestrator
 
         # Voice orchestrator for STT/TTS
-        bot_instance.voice_orchestrator = VoiceOrchestrator(
-            logger=bot_instance.logger
-        )
+        bot_instance.voice_orchestrator = VoiceOrchestrator(logger=bot_instance.logger)
 
         # Image orchestrator
         bot_instance.image_orchestrator = ImageOrchestrator(bot_instance.logger)

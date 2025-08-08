@@ -6,14 +6,14 @@ Follows the coordinator pattern for clean message processing.
 """
 
 import logging
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 from aiogram.types import Message
 
+from ..processors.contact_processor import ContactProcessor
 from ..processors.image_processor import ImageProcessor
 from ..processors.text_processor import TextProcessor
 from ..processors.voice_processor import VoiceProcessor
-from ..processors.contact_processor import ContactProcessor
 from .user_service import UserService
 
 

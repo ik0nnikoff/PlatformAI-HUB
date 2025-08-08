@@ -5,7 +5,7 @@ Handles image and media group processing with orchestrator integration.
 Processes photos, media groups, and coordinates with image orchestrator.
 """
 
-from typing import TYPE_CHECKING, List, Optional, Dict, Any
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from aiogram.types import Message
 
@@ -96,12 +96,12 @@ class ImageProcessor(BaseProcessor):
         except Exception as e:
             # Catch-all для неожиданных системных ошибок
             self.logger.error(
-                "Unexpected error processing images from chat %s: %s", 
-                chat_id, e, exc_info=True
+                "Unexpected error processing images from chat %s: %s",
+                chat_id,
+                e,
+                exc_info=True,
             )
-            await self._send_error_message(
-                chat_id, "⚠️ Внутренняя ошибка системы."
-            )
+            await self._send_error_message(chat_id, "⚠️ Внутренняя ошибка системы.")
 
         finally:
             # Stop typing indicator
@@ -204,10 +204,10 @@ class ImageProcessor(BaseProcessor):
             user_id = str(first_message.from_user.id)
 
             image_urls = await image_orchestrator.process_images(
-                images_data=images_data, 
-                agent_id=agent_id, 
+                images_data=images_data,
+                agent_id=agent_id,
                 user_id=user_id,
-                original_filenames=original_filenames
+                original_filenames=original_filenames,
             )
 
             return image_urls
@@ -221,8 +221,9 @@ class ImageProcessor(BaseProcessor):
         except Exception as e:
             # Catch-all для неожиданных системных ошибок
             self.logger.error(
-                "Unexpected error processing images with orchestrator: %s", 
-                e, exc_info=True
+                "Unexpected error processing images with orchestrator: %s",
+                e,
+                exc_info=True,
             )
             return None
 

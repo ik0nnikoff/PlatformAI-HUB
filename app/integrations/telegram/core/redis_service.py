@@ -7,8 +7,8 @@ following single responsibility principle.
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 from redis import exceptions as redis_exceptions
 
@@ -16,6 +16,7 @@ from redis import exceptions as redis_exceptions
 @dataclass
 class MessageContent:
     """Container for message content data."""
+
     image_urls: Optional[List[str]] = None
     voice_data: Optional[Dict[str, Any]] = None
     document_content: Optional[str] = None
@@ -90,7 +91,8 @@ class RedisService:
             raise
         except (ConnectionError, TimeoutError, ValueError) as e:
             self.logger.error(
-                f"Network or value error publishing to {input_channel}: {e}", exc_info=True
+                f"Network or value error publishing to {input_channel}: {e}",
+                exc_info=True,
             )
             raise
         # pylint: disable=broad-exception-caught
@@ -155,7 +157,12 @@ class RedisService:
             )
             return True
 
-        except (redis_exceptions.RedisError, ConnectionError, TimeoutError, ValueError) as e:
+        except (
+            redis_exceptions.RedisError,
+            ConnectionError,
+            TimeoutError,
+            ValueError,
+        ) as e:
             self.logger.error(
                 f"Failed to publish message for chat {chat_id}: {e}", exc_info=True
             )
@@ -164,6 +171,7 @@ class RedisService:
         except Exception as e:
             # Catch-all для неожиданных системных ошибок
             self.logger.error(
-                f"Unexpected error publishing message for chat {chat_id}: {e}", exc_info=True
+                f"Unexpected error publishing message for chat {chat_id}: {e}",
+                exc_info=True,
             )
             return False

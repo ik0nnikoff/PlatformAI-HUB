@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional
 
 from app.core.config import settings
 from app.core.logging_config import setup_logging
-from app.db.session import get_async_session_factory, close_db_engine
+from app.db.session import close_db_engine, get_async_session_factory
 
 # Добавляем корневую директорию проекта в Python path
 project_root = Path(__file__).resolve().parent.parent.parent
@@ -32,9 +32,7 @@ def setup_logging_for_agent(agent_id: str) -> logging.LoggerAdapter:
 async def _setup_database_session(logger: logging.LoggerAdapter):
     """Setup database session factory with error handling."""
     if not settings.DATABASE_URL:
-        logger.warning(
-            "DATABASE_URL not set. Database features will be unavailable."
-        )
+        logger.warning("DATABASE_URL not set. Database features will be unavailable.")
         return None
 
     try:
@@ -59,14 +57,13 @@ async def _parse_integration_settings(
                 "Parsed --integration-settings is not a dictionary: %s. "
                 "Settings: '%s'",
                 type(integration_settings_data),
-                integration_settings
+                integration_settings,
             )
             return None, None
 
-        session_name = (
-            integration_settings_data.get("sessionName") or
-            integration_settings_data.get("session_name", "")
-        )
+        session_name = integration_settings_data.get(
+            "sessionName"
+        ) or integration_settings_data.get("session_name", "")
         token = integration_settings_data.get("token", "")
 
         return session_name, token
@@ -76,7 +73,7 @@ async def _parse_integration_settings(
             "Failed to parse --integration-settings JSON: %s. Settings: '%s'",
             e,
             integration_settings,
-            exc_info=True
+            exc_info=True,
         )
         return None, None
     except Exception as e_parse:  # pylint: disable=broad-exception-caught
@@ -84,13 +81,16 @@ async def _parse_integration_settings(
             "Unexpected error parsing --integration-settings: %s. Settings: '%s'",
             e_parse,
             integration_settings,
-            exc_info=True
+            exc_info=True,
         )
         return None, None
 
 
 async def _run_bot_loop(
-    whatsapp_bot, agent_id: str, bot_config: Dict[str, Any], logger: logging.LoggerAdapter
+    whatsapp_bot,
+    agent_id: str,
+    bot_config: Dict[str, Any],
+    logger: logging.LoggerAdapter,
 ) -> None:
     """Run the main bot loop with restart handling."""
     current_bot = whatsapp_bot
@@ -101,19 +101,21 @@ async def _run_bot_loop(
         )
         await current_bot.run()
 
-        if hasattr(current_bot, 'needs_restart') and current_bot.needs_restart:
+        if hasattr(current_bot, "needs_restart") and current_bot.needs_restart:
             logger.info(
                 "WhatsApp bot for %s requested restart. Re-initializing for another run cycle...",
-                agent_id
+                agent_id,
             )
             # Import inside function to avoid circular imports
-            from .whatsapp_bot import WhatsAppIntegrationBot  # pylint: disable=import-outside-toplevel
+            from .whatsapp_bot import \
+                WhatsAppIntegrationBot  # pylint: disable=import-outside-toplevel
+
             current_bot = WhatsAppIntegrationBot(bot_config, logger)
         else:
             logger.info(
                 "WhatsAppIntegrationBot for %s finished execution or was shut down "
                 "without a restart request.",
-                agent_id
+                agent_id,
             )
             break
 
@@ -128,9 +130,7 @@ async def _cleanup_resources(
             await close_db_engine()
             logger.info("Database engine closed.")
         except Exception as e_db_close:  # pylint: disable=broad-exception-caught
-            logger.error(
-                "Error closing database engine: %s", e_db_close, exc_info=True
-            )
+            logger.error("Error closing database engine: %s", e_db_close, exc_info=True)
     logger.info("WhatsApp bot runner for %s has been shut down.", agent_id)
 
 
@@ -144,7 +144,9 @@ async def main_async_runner(
     db_session_factory = await _setup_database_session(logger)
 
     # Parse integration settings
-    session_name, token = await _parse_integration_settings(integration_settings, logger)
+    session_name, token = await _parse_integration_settings(
+        integration_settings, logger
+    )
     if not session_name:
         logger.critical(
             "CRITICAL: WhatsApp session_name not found in --integration-settings. "
@@ -153,7 +155,8 @@ async def main_async_runner(
         sys.exit(1)
 
     # Import the bot after ensuring all dependencies are available
-    from .whatsapp_bot import WhatsAppIntegrationBot  # pylint: disable=import-outside-toplevel
+    from .whatsapp_bot import \
+        WhatsAppIntegrationBot  # pylint: disable=import-outside-toplevel
 
     # Prepare bot configuration
     bot_config = {
@@ -171,8 +174,10 @@ async def main_async_runner(
         logger.info("WhatsApp bot %s process interrupted or exited.", agent_id)
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.critical(
-            "Unhandled exception in main_async_runner for WhatsApp bot %s: %s", 
-            agent_id, e, exc_info=True
+            "Unhandled exception in main_async_runner for WhatsApp bot %s: %s",
+            agent_id,
+            e,
+            exc_info=True,
         )
     finally:
         await _cleanup_resources(db_session_factory, agent_id, logger)

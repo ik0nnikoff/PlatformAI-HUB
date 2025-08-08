@@ -8,11 +8,12 @@ Handles TTS/STT operations with proper dependency injection.
 import logging
 from typing import Optional
 
+from app.core.config import settings
 from app.services.voice_v2.core.orchestrator import VoiceServiceOrchestrator
-from app.services.voice_v2.providers.unified_factory import VoiceProviderFactory
 from app.services.voice_v2.infrastructure.cache import VoiceCache
 from app.services.voice_v2.infrastructure.minio_manager import MinioFileManager
-from app.core.config import settings
+from app.services.voice_v2.providers.unified_factory import \
+    VoiceProviderFactory
 
 
 class VoiceOrchestrator:
@@ -27,16 +28,16 @@ class VoiceOrchestrator:
         try:
             # Create voice_v2 dependencies following WhatsApp pattern
             voice_factory = VoiceProviderFactory()
-            
+
             cache_manager = VoiceCache()
             await cache_manager.initialize()
-            
+
             file_manager = MinioFileManager(
                 endpoint=settings.MINIO_ENDPOINT,
                 access_key=settings.MINIO_ACCESS_KEY,
                 secret_key=settings.MINIO_SECRET_KEY,
                 bucket_name=settings.MINIO_VOICE_BUCKET_NAME,
-                secure=settings.MINIO_SECURE
+                secure=settings.MINIO_SECURE,
             )
             await file_manager.initialize()
 

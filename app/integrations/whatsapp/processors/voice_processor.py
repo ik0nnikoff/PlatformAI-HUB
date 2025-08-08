@@ -12,9 +12,9 @@ from app.services.voice_v2.core.schemas import STTRequest
 from .base_processor import BaseProcessor
 
 if TYPE_CHECKING:
-    from ..whatsapp_bot import WhatsAppIntegrationBot
     from ..core.redis_service import RedisService
     from ..core.user_service import UserService
+    from ..whatsapp_bot import WhatsAppIntegrationBot
 
 
 class VoiceProcessor(BaseProcessor):

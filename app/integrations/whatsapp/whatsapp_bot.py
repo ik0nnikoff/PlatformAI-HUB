@@ -25,8 +25,10 @@ if TYPE_CHECKING:
     from .core.redis_service import RedisService
     from .core.user_service import UserService
     from .infrastructure.api_client import WhatsAppAPIClient
-    from .infrastructure.orchestrators.image_orchestrator import ImageOrchestrator
-    from .infrastructure.orchestrators.voice_orchestrator import VoiceOrchestrator
+    from .infrastructure.orchestrators.image_orchestrator import \
+        ImageOrchestrator
+    from .infrastructure.orchestrators.voice_orchestrator import \
+        VoiceOrchestrator
     from .infrastructure.socketio_client import SocketIOClient
     from .infrastructure.typing_manager import TypingManager
     from .processors.image_processor import ImageProcessor
@@ -34,7 +36,9 @@ if TYPE_CHECKING:
     from .processors.voice_processor import VoiceProcessor
 
 
-class WhatsAppIntegrationBot(ServiceComponentBase):  # pylint: disable=too-many-instance-attributes
+class WhatsAppIntegrationBot(
+    ServiceComponentBase
+):  # pylint: disable=too-many-instance-attributes
     """
     Manages the lifecycle and execution of a WhatsApp Bot integration.
     Inherits from ServiceComponentBase for unified state management.
@@ -154,8 +158,10 @@ class WhatsAppIntegrationBot(ServiceComponentBase):  # pylint: disable=too-many-
     async def _setup_orchestrators(self) -> None:
         """Initialize voice and image orchestrators."""
         # Import here to avoid circular imports during runtime
-        from .infrastructure.orchestrators.image_orchestrator import ImageOrchestrator  # pylint: disable=import-outside-toplevel
-        from .infrastructure.orchestrators.voice_orchestrator import VoiceOrchestrator  # pylint: disable=import-outside-toplevel
+        from .infrastructure.orchestrators.image_orchestrator import \
+            ImageOrchestrator  # pylint: disable=import-outside-toplevel
+        from .infrastructure.orchestrators.voice_orchestrator import \
+            VoiceOrchestrator  # pylint: disable=import-outside-toplevel
 
         # Initialize voice orchestrator
         voice_orch = VoiceOrchestrator(self.logger)

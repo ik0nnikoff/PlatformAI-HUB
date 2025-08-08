@@ -5,8 +5,8 @@ BaseProcessor - базовый класс для всех процессоров
 из Telegram сообщений для устранения дублирования кода.
 """
 
-import logging
 import asyncio
+import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -62,9 +62,7 @@ class BaseProcessor(ABC):
                 return await self.bot.check_user_authorization(platform_user_id)
 
             # Fallback to user service if available
-            return await self.user_service.check_user_authorization(
-                platform_user_id
-            )
+            return await self.user_service.check_user_authorization(platform_user_id)
         except (ConnectionError, TimeoutError, ValueError) as e:
             self.logger.error("Error checking user authorization: %s", e)
             return False

@@ -97,7 +97,9 @@ class ImageProcessor(BaseProcessor):
                     "Image orchestrator not initialized, falling back to base64 processing"
                 )
                 # Fallback: create base64 image URL for direct processing
-                image_base64 = base64.b64encode(image_data["image_data"]).decode('utf-8')
+                image_base64 = base64.b64encode(image_data["image_data"]).decode(
+                    "utf-8"
+                )
                 return [f"data:image/jpeg;base64,{image_base64}"]
 
             # Prepare image data for orchestrator (similar to archive pattern)
@@ -111,7 +113,7 @@ class ImageProcessor(BaseProcessor):
                 images_data=[image_data["image_data"]],  # Pass bytes directly
                 agent_id=self.bot.agent_id,
                 user_id=chat_id,
-                original_filenames=[image_filename]
+                original_filenames=[image_filename],
             )
 
             if result:
@@ -150,6 +152,8 @@ class ImageProcessor(BaseProcessor):
                     "Successfully extracted image data: %s bytes", len(image_data)
                 )
             else:
-                self.logger.error("Failed to download image data for message: %s", message_id)
+                self.logger.error(
+                    "Failed to download image data for message: %s", message_id
+                )
                 return None
         return result

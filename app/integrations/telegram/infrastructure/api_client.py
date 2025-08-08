@@ -10,13 +10,8 @@ from typing import Optional, Union
 from aiogram import Bot
 from aiogram.enums import ChatAction
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import (
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardRemove,
-    InputFile,
-    InlineKeyboardMarkup,
-)
+from aiogram.types import (InlineKeyboardMarkup, InputFile, KeyboardButton,
+                           ReplyKeyboardMarkup, ReplyKeyboardRemove)
 
 
 class TelegramAPIClient:
@@ -56,7 +51,7 @@ class TelegramAPIClient:
         except (ConnectionError, TimeoutError, ValueError) as e:
             self.logger.error(
                 f"Network or value error sending message to {chat_id}: {e}",
-                exc_info=True
+                exc_info=True,
             )
             return False
         # pylint: disable=broad-exception-caught
@@ -91,12 +86,16 @@ class TelegramAPIClient:
             # Note: Telegram doesn't have explicit "stop typing" action
             return True
         except (ConnectionError, TimeoutError, ValueError) as e:
-            self.logger.debug(f"Network or value error sending typing action to {chat_id}: {e}")
+            self.logger.debug(
+                f"Network or value error sending typing action to {chat_id}: {e}"
+            )
             return False
         # pylint: disable=broad-exception-caught
         except Exception as e:
             # Catch-all для неожиданных системных ошибок
-            self.logger.debug(f"Unexpected error sending typing action to {chat_id}: {e}")
+            self.logger.debug(
+                f"Unexpected error sending typing action to {chat_id}: {e}"
+            )
             return False
 
     async def send_voice_message(self, chat_id: int, audio_url: str) -> bool:
@@ -108,33 +107,35 @@ class TelegramAPIClient:
             # Download audio file from URL and send as InputFile
             import aiohttp
             from aiogram.types import BufferedInputFile
-            
+
             async with aiohttp.ClientSession() as session:
                 async with session.get(audio_url) as response:
                     if response.status == 200:
                         audio_data = await response.read()
                         voice_file = BufferedInputFile(
-                            audio_data, 
-                            filename="voice_response.mp3"
+                            audio_data, filename="voice_response.mp3"
                         )
                         await self.bot.send_voice(chat_id=chat_id, voice=voice_file)
                         self.logger.debug(f"Voice message sent to chat {chat_id}")
                         return True
                     else:
-                        self.logger.error(f"Failed to download audio from URL: {response.status}")
+                        self.logger.error(
+                            f"Failed to download audio from URL: {response.status}"
+                        )
                         return False
-                        
+
         except (ConnectionError, TimeoutError, ValueError) as e:
             self.logger.error(
                 f"Network or value error sending voice message to {chat_id}: {e}",
-                exc_info=True
+                exc_info=True,
             )
             return False
         # pylint: disable=broad-exception-caught
         except Exception as e:
             # Catch-all для неожиданных системных ошибок
             self.logger.error(
-                f"Unexpected error sending voice message to {chat_id}: {e}", exc_info=True
+                f"Unexpected error sending voice message to {chat_id}: {e}",
+                exc_info=True,
             )
             return False
 
@@ -162,14 +163,15 @@ class TelegramAPIClient:
         except (ConnectionError, TimeoutError, ValueError) as e:
             self.logger.error(
                 f"Network or value error sending voice from URL to {chat_id}: {e}",
-                exc_info=True
+                exc_info=True,
             )
             return False
         # pylint: disable=broad-exception-caught
         except Exception as e:
             # Catch-all для неожиданных системных ошибок
             self.logger.error(
-                f"Unexpected error sending voice from URL to {chat_id}: {e}", exc_info=True
+                f"Unexpected error sending voice from URL to {chat_id}: {e}",
+                exc_info=True,
             )
             return False
 
@@ -207,7 +209,8 @@ class TelegramAPIClient:
             return file_data.read() if hasattr(file_data, "read") else file_data
         except (ConnectionError, TimeoutError, ValueError) as e:
             self.logger.error(
-                f"Network or value error downloading file {file_path}: {e}", exc_info=True
+                f"Network or value error downloading file {file_path}: {e}",
+                exc_info=True,
             )
             return None
         # pylint: disable=broad-exception-caught
@@ -245,7 +248,7 @@ class TelegramAPIClient:
         except (ConnectionError, TimeoutError, ValueError) as e:
             self.logger.error(
                 f"Network or value error getting file info for {file_id}: {e}",
-                exc_info=True
+                exc_info=True,
             )
             return None
         # pylint: disable=broad-exception-caught
@@ -270,7 +273,9 @@ class TelegramAPIClient:
                 "username": bot_info.username,
             }
         except (ConnectionError, TimeoutError, ValueError) as e:
-            self.logger.error(f"Network or value error getting bot info: {e}", exc_info=True)
+            self.logger.error(
+                f"Network or value error getting bot info: {e}", exc_info=True
+            )
             return None
         # pylint: disable=broad-exception-caught
         except Exception as e:

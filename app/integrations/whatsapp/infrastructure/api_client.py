@@ -43,11 +43,7 @@ class WhatsAppAPIClient:
         try:
             # URL формат как в бэкапе: /api/{session_name}/send-message
             url = f"/api/{self.session_name}/send-message"
-            payload = {
-                "phone": chat_id,
-                "message": message,
-                "isGroup": False
-            }
+            payload = {"phone": chat_id, "message": message, "isGroup": False}
 
             response = await self.http_client.post(url, json=payload)
 
@@ -57,7 +53,8 @@ class WhatsAppAPIClient:
 
             self.logger.error(
                 "Failed to send message. Status: %s, Response: %s",
-                response.status_code, response.text
+                response.status_code,
+                response.text,
             )
             return False
 
@@ -72,18 +69,15 @@ class WhatsAppAPIClient:
         try:
             # URL формат как в бэкапе: /api/{session_name}/typing
             url = f"/api/{self.session_name}/typing"
-            payload = {
-                "phone": chat_id,
-                "isGroup": False,
-                "value": is_typing
-            }
+            payload = {"phone": chat_id, "isGroup": False, "value": is_typing}
 
             response = await self.http_client.post(url, json=payload)
 
             if response.status_code in [200, 201]:
                 self.logger.debug(
                     "Typing action %s for %s",
-                    'started' if is_typing else 'stopped', chat_id
+                    "started" if is_typing else "stopped",
+                    chat_id,
                 )
                 return True
 
@@ -125,9 +119,7 @@ class WhatsAppAPIClient:
 
             # URL формат как в бэкапе: /api/{session_name}/download-media
             url = f"/api/{self.session_name}/download-media"
-            payload = {
-                "messageId": message_id
-            }
+            payload = {"messageId": message_id}
 
             response = await self.http_client.post(url, json=payload)
 

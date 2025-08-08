@@ -7,7 +7,9 @@ Implements secure contact-based authentication following SOLID principles.
 
 import asyncio
 from typing import TYPE_CHECKING
+
 from aiogram.types import Message, ReplyKeyboardRemove
+
 from app.integrations.telegram.processors.base_processor import BaseProcessor
 
 if TYPE_CHECKING:
@@ -168,9 +170,7 @@ class ContactProcessor(BaseProcessor):
         platform_user_id = contact_data["platform_user_id"]
 
         self.logger.info(
-            "User %s authorized for agent %s",
-            platform_user_id,
-            self.bot.agent_id
+            "User %s authorized for agent %s", platform_user_id, self.bot.agent_id
         )
 
         # Clear auth cache

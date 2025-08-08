@@ -27,9 +27,7 @@ class BaseProcessor(ABC):
         self.redis_service: Optional["RedisService"] = None
 
     def _initialize_common_components(
-        self,
-        bot_instance: "WhatsAppIntegrationBot",
-        redis_service: "RedisService"
+        self, bot_instance: "WhatsAppIntegrationBot", redis_service: "RedisService"
     ) -> None:
         """Initialize common components for all processors."""
         self.bot = bot_instance
@@ -130,7 +128,7 @@ class BaseProcessor(ABC):
                 response.get("quotedMsg", {}).get("mediaKey", ""),
                 response.get("message", {}).get("mediaKey", ""),
                 response.get("mediaData", {}).get("mediaKey", ""),
-                response.get("media", {}).get("mediaKey", "")
+                response.get("media", {}).get("mediaKey", ""),
             ]
             for alt_key in alt_locations:
                 if alt_key:

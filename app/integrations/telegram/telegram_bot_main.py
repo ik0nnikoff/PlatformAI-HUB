@@ -6,15 +6,15 @@ for PlatformAI agents. It handles bot initialization, configuration parsing,
 and lifecycle management with proper error handling and cleanup.
 """
 
-import asyncio
-import logging
 import argparse
+import asyncio
 import json
+import logging
 import sys
 
-from app.core.logging_config import setup_logging
 from app.core.config import settings
-from app.db.session import get_async_session_factory, close_db_engine
+from app.core.logging_config import setup_logging
+from app.db.session import close_db_engine, get_async_session_factory
 from app.integrations.telegram.telegram_bot import TelegramIntegrationBot
 
 

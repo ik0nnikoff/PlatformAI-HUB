@@ -32,8 +32,10 @@ if TYPE_CHECKING:
     from .core.user_service import UserService
     from .handlers.command_handler import CommandHandler
     from .infrastructure.api_client import TelegramAPIClient
-    from .infrastructure.orchestrators.image_orchestrator import ImageOrchestrator
-    from .infrastructure.orchestrators.voice_orchestrator import VoiceOrchestrator
+    from .infrastructure.orchestrators.image_orchestrator import \
+        ImageOrchestrator
+    from .infrastructure.orchestrators.voice_orchestrator import \
+        VoiceOrchestrator
     from .infrastructure.typing_manager import TypingManager
     from .processors.contact_processor import ContactProcessor
     from .processors.image_processor import ImageProcessor
@@ -45,6 +47,7 @@ REDIS_USER_CACHE_TTL = getattr(
     settings, "REDIS_USER_CACHE_TTL", int(os.getenv("REDIS_USER_CACHE_TTL", "3600"))
 )
 USER_CACHE_PREFIX = "user_cache:"
+AUTH_TRIGGER = "AUTH_REQUIRED"
 
 
 class TelegramIntegrationBot(ServiceComponentBase):
@@ -306,9 +309,35 @@ class TelegramIntegrationBot(ServiceComponentBase):
             chat_id = int(data["chat_id"])
             response_text = data["response"]
             audio_url = data.get("audio_url")
+            platform_user_id = str(
+                chat_id
+            )  # For Telegram, chat_id is the same as user_id in private chats
 
             # Stop typing indicator
             await self.typing_manager.stop_typing(chat_id)
+
+            # Check for authorization trigger (following original backup logic)
+            auth_required = AUTH_TRIGGER in response_text
+            if auth_required:
+                # Remove AUTH_TRIGGER from response first
+                response_text = response_text.replace(AUTH_TRIGGER, "").strip()
+
+                # Check if user is actually authorized
+                is_user_authorized = await self._check_user_authorization(
+                    platform_user_id
+                )
+
+                if not is_user_authorized:
+                    # User is not authorized, send response with authorization request
+                    await self.api_client.send_message_with_markup(
+                        chat_id,
+                        f"{response_text}\n\nДля продолжения требуется авторизация. Используйте /login или кнопку ниже:",
+                        self._request_contact_markup(),
+                    )
+                    self.logger.info(
+                        f"Authorization required message sent to user {platform_user_id}"
+                    )
+                    return
 
             # Send voice response if available
             if audio_url:
@@ -318,9 +347,10 @@ class TelegramIntegrationBot(ServiceComponentBase):
                 if voice_sent:
                     return
 
-            # Send text response
-            await self.api_client.send_message(chat_id, response_text)
-            self.logger.info("Response sent to chat %s", chat_id)
+            # Send text response (only if not empty after AUTH_TRIGGER removal)
+            if response_text:
+                await self.api_client.send_message(chat_id, response_text)
+                self.logger.info("Response sent to chat %s", chat_id)
 
         except Exception as e:
             self.logger.error("Error handling agent response: %s", e, exc_info=True)
@@ -339,6 +369,14 @@ class TelegramIntegrationBot(ServiceComponentBase):
 
         except Exception as e:
             self.logger.error("Error during cleanup: %s", e, exc_info=True)
+
+    def _request_contact_markup(self):
+        """Create keyboard for contact sharing request."""
+        return self.api_client.create_contact_request_keyboard()
+
+    async def _check_user_authorization(self, platform_user_id: str) -> bool:
+        """Check if user is authorized for this agent."""
+        return await self.user_service.check_user_authorization(platform_user_id)
 
     async def _cleanup_typing_tasks(self) -> None:
         """Cleanup typing tasks and timers."""
@@ -372,17 +410,9 @@ class TelegramIntegrationBot(ServiceComponentBase):
             await self.bot.session.close()
 
     # Legacy methods for backward compatibility
-    async def _check_user_authorization(self, platform_user_id: str) -> bool:
-        """Legacy method for backward compatibility."""
-        return await self.user_service.check_user_authorization(platform_user_id)
-
     async def _send_voice_response(self, chat_id: int, audio_url: str) -> bool:
         """Legacy method - delegates to API client."""
         return await self.api_client.send_voice_from_url(chat_id, audio_url)
-
-    def _request_contact_markup(self):
-        """Legacy method - delegates to API client."""
-        return self.api_client.create_contact_request_keyboard()
 
     async def _handle_pubsub_message(self, message_data: bytes) -> None:
         """Handle incoming pub/sub messages from agent."""

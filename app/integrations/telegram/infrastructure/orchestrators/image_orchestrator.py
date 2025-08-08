@@ -7,9 +7,8 @@ Handles image processing orchestration.
 import logging
 from typing import Optional
 
-from app.services.media.image_orchestrator import (
-    ImageOrchestrator as MediaImageOrchestrator,
-)
+from app.services.media.image_orchestrator import \
+    ImageOrchestrator as MediaImageOrchestrator
 
 
 class ImageOrchestrator:

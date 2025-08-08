@@ -46,9 +46,12 @@ class ComponentInitializer:
     ) -> None:
         """Initialize infrastructure components."""
         # Lazy imports to avoid circular dependencies
-        from ..infrastructure.api_client import WhatsAppAPIClient  # pylint: disable=import-outside-toplevel
-        from ..infrastructure.socketio_client import SocketIOClient  # pylint: disable=import-outside-toplevel
-        from ..infrastructure.typing_manager import TypingManager  # pylint: disable=import-outside-toplevel
+        from ..infrastructure.api_client import \
+            WhatsAppAPIClient  # pylint: disable=import-outside-toplevel
+        from ..infrastructure.socketio_client import \
+            SocketIOClient  # pylint: disable=import-outside-toplevel
+        from ..infrastructure.typing_manager import \
+            TypingManager  # pylint: disable=import-outside-toplevel
 
         # API client for HTTP operations
         bot_instance.api_client = WhatsAppAPIClient(bot_instance)
@@ -65,9 +68,12 @@ class ComponentInitializer:
     def initialize_processors(bot_instance: "WhatsAppIntegrationBot") -> None:
         """Initialize specialized message processors."""
         # Lazy imports to avoid circular dependencies
-        from ..processors.image_processor import ImageProcessor  # pylint: disable=import-outside-toplevel
-        from ..processors.text_processor import TextProcessor  # pylint: disable=import-outside-toplevel
-        from ..processors.voice_processor import VoiceProcessor  # pylint: disable=import-outside-toplevel
+        from ..processors.image_processor import \
+            ImageProcessor  # pylint: disable=import-outside-toplevel
+        from ..processors.text_processor import \
+            TextProcessor  # pylint: disable=import-outside-toplevel
+        from ..processors.voice_processor import \
+            VoiceProcessor  # pylint: disable=import-outside-toplevel
 
         # Text message processor
         bot_instance.text_processor = TextProcessor(

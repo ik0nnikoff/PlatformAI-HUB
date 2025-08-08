@@ -7,10 +7,10 @@ Handles voice message processing with voice_v2 orchestrator integration.
 from typing import TYPE_CHECKING, Optional
 
 from aiogram.types import Message
-from app.services.voice_v2.core.interfaces import AudioFormat
-from app.services.voice_v2.core.schemas import STTRequest
 
 from app.integrations.telegram.processors.base_processor import BaseProcessor
+from app.services.voice_v2.core.interfaces import AudioFormat
+from app.services.voice_v2.core.schemas import STTRequest
 
 if TYPE_CHECKING:
     from ..core.redis_service import RedisService
@@ -82,9 +82,7 @@ class VoiceProcessor(BaseProcessor):
                 e,
                 exc_info=True,
             )
-            await self._send_error_message(
-                chat_id, "⚠️ Внутренняя ошибка системы."
-            )
+            await self._send_error_message(chat_id, "⚠️ Внутренняя ошибка системы.")
 
         finally:
             # Stop typing indicator

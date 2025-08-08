@@ -43,7 +43,9 @@ class CommandHandler:
         # pylint: disable=broad-exception-caught
         except Exception as e:
             # Catch-all для неожиданных системных ошибок
-            self.logger.error("Unexpected error sending start message to %s: %s", chat_id, e)
+            self.logger.error(
+                "Unexpected error sending start message to %s: %s", chat_id, e
+            )
 
     async def handle_login_command(self, message: Message) -> None:
         """Handle /login command."""
@@ -96,7 +98,10 @@ class CommandHandler:
         except Exception as e:
             # Catch-all для неожиданных системных ошибок
             self.logger.error(
-                "Unexpected error handling login command from %s: %s", chat_id, e, exc_info=True
+                "Unexpected error handling login command from %s: %s",
+                chat_id,
+                e,
+                exc_info=True,
             )
             await self.bot.api_client.send_message(
                 chat_id, "⚠️ Внутренняя ошибка системы."
@@ -127,7 +132,9 @@ class CommandHandler:
         # pylint: disable=broad-exception-caught
         except Exception as e:
             # Catch-all для неожиданных системных ошибок
-            self.logger.error("Unexpected error sending help message to %s: %s", chat_id, e)
+            self.logger.error(
+                "Unexpected error sending help message to %s: %s", chat_id, e
+            )
 
     async def _check_user_authorization(self, platform_user_id: str) -> bool:
         """Check if user is authorized for this agent."""
@@ -148,6 +155,8 @@ class CommandHandler:
         except Exception as e:
             # Catch-all для неожиданных системных ошибок
             self.logger.error(
-                "Unexpected error checking authorization for %s: %s", platform_user_id, e
+                "Unexpected error checking authorization for %s: %s",
+                platform_user_id,
+                e,
             )
             return False

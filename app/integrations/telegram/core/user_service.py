@@ -6,18 +6,28 @@ following single responsibility principle.
 """
 
 import logging
-from typing import Any, Dict, Optional
+import os
 from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from aiogram.types import User
+from redis import exceptions as redis_exceptions
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.config import settings
 from app.db.crud import user_crud
+
+# Redis caching constants
+REDIS_USER_CACHE_TTL = getattr(
+    settings, "REDIS_USER_CACHE_TTL", int(os.getenv("REDIS_USER_CACHE_TTL", "3600"))
+)
+USER_CACHE_PREFIX = "user_cache:"
 
 
 @dataclass
 class UserContext:
     """User context data container."""
+
     platform_user_id: str
     first_name: str
     is_authorized: bool
@@ -28,6 +38,7 @@ class UserContext:
 @dataclass
 class ContactDetails:
     """Contact authorization details container."""
+
     contact_platform_user_id: str
     phone_number: str
     first_name: str
@@ -43,10 +54,22 @@ class UserService:
         agent_id: str,
         db_session_factory: Optional[async_sessionmaker[AsyncSession]],
         logger: logging.LoggerAdapter,
+        bot_instance=None,  # Reference to parent bot for Redis access
     ):
         self.agent_id = agent_id
         self.db_session_factory = db_session_factory
         self.logger = logger
+        self.bot_instance = bot_instance
+
+    async def _get_redis_client(self):
+        """Get async Redis client from bot instance."""
+        if not self.bot_instance:
+            return None
+        try:
+            return await self.bot_instance.redis_client
+        except RuntimeError as e:
+            self.logger.error(f"Redis client not available: {e}")
+            return None
 
     def extract_platform_user_id(self, telegram_user: User) -> str:
         """Extract platform user ID from Telegram user."""
@@ -101,7 +124,10 @@ class UserService:
         except (ConnectionError, TimeoutError, ValueError) as e:
             platform_user_id = self.extract_platform_user_id(telegram_user)
             self.logger.error(
-                "Database error getting/creating user %s: %s", platform_user_id, e, exc_info=True
+                "Database error getting/creating user %s: %s",
+                platform_user_id,
+                e,
+                exc_info=True,
             )
             return self.create_fallback_data(telegram_user)
         # pylint: disable=broad-exception-caught
@@ -109,7 +135,10 @@ class UserService:
             # Catch-all для неожиданных системных ошибок
             platform_user_id = self.extract_platform_user_id(telegram_user)
             self.logger.error(
-                "Unexpected error getting/creating user %s: %s", platform_user_id, e, exc_info=True
+                "Unexpected error getting/creating user %s: %s",
+                platform_user_id,
+                e,
+                exc_info=True,
             )
             return self.create_fallback_data(telegram_user)
 
@@ -299,7 +328,52 @@ class UserService:
         }
 
     async def check_user_authorization(self, platform_user_id: str) -> bool:
-        """Check if user is authorized for this agent."""
+        """Check if user is authorized for this agent with Redis caching."""
+        # Try cache first
+        cached_result = await self._check_auth_cache(platform_user_id)
+        if cached_result is not None:
+            return cached_result
+
+        # Fall back to database check
+        return await self._check_auth_database(platform_user_id)
+
+    async def _check_auth_cache(self, platform_user_id: str) -> Optional[bool]:
+        """Check authorization status from Redis cache."""
+        redis_cli = await self._get_redis_client()
+        if not redis_cli:
+            return None
+
+        try:
+            cache_key = self._get_auth_cache_key(platform_user_id)
+            self.logger.debug(
+                f"Auth check: Attempting to get cache for key '{cache_key}'"
+            )
+
+            cached_auth_status_bytes = await redis_cli.get(cache_key)
+            if cached_auth_status_bytes is not None:
+                cached_auth_status = cached_auth_status_bytes.decode("utf-8")
+                is_authorized = cached_auth_status == "true"
+                self.logger.info(
+                    f"Auth cache hit for user {platform_user_id}, agent {self.agent_id}. "
+                    f"Status: {is_authorized}"
+                )
+                return is_authorized
+
+            self.logger.info(
+                f"Auth cache miss for user {platform_user_id}, agent {self.agent_id}. "
+                f"Checking DB."
+            )
+            return None
+        except redis_exceptions.RedisError as e:
+            self.logger.error(
+                f"Redis error during cache check for agent {self.agent_id}, "
+                f"user {platform_user_id}: {e}",
+                exc_info=True,
+            )
+            return None
+
+    async def _check_auth_database(self, platform_user_id: str) -> bool:
+        """Check authorization status from database and update cache."""
         if not self.db_session_factory:
             self.logger.warning("Database session factory not configured")
             return False
@@ -310,12 +384,19 @@ class UserService:
                     session, "telegram", platform_user_id
                 )
                 if not user_db:
+                    await self._cache_negative_auth_result(platform_user_id)
                     return False
 
                 auth_record = await user_crud.get_agent_user_authorization(
                     session, self.agent_id, user_db.id
                 )
-                return auth_record and auth_record.is_authorized
+
+                is_authorized = auth_record and auth_record.is_authorized
+                await self._update_auth_cache(
+                    platform_user_id, user_db.id, is_authorized, auth_record
+                )
+
+                return is_authorized
 
         except (ConnectionError, TimeoutError, ValueError) as e:
             self.logger.error(
@@ -324,8 +405,148 @@ class UserService:
             return False
         # pylint: disable=broad-exception-caught
         except Exception as e:
-            # Catch-all для неожиданных системных ошибок
             self.logger.error(
-                "Unexpected error checking authorization for %s: %s", platform_user_id, e
+                "Unexpected error checking authorization for %s: %s",
+                platform_user_id,
+                e,
             )
             return False
+
+    def _get_auth_cache_key(self, platform_user_id: str) -> str:
+        """Generate Redis cache key for authorization."""
+        return f"{USER_CACHE_PREFIX}telegram:{platform_user_id}:agent:{self.agent_id}"
+
+    async def _cache_negative_auth_result(self, platform_user_id: str) -> None:
+        """Cache negative authorization result for shorter duration."""
+        self.logger.info(
+            f"User with platform_id {platform_user_id} (telegram) not found. "
+            f"Cannot check authorization."
+        )
+        redis_cli = await self._get_redis_client()
+        if redis_cli:
+            try:
+                cache_key = self._get_auth_cache_key(platform_user_id)
+                await redis_cli.set(
+                    cache_key, "false".encode("utf-8"), ex=REDIS_USER_CACHE_TTL // 4
+                )
+            except redis_exceptions.RedisError as e:
+                self.logger.error(f"Redis error caching negative result: {e}")
+
+    async def _update_auth_cache(
+        self, platform_user_id: str, user_db_id: int, is_authorized: bool, auth_record
+    ) -> None:
+        """Update Redis cache with authorization result."""
+        redis_cli = await self._get_redis_client()
+        if not redis_cli:
+            return
+
+        try:
+            cache_key = self._get_auth_cache_key(platform_user_id)
+            if is_authorized:
+                self.logger.info(
+                    f"User {platform_user_id} (DBID: {user_db_id}) IS authorized "
+                    f"for agent {self.agent_id} via DB."
+                )
+                await redis_cli.set(
+                    cache_key, "true".encode("utf-8"), ex=REDIS_USER_CACHE_TTL
+                )
+            else:
+                status_detail = (
+                    f"entry found: {auth_record is not None}, "
+                    f"is_authorized flag: {auth_record.is_authorized if auth_record else 'N/A'}"
+                )
+                self.logger.info(
+                    f"User {platform_user_id} (DBID: {user_db_id}) IS NOT authorized "
+                    f"for agent {self.agent_id} via DB ({status_detail})."
+                )
+                await redis_cli.set(
+                    cache_key, "false".encode("utf-8"), ex=REDIS_USER_CACHE_TTL // 4
+                )
+        except redis_exceptions.RedisError as e:
+            self.logger.error(f"Redis error caching auth result: {e}")
+
+    async def create_or_update_user_with_authorization(
+        self, platform_user_id: str, user_details: dict, is_authorized: bool = True
+    ) -> dict:
+        """Create or update user with authorization."""
+        if not self.db_session_factory:
+            self.logger.error("Database session factory not configured")
+            return {"success": False, "error": "Database not configured"}
+
+        try:
+            async with self.db_session_factory() as session:
+                user = await self._create_or_update_user_in_db(
+                    session, platform_user_id, user_details
+                )
+                if not user:
+                    return {"success": False, "error": "Failed to create/update user"}
+
+                if is_authorized:
+                    auth_success = await self._authorize_user_in_db(session, user.id)
+                    if not auth_success:
+                        return {"success": False, "error": "Failed to authorize user"}
+
+                # Update cache after successful authorization
+                if is_authorized:
+                    await self._cache_successful_authorization(platform_user_id)
+
+                return {"success": True, "user": user}
+
+        except (ConnectionError, TimeoutError, ValueError) as e:
+            self.logger.error(
+                "Database error creating/updating user %s: %s", platform_user_id, e
+            )
+            return {"success": False, "error": str(e)}
+        # pylint: disable=broad-exception-caught
+        except Exception as e:
+            self.logger.error(
+                "Unexpected error creating/updating user %s: %s", platform_user_id, e
+            )
+            return {"success": False, "error": str(e)}
+
+    async def _create_or_update_user_in_db(
+        self, session, platform_user_id: str, user_details: dict
+    ):
+        """Create or update user in database."""
+        return await user_crud.create_or_update_user(
+            session, "telegram", platform_user_id, user_details
+        )
+
+    async def _authorize_user_in_db(self, session, user_id: int) -> bool:
+        """Authorize user in database."""
+        auth_record = await user_crud.update_agent_user_authorization(
+            session, self.agent_id, user_id, True
+        )
+        return auth_record and auth_record.is_authorized
+
+    async def _cache_successful_authorization(self, platform_user_id: str) -> None:
+        """Cache successful authorization result."""
+        redis_cli = await self._get_redis_client()
+        if redis_cli:
+            try:
+                cache_key = self._get_auth_cache_key(platform_user_id)
+                await redis_cli.set(
+                    cache_key, "true".encode("utf-8"), ex=REDIS_USER_CACHE_TTL
+                )
+                self.logger.info(
+                    f"Updated auth cache for authorized user {platform_user_id}"
+                )
+            except redis_exceptions.RedisError as e:
+                self.logger.error(
+                    f"Redis error updating cache after authorization: {e}"
+                )
+
+    async def clear_auth_cache(self, platform_user_id: str) -> None:
+        """Clear authentication cache for user."""
+        redis_cli = await self._get_redis_client()
+        if redis_cli:
+            try:
+                cache_key = self._get_auth_cache_key(platform_user_id)
+                await redis_cli.delete(cache_key)
+                self.logger.info(f"Cleared auth cache for user {platform_user_id}")
+            except redis_exceptions.RedisError as e:
+                self.logger.error(
+                    f"Redis error clearing cache for user {platform_user_id}: {e}"
+                )
+        else:
+            self.logger.debug("Redis client not available for cache clearing")
