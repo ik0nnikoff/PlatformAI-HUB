@@ -28,8 +28,8 @@ from langchain.tools.retriever import create_retriever_tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 
 from app.core.config import settings as app_settings
-from app.agent_runner.common.config_mixin import AgentConfigMixin
-from app.agent_runner.common.tools_registry import (
+from app.agent_runner.core.config_mixin import AgentConfigMixin
+from app.agent_runner.langgraph.tools.tools_registry import (
     auth_tool,
     get_user_info_tool,
     voice_capabilities_tool,

@@ -12,7 +12,7 @@ import redis.exceptions as redis_exceptions
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent_runner.models.contexts import HistorySaveContext
+from app.agent_runner.langgraph.contexts import HistorySaveContext
 from app.core.config import settings
 from app.db.alchemy_models import ChatMessageDB, SenderType
 from app.db.crud.chat_crud import db_get_recent_chat_history

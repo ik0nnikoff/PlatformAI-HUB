@@ -475,7 +475,7 @@ class ToolsRegistry:
         """
         try:
             # Import vision tools lazily to avoid circular imports
-            from app.agent_runner.langgraph.tools import analyze_images, describe_image_content
+            from app.agent_runner.langgraph.tools.tools import analyze_images, describe_image_content
             tools = [analyze_images, describe_image_content]
             logger.info(f"Successfully loaded {len(tools)} vision tools: {[t.name for t in tools]}")
             return tools

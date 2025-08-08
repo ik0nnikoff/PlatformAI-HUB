@@ -21,12 +21,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.services.redis_wrapper import RedisService
 
-from app.agent_runner.common.config_mixin import AgentConfigMixin
-from app.agent_runner.handlers.history_handler import HistoryManager
-from app.agent_runner.handlers.message_handler import MessageProcessor
-from app.agent_runner.handlers.token_handler import TokenManager
+from app.agent_runner.core.config_mixin import AgentConfigMixin
+from app.agent_runner.langgraph.handlers.history_handler import HistoryManager
+from app.agent_runner.langgraph.handlers.message_handler import MessageProcessor
+from app.agent_runner.langgraph.handlers.token_handler import TokenManager
 from app.agent_runner.langgraph.factory import create_agent_app
-from app.agent_runner.models.contexts import (
+from app.agent_runner.langgraph.contexts import (
     ProcessingContext,
     InvocationContext,
     GraphInputContext,

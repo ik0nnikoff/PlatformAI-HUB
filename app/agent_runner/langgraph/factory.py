@@ -11,10 +11,11 @@ from langgraph.graph import END, StateGraph, START # Add START
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 
+from app.agent_runner.langgraph.tools.tools import configure_tools
+
 from .models import AgentState, TokenUsageData
-from .tools import configure_tools
 from app.core.config import settings
-from app.agent_runner.common.config_mixin import AgentConfigMixin
+from app.agent_runner.core.config_mixin import AgentConfigMixin
 
 # Global flag for graceful shutdown (if needed by runner_main that uses this factory)
 # This might be re-evaluated if it's better managed by the AgentRunner instance

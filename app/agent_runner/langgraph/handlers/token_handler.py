@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import redis.exceptions as redis_exceptions
 
-from app.agent_runner.models.contexts import TokenContext
+from app.agent_runner.langgraph.contexts import TokenContext
 from app.agent_runner.langgraph.models import TokenUsageData
 from app.core.config import settings
 

@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-from app.agent_runner.models.contexts import GraphInputContext, ResponseContext
+from app.agent_runner.langgraph.contexts import GraphInputContext, ResponseContext
 from app.core.config import settings
 
 
